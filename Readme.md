@@ -39,3 +39,8 @@ Additionaly, in "freq" folder you can edit frequency allocation tables or make y
 
 ### License:
 GPL v3 
+
+### Screenshots:
+![screenshot](screen2.gif "screenshot")
+
+![screenshot](screen3.gif "screenshot")
