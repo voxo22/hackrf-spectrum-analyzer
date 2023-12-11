@@ -1,61 +1,41 @@
-# Spectrum Analyzer GUI for hackrf_sweep for Windows/Linux
+# HackRF Spectrum Analyzer for Windows
+based on Pavsa's HackRF Spectrum Analyzer
 
 ![screenshot](screen1.gif "screenshot")
 
 ### Download:
-Windows: [Download the latest version](https://github.com/pavsa/hackrf-spectrum-analyzer/releases)  
-Linux: read Installation section below
+[Download the latest version](https://github.com/pavsa/hackrf-spectrum-analyzer/releases) 
 
 ### Features:
-- Optimized for only one purpose - to use HackRF as a spectrum analyzer
-- All changes in settings restart hackrf_sweep automatically 
-- Easy retuning    
-- Peak / Persistent display
-- Frequency allocation bands for EU / USA(partial)
-- High resolution waterfall plot
-- Spur filter - removes spur artifacts from the spectrum 
+- Make your HackRF a semi-profi spectrum analyzer
+- Realtime / Peak / Average / Max Hold / Persistent display with adjustable timings
+- Customizable Frequency presets selector
+- Customizable multicolored Frequency allocation bands (default SK) -> make your own!
+- Fully adjustable high resolution Waterfall Plot
+- Spur filter (DC) for removing spur artifacts
+- Arrow left/right button for comfortable tuning
+- Adjustable amplitude and average chart offset
+- Selectable Frequency Shift for up/down-converters
+- Switchable Datestamp
 - hackrf_sweep integrated as a shared library
 
 ### Requirements:
-* HackRF One with [Firmware 2023.01.1](https://github.com/mossmann/hackrf/releases/tag/v2023.01.1) or newer  
-(use linux inside VM and [update the firmware](https://hackrf.readthedocs.io/en/latest/updating_firmware.html)) 
+* HackRF One with [Firmware 2023.01.1](https://github.com/mossmann/hackrf/releases/tag/v2023.01.1) or newer 
 
 ### Installation:
 Make sure HackRF is using at least the minimum firmware version (see above) 
 
-Windows:  
-1. Windows 7+ x64 required 
-1. Install Java JRE 64bit v1.8+
-1. [Download the latest version of Spectrum Analyzer](https://github.com/pavsa/hackrf-spectrum-analyzer/releases) and unzip
-1. Install HackRF as a libusb device
-  1. [Download Zadig](https://zadig.akeo.ie/) and install
+1. Minimum Windows 7 x64 or Vista x64 with extended kernel
+2. Minimum Java JRE 64bit v1.8 [Java JRE for Windows x64](http://www.oracle.com/technetwork/java/javase/downloads/jre8-downloads-2133155.html) 
+3. [Download the latest version of Spectrum Analyzer](https://github.com/pavsa/hackrf-spectrum-analyzer/releases) and unzip
+4. Connect and install HackRF as a libusb device
+  1. [Download Zadig](https://zadig.akeo.ie/) (or use packed one) and install
   2. Goto Options and check List All Devices
   3. Find "HackRF One" and select Driver "WinUSB" and click install
-1. Install (if you don't have one installed) [Java JRE for Windows x64](http://www.oracle.com/technetwork/java/javase/downloads/jre8-downloads-2133155.html) 
-1. Run "hackrf_sweep_spectrum_analyzer_windows.cmd"
+5. Run "hackRF_spectrum_analyzer.jar"
 
-Linux:  
-  
-1. To run, ensure these packages are installed (exact name depends on distro):  
-`libusb-1.0 libfftw3 default-jdk`   
-1. Newer openjdk might work also, not tested. On Ubuntu 18.04:  
-`sudo apt install libusb-1.0 libfftw3-bin default-jdk`  
-1. Follow the [HackRF USB permissions setup](https://github.com/mossmann/hackrf/wiki/FAQ) - you have to add rules to udev to allow hackrf library to open the HackRF USB device, it does not work by default.    
-
-If something does not work, you can try to build it manually.
-
-### Building  
-Building native libraries for Windows (using mingw-w64) and linux is done in one unified build using Ubuntu 18.04 x64.  
-1. You'll need to install these packages:  
-`sudo apt install build-essential ant git libusb-1.0 libfftw3-bin libfftw3-dev default-jdk mingw-w64`
-1. `git clone --depth=1 https://github.com/pavsa/hackrf-spectrum-analyzer.git` 
-1. `cd hackrf-spectrum-analyzer/src/hackrf-sweep/`
-1. `make`
-1. To run, simply execute: `build/hackrf_sweep_spectrum_analyzer_linux.sh`
-
-### Known issues:
-* Spectrum updates stop on parameter change
-  * Solution: press reset button on the HackRF (firmware bug)
+You can customize "presets.csv" file by adding or deleting requested rows. Follow the structure and column meaning.
+Additionaly, in "freq" folder you can edit frequency allocation tables or make your own. "Slash" character (/) in text columns hyphenates rows.
 
 ### License:
 GPL v3 
