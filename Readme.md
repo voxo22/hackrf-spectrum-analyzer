@@ -1,10 +1,10 @@
 # HackRF Spectrum Analyzer for Windows
-based on Pavsa's HackRF Spectrum Analyzer
+based on Pavsa's famous HackRF hackrf_sweep Spectrum Analyzer
 
 ![screenshot](screen1.gif "screenshot")
 
 ### Download:
-[Download the latest version](https://github.com/pavsa/hackrf-spectrum-analyzer/releases) 
+[Download the latest version](https://github.com/voxo22/hackrf-spectrum-analyzer/releases) 
 
 ### Features:
 - Make your HackRF a semi-profi spectrum analyzer
@@ -26,12 +26,12 @@ based on Pavsa's HackRF Spectrum Analyzer
 Make sure HackRF is using at least the minimum firmware version (see above) 
 
 1. Minimum Windows 7 x64 or Vista x64 with extended kernel
-2. Minimum Java JRE 64bit v1.8 [Java JRE for Windows x64](http://www.oracle.com/technetwork/java/javase/downloads/jre8-downloads-2133155.html) 
-3. [Download the latest version of Spectrum Analyzer](https://github.com/pavsa/hackrf-spectrum-analyzer/releases) and unzip
+2. Minimum Java JRE 64bit v1.8 ([Java JRE for Windows x64](http://www.oracle.com/technetwork/java/javase/downloads/jre8-downloads-2133155.html)) 
+3. [Download the latest version of Spectrum Analyzer](https://github.com/voxo22/hackrf-spectrum-analyzer/releases) and unzip
 4. Connect and install HackRF as a libusb device
-  1. [Download Zadig](https://zadig.akeo.ie/) (or use packed one) and install
-  2. Goto Options and check List All Devices
-  3. Find "HackRF One" and select Driver "WinUSB" and click install
+    - [Download Zadig](https://zadig.akeo.ie/) (or use packed one) and install
+    - Goto Options and check List All Devices
+    - Find "HackRF One" and select Driver "WinUSB" and click install
 5. Run "hackRF_spectrum_analyzer.jar"
 
 You can customize "presets.csv" file by adding or deleting requested rows. Follow the structure and column meaning.
