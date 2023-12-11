@@ -1,6 +1,6 @@
 # Spectrum Analyzer GUI for hackrf_sweep for Windows/Linux
 
-![screenshot](screenshot.gif "screenshot")
+![screenshot](screen1.gif "screenshot")
 
 ### Download:
 Windows: [Download the latest version](https://github.com/pavsa/hackrf-spectrum-analyzer/releases)  
