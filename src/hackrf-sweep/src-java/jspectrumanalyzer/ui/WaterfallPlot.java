@@ -46,7 +46,7 @@ public class WaterfallPlot extends JPanel {
 	private String				renderingInfo			= "";
 	private int					screenWidth;
 	private double				spectrumPaletteSize		= 65;
-	private double				spectrumPaletteStart	= -90;
+	private double				spectrumPaletteStart	= -110;
 	private String[]			statusMessage			= new String[4];
 
 	public WaterfallPlot(ChartPanel chartPanel, int maxHeight) {

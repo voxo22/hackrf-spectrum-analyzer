@@ -12,6 +12,7 @@ import java.awt.Shape;
 import java.awt.font.FontRenderContext;
 import java.awt.font.TextLayout;
 import java.awt.geom.AffineTransform;
+import java.awt.geom.Line2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.geom.Rectangle2D.Float;
 import java.awt.image.BufferedImage;
@@ -19,6 +20,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.SortedSet;
 import java.util.TreeSet;
+
+import org.jfree.ui.RectangleEdge;
 
 import jspectrumanalyzer.ui.GraphicsToolkit;
 
@@ -71,9 +74,6 @@ public class FrequencyAllocationTable {
 		BufferedImage i	= GraphicsToolkit.createAcceleratedImageTransparent(drawWidth, drawHeight);
 		Graphics2D g	= i.createGraphics();
 
-		AlphaComposite alcom = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha);
-		g.setComposite(alcom);
-
 		g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
 		g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
 		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);					
@@ -83,7 +83,7 @@ public class FrequencyAllocationTable {
 		
 		AffineTransform affineTransform = new AffineTransform();
 		affineTransform.rotate(Math.toRadians(0), 0, 0);
-		Font font = new Font(Font.DIALOG, Font.PLAIN, 10*scale);
+		Font font = new Font(Font.DIALOG, Font.PLAIN, 12*scale);
 		Font rotatedFont = font.deriveFont(affineTransform);
 		Rectangle2D fontBounds = g.getFontMetrics(rotatedFont).getStringBounds("80M", g);
 		g.setFont(rotatedFont);
@@ -93,7 +93,7 @@ public class FrequencyAllocationTable {
 		
 		float freqRange	= freqEndHz-freqStartHz;
 		Float rect = new Rectangle2D.Float();
-		final float textOffset	= fontHeight;
+		final float textOffset	= fontHeight/2;
 		final float textX	= fontHeight/2;
 		
 		class BandRectangle{
@@ -102,13 +102,15 @@ public class FrequencyAllocationTable {
 			FrequencyBand band;
 			String longestString;
 			boolean textVisible	= true;
-			public BandRectangle(FrequencyBand band, ArrayList<String> lines, float x, float y, float w, String longestString) {
+			public String color;
+			public BandRectangle(FrequencyBand band, ArrayList<String> lines, float x, float y, float w, String longestString, String color) {
 				this.band	= band;
 				this.lines = lines;
 				this.x = x;
 				this.y = y;
 				this.w = w;
 				this.longestString	= longestString;
+				this.color = color;
 			}
 			
 		}
@@ -118,15 +120,16 @@ public class FrequencyAllocationTable {
 			FrequencyBand band = bands.get(j);
 			float xStart 	= (band.getHzStartIncl()-freqStartHz)*drawWidth/(freqRange);
 			float xEnd 	= (band.getHzEndExcl()-freqStartHz)*drawWidth/(freqRange);
+			String color = band.getColor();
 			if (xStart < 0)
 				xStart	= 0;//if the band starts offscreen to the left, start it on 0
 			float x	= xStart;
 			float y	= 0;
 			float w	= xEnd-xStart;
-			
+
 			String[] lines = band.getName().split("/");
 			ArrayList<String> listLines	= new ArrayList<>(lines.length+1);
-			listLines.add(String.format("%d - %dM", band.getHzStartIncl()/1000000, band.getHzEndExcl()/1000000));
+			//listLines.add(String.format("%d - %dM", band.getHzStartIncl()/1000000, band.getHzEndExcl()/1000000));
 			for (int line = 0; line < lines.length; line++) {
 				String linestr	= lines[line];
 				listLines.add(linestr);
@@ -136,7 +139,7 @@ public class FrequencyAllocationTable {
 			 */
 			Arrays.sort(lines, (o1, o2) -> Integer.compare(o2.length(), o1.length()));
 			
-			shapes.add(new BandRectangle(band, listLines, x, y, w, lines[0]));
+			shapes.add(new BandRectangle(band, listLines, x, y, w, lines[0], color));
 		}
 		
 		float maxVisibleLines	= 1;
@@ -151,31 +154,47 @@ public class FrequencyAllocationTable {
 					maxVisibleLines	= shape.lines.size();
 			}
 			else {
-				shape.textVisible	= false;
+				shape.textVisible	= true;
 			}
 		}
-		
-		float rectHeight	= (maxVisibleLines) * fontHeight + fontHeight/2;
+		//System.out.println("visible: " + maxVisibleLines);
+		float rectHeight	= (maxVisibleLines) * fontHeight + textOffset;
 		rect.height	= rectHeight;
 		for (int j = 0; j < shapes.size(); j++) {
 			BandRectangle shape	= shapes.get(j);
 			rect.x	= shape.x;
 			rect.y	= shape.y;
 			rect.width	= shape.w;
-			g.setColor(bgColor);
+			g.setColor(Color.decode(shape.color));
+			g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.7f));
 			g.fill(rect);
 			g.setColor(Color.black);
 			g.draw(rect);
 			if (shape.textVisible) {
 				g.setColor(textColor);
+				g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 1f));
 //				g.setColor(Color.white);
 				Graphics2D gg = (Graphics2D) g.create((int)rect.x, (int)rect.y, (int)rect.width, (int)rect.height);
 				for (int line = 0; line < shape.lines.size(); line++) {
 					String linestr	= shape.lines.get(line);
-					gg.drawString(linestr, textX, textOffset + (line)*fontHeight);
+					gg.drawString(linestr, textX, /*textOffset +*/ (line+1)*fontHeight);
 				}
 				gg.dispose();
 			}
+			/*
+		    float[] dash1 = { 2f, 0f, 2f };
+
+		    BasicStroke bs1 = new BasicStroke(1, 
+		        BasicStroke.CAP_BUTT, 
+		        BasicStroke.JOIN_ROUND, 
+		        1.0f, 
+		        dash1,
+		        2f);
+		    g.setStroke(bs1);
+		    */
+			g.setColor(Color.decode("#444444"));
+	        g.drawLine((int)shape.x, 0, (int)shape.x, 450);
+	        g.drawLine((int)shape.x + (int)shape.w, 0, (int)shape.x + (int)shape.w, 450);
 		}
 		
 		g.dispose();

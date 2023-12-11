@@ -6,9 +6,14 @@ import java.awt.Desktop;
 import java.awt.Font;
 import java.awt.GridLayout;
 import java.awt.Label;
+import java.awt.event.ActionListener;
 import java.beans.PropertyChangeEvent;
+import java.io.File;
+import java.io.FileNotFoundException;
 import java.math.BigDecimal;
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.Vector;
 import java.util.function.Consumer;
@@ -16,12 +21,14 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import javax.swing.ComboBoxModel;
 import javax.swing.DefaultBoundedRangeModel;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JSeparator;
 import javax.swing.JSlider;
 import javax.swing.JSpinner;
 import javax.swing.JTabbedPane;
@@ -32,13 +39,18 @@ import javax.swing.UIManager;
 
 import jspectrumanalyzer.HackRFSweepSpectrumAnalyzer;
 import jspectrumanalyzer.Version;
+import jspectrumanalyzer.capture.ScreenCapture;
 import jspectrumanalyzer.core.FrequencyAllocationTable;
 import jspectrumanalyzer.core.FrequencyAllocations;
+import jspectrumanalyzer.core.FrequencyPresets;
 import jspectrumanalyzer.core.FrequencyRange;
 import jspectrumanalyzer.core.HackRFSettings;
 import jspectrumanalyzer.core.HackRFSettings.HackRFEventAdapter;
+import jspectrumanalyzer.core.Preset;
 import net.miginfocom.swing.MigLayout;
 import shared.mvc.MVCController;
+import shared.mvc.ModelValue;
+
 import javax.swing.border.BevelBorder;
 import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
@@ -54,6 +66,7 @@ public class HackRFSweepSettingsUI extends JPanel
 	 */
 	private HackRFSettings hRF;
 	private static final long serialVersionUID = 7721079457485020637L;
+	private FrequencyRange FrequencyRange;
 	private JLabel txtHackrfConnected;
 	private FrequencySelectorPanel frequencySelectorStart;
 	private FrequencySelectorPanel frequencySelectorEnd;
@@ -62,41 +75,60 @@ public class HackRFSweepSettingsUI extends JPanel
 	private JSpinner spinner_numberOfSamples;
 	private JCheckBox chckbxAntennaPower;
 	private JSlider slider_waterfallPaletteStart;
+	private JSlider slider_AmplitudeOffset;
+	private JSlider slider_WaterfallSpeed;	
 	private JSlider slider_waterfallPaletteSize;
+	private JCheckBox chckbxShowRealtime;
+	private JCheckBox chckbxShowAverage;
 	private JCheckBox chckbxShowPeaks;
+	private JCheckBox chckbxShowMaxHold;
+	private JCheckBox chckbxDatestamp;
 	private JCheckBox chckbxRemoveSpurs;
 	private JButton btnPause;
+	private JButton btnRec;
+	private JButton btnRecWFall;
+	private JButton button_plus;
+	private JButton button_minus;
 	private SpinnerListModel spinnerModelFFTBinHz;
 	private FrequencySelectorRangeBinder frequencyRangeSelector;
 	private JCheckBox chckbxFilterSpectrum;
 	private JSpinner spinnerPeakFallSpeed;
 	private JComboBox<FrequencyAllocationTable> comboBoxFrequencyAllocationBands;
+	private JComboBox<Preset> comboBoxFrequencyPresets;
 	private JSlider sliderGainVGA;
 	private JSlider sliderGainLNA;
 	private JCheckBox chckbxAntennaLNA;
-	private JLabel lblPeakFall;
-	private JComboBox<BigDecimal> comboBoxLineThickness;
-	private JLabel lblPersistentDisplay;
+	//private JComboBox<BigDecimal> comboBoxLineThickness;
+	private JSpinner spinnerLineThickness;
 	private JCheckBox checkBoxPersistentDisplay;
 	private JCheckBox checkBoxWaterfallEnabled;
-	private JLabel lblDecayRate;
-	private JComboBox comboBoxDecayRate;
-	private JLabel lblDebugDisplay;
+	//private JComboBox comboBoxDecayRate;
+	private JSpinner spinnerDecayRate;
+	private JSpinner spinnerAvgIterations;
 	private JCheckBox checkBoxDebugDisplay;
-
+	private JSpinner spinner_FrequencyShift;
+	private JSpinner spinnerPeakFallTrs;
+	private JSlider sliderAvgOffset;
+	private JLabel lblPeakFall;
+	private JLabel lblPeakFallTrs;
+	private JLabel lblAvgIterations;
+	private JLabel lblAvgOffset;
+	private JLabel lblDecayRate;	
+	
 	/**
 	 * Create the panel.
+	 * @throws FileNotFoundException 
 	 */
-	public HackRFSweepSettingsUI(HackRFSettings hackRFSettings)
+	public HackRFSweepSettingsUI(HackRFSettings hackRFSettings) throws FileNotFoundException
 	{
 		this.hRF	= hackRFSettings;
 		setForeground(Color.WHITE);
 		setBackground(Color.BLACK);
-		int minFreq = 1;
+		int minFreq = 0;
 		int maxFreq = 7250;
 		int freqStep = 1;
 
-		JPanel panelMainSettings	= new JPanel(new MigLayout("", "[123.00px,grow,leading]", "[][][::0px][][]"));
+		JPanel panelMainSettings	= new JPanel(new MigLayout("", "[190.00px,grow,leading]", "[][][::0px][][]"));
 		panelMainSettings.setBorder(new EmptyBorder(UIManager.getInsets("TabbedPane.tabAreaInsets")));;
 		panelMainSettings.setBackground(Color.BLACK);
 		JLabel lblNewLabel = new JLabel("Frequency start [MHz]");
@@ -106,28 +138,63 @@ public class HackRFSweepSettingsUI extends JPanel
 		frequencySelectorStart = new FrequencySelectorPanel(minFreq, maxFreq, freqStep, minFreq);
 		panelMainSettings.add(frequencySelectorStart, "cell 0 1,grow");
 
-		JLabel lblFrequencyEndmhz = new JLabel("Frequency end [MHz]");
+		JLabel lblFrequencyEndmhz = new JLabel("Frequency stop [MHz]");
 		lblFrequencyEndmhz.setForeground(Color.WHITE);
 		panelMainSettings.add(lblFrequencyEndmhz, "cell 0 3,alignx left,aligny center");
 
 		frequencySelectorEnd = new FrequencySelectorPanel(minFreq, maxFreq, freqStep, maxFreq);
 		panelMainSettings.add(frequencySelectorEnd, "cell 0 4,grow");
 		
+		JLabel lblFrequencyShift = new JLabel("Frequency presets");
+		lblFrequencyShift.setForeground(Color.WHITE);
+		panelMainSettings.add(lblFrequencyShift, "cell 0 7,alignx left,aligny center");
+
+		FrequencyPresets presets = new FrequencyPresets();
+		Vector presetValues = new Vector<>();
+		//presetValues.add(null);
+		presetValues.addAll(presets.getList());
+		comboBoxFrequencyPresets = new JComboBox(presetValues);
+		comboBoxFrequencyPresets.addActionListener(e -> {
+			Preset preset = (Preset)comboBoxFrequencyPresets.getSelectedItem();
+			frequencySelectorStart.setValue(preset.getStartFreq());
+			frequencySelectorEnd.setValue(preset.getStopFreq());
+			spinnerFFTBinHz.setValue(preset.getFFTBinWidth());
+			spinner_FrequencyShift.setValue(preset.getFreqShift());
+			slider_AmplitudeOffset.setValue(preset.getAmplitudeOffset());
+		});
+		panelMainSettings.add(comboBoxFrequencyPresets, "cell 0 8,growx");
+
+		JButton button_minus = new JButton("<---");
+		button_minus.setBackground(Color.BLACK);
+		button_minus.addActionListener(e -> {
+			int dif = (int) Math.round((frequencySelectorEnd.getValue() - frequencySelectorStart.getValue()) * 0.9);
+			frequencySelectorStart.setValue(frequencySelectorStart.getValue() - dif);
+			frequencySelectorEnd.setValue(frequencySelectorEnd.getValue() - dif);
+		});
+		panelMainSettings.add(button_minus, "cell 0 6,alignx left,growx");
+
+		JButton button_plus = new JButton("--->");
+		button_plus.setBackground(Color.BLACK);
+		button_plus.addActionListener(e -> {
+			int dif = (int) Math.round((frequencySelectorEnd.getValue() - frequencySelectorStart.getValue()) * 0.9);
+			frequencySelectorStart.setValue(frequencySelectorStart.getValue() + dif);
+			frequencySelectorEnd.setValue(frequencySelectorEnd.getValue() + dif);
+		});
+		panelMainSettings.add(button_plus, "flowx,cell 0 6,growx,alignx right");
 		
 		txtHackrfConnected = new JLabel();
-		txtHackrfConnected.setText("HackRF disconnected");
+		txtHackrfConnected.setText("HW disconnected");
 		txtHackrfConnected.setForeground(Color.WHITE);
 		txtHackrfConnected.setBackground(Color.BLACK);
 		panelMainSettings.add(txtHackrfConnected, "cell 0 23,growx");
 		txtHackrfConnected.setBorder(null);
 		
 		btnPause = new JButton("Pause");
-		panelMainSettings.add(btnPause, "cell 0 25,growx");
+		panelMainSettings.add(btnPause, "flowx,cell 0 25,growx,alignx left");
 		btnPause.setBackground(Color.black);
+		
 
-		
-		
-		
+
 		JTabbedPane tabbedPane	= new JTabbedPane(JTabbedPane.TOP);
 		setLayout(new BorderLayout());
 		add(panelMainSettings, BorderLayout.NORTH);
@@ -143,8 +210,16 @@ public class HackRFSweepSettingsUI extends JPanel
 		tab2.setForeground(Color.WHITE);
 		tab2.setBackground(Color.BLACK);
 		
-		tabbedPane.addTab("HackRF Settings", tab1);
-		tabbedPane.addTab("Chart options", tab2);
+		JPanel tab3	= new JPanel(new MigLayout("", "[123.00px,grow,leading]", "[][0][][][0][][][0][][0][][][0][][0][][][0][0][][][0][][0][grow,fill]"));
+		tab3.setForeground(Color.WHITE);
+		tab3.setBackground(Color.BLACK);
+		
+		tabbedPane.addTab("Scan  ", tab1);
+		tabbedPane.addTab("Params   ", tab2);
+		tabbedPane.addTab("Waterfall  ", tab3);
+		tabbedPane.setForegroundAt(2, Color.BLACK);
+		tabbedPane.setBackgroundAt(2, Color.WHITE);
+		
 		tabbedPane.setForegroundAt(1, Color.BLACK);
 		tabbedPane.setBackgroundAt(1, Color.WHITE);
 
@@ -153,222 +228,315 @@ public class HackRFSweepSettingsUI extends JPanel
 		
 		//tab1
 		{
-			JLabel lblGain = new JLabel("Gain [dB]");
+			JLabel lblGain = new JLabel("Gain");
 			lblGain.setForeground(Color.WHITE);
 			tab1.add(lblGain, "cell 0 0");
-
-			sliderGain = new JSlider(JSlider.HORIZONTAL, 0, 100, 2);
-			sliderGain.setFont(new Font("Monospaced", Font.BOLD, 16));
-			sliderGain.setBackground(Color.BLACK);
-			sliderGain.setForeground(Color.WHITE);
-			tab1.add(sliderGain, "flowy,cell 0 1,growx");
-
+			
 			JLabel lbl_gainValue = new JLabel(hackRFSettings.getGain() + "dB");
 			lbl_gainValue.setForeground(Color.WHITE);
-			tab1.add(lbl_gainValue, "cell 0 1,alignx right");
+			tab1.add(lbl_gainValue, "flowx,cell 0 0,alignx right");
+
+			sliderGain = new JSlider(JSlider.HORIZONTAL, 0, 100, 2);
+			sliderGain.setFont(new Font("Monospaced", Font.BOLD, 14));
+			sliderGain.setBackground(Color.BLACK);
+			sliderGain.setForeground(Color.WHITE);
+			tab1.add(sliderGain, "flowx,cell 0 1,growx");
 
 			JLabel lblNewLabel_2 = new JLabel("LNA Gain [dB]");
 			lblNewLabel_2.setForeground(Color.WHITE);
-			tab1.add(lblNewLabel_2, "cell 0 3");
+			tab1.add(lblNewLabel_2, "cell 0 2");
 			
 			sliderGainLNA = new JSlider(SwingConstants.HORIZONTAL, 0, 100, 2);
 			sliderGainLNA.setForeground(Color.WHITE);
-			sliderGainLNA.setFont(new Font("Monospaced", Font.BOLD, 16));
+			sliderGainLNA.setFont(new Font("Monospaced", Font.BOLD, 14));
 			sliderGainLNA.setBackground(Color.BLACK);
-			tab1.add(sliderGainLNA, "cell 0 4,growx");
+			tab1.add(sliderGainLNA, "cell 0 3,growx");
 			
 			JLabel lblVgfaGaindb = new JLabel("VGA Gain [dB]");
 			lblVgfaGaindb.setForeground(Color.WHITE);
-			tab1.add(lblVgfaGaindb, "cell 0 6");
+			tab1.add(lblVgfaGaindb, "cell 0 4");
 			
 			sliderGainVGA = new JSlider(SwingConstants.HORIZONTAL, 0, 100, 2);
 			sliderGainVGA.setForeground(Color.WHITE);
-			sliderGainVGA.setFont(new Font("Monospaced", Font.BOLD, 16));
+			sliderGainVGA.setFont(new Font("Monospaced", Font.BOLD, 14));
 			sliderGainVGA.setBackground(Color.BLACK);
-			tab1.add(sliderGainVGA, "cell 0 7,growx");
-
+			tab1.add(sliderGainVGA, "cell 0 5,growx");
+			/*
+			JSeparator separator1 = new JSeparator();
+			tab1.add(separator1,"cell 0 6,growx");
 			
-			JLabel lblLNAEnable = new JLabel("Antenna LNA +14dB");
-			lblLNAEnable.setForeground(Color.WHITE);
-			tab1.add(lblLNAEnable, "flowx,cell 0 8,growx");
-			
-			chckbxAntennaLNA = new JCheckBox("");
-			chckbxAntennaLNA.setHorizontalTextPosition(SwingConstants.LEADING);
+			JLabel lblHW = new JLabel("HW");
+			lblHW.setForeground(Color.WHITE);
+			tab1.add(lblHW, "growx,cell 0 7");
+			*/
+			chckbxAntennaLNA = new JCheckBox(" RF amp");
+			chckbxAntennaLNA.setHorizontalTextPosition(SwingConstants.TRAILING);
 			chckbxAntennaLNA.setBackground(Color.BLACK);
 			chckbxAntennaLNA.setForeground(Color.WHITE);
-			tab1.add(chckbxAntennaLNA, "cell 0 8,alignx right");
+			tab1.add(chckbxAntennaLNA, "cell 0 7,alignx right");
 
+			chckbxAntennaPower = new JCheckBox(" Bias T");
+			chckbxAntennaPower.setHorizontalTextPosition(SwingConstants.TRAILING);
+			chckbxAntennaPower.setBackground(Color.BLACK);
+			chckbxAntennaPower.setForeground(Color.WHITE);
+			tab1.add(chckbxAntennaPower, "cell 0 7,alignx right");
 			
-			JLabel lblFftBinhz = new JLabel("FFT Bin [Hz]");
+			chckbxRemoveSpurs = new JCheckBox(" DC");
+			chckbxRemoveSpurs.setHorizontalTextPosition(SwingConstants.TRAILING);
+			chckbxRemoveSpurs.setForeground(Color.WHITE);
+			chckbxRemoveSpurs.setBackground(Color.BLACK);
+			tab1.add(chckbxRemoveSpurs, "cell 0 7,alignx right");
+			
+			JSeparator separator2 = new JSeparator();
+			tab1.add(separator2,"cell 0 8,growx");
+			
+			JLabel lblCALC = new JLabel("CALC");
+			lblCALC.setForeground(Color.WHITE);
+			tab1.add(lblCALC, "growx,cell 0 9");
+			
+			chckbxShowRealtime = new JCheckBox(" Realtime");
+			chckbxShowRealtime.setHorizontalTextPosition(SwingConstants.TRAILING);
+			chckbxShowRealtime.setBackground(Color.BLACK);
+			chckbxShowRealtime.setForeground(Color.WHITE);
+			tab1.add(chckbxShowRealtime, "cell 0 9,alignx right");
+
+			chckbxShowAverage = new JCheckBox(" Average");
+			chckbxShowAverage.setHorizontalTextPosition(SwingConstants.TRAILING);
+			chckbxShowAverage.setBackground(Color.BLACK);
+			chckbxShowAverage.setForeground(Color.WHITE);
+			tab1.add(chckbxShowAverage, "cell 0 9,alignx right");
+			
+			chckbxShowPeaks = new JCheckBox(" Maximum");
+			chckbxShowPeaks.setForeground(Color.WHITE);
+			chckbxShowPeaks.setBackground(Color.BLACK);
+			tab1.add(chckbxShowPeaks, "cell 0 10,alignx right");
+
+			chckbxShowMaxHold = new JCheckBox(" MaxHOLD");
+			chckbxShowMaxHold.setHorizontalTextPosition(SwingConstants.TRAILING);
+			chckbxShowMaxHold.setBackground(Color.BLACK);
+			chckbxShowMaxHold.setForeground(Color.WHITE);
+			tab1.add(chckbxShowMaxHold, "cell 0 10,alignx right");
+			
+			checkBoxPersistentDisplay = new JCheckBox(" Persistent");
+			checkBoxPersistentDisplay.setHorizontalTextPosition(SwingConstants.TRAILING);
+			checkBoxPersistentDisplay.setForeground(Color.WHITE);
+			checkBoxPersistentDisplay.setBackground(Color.BLACK);
+			tab1.add(checkBoxPersistentDisplay, "cell 0 11,alignx right");
+			
+			JSeparator separator3 = new JSeparator();
+			tab1.add(separator3,"cell 0 12,growx");
+			
+			JLabel lblFREQ = new JLabel("FREQ");
+			lblFREQ.setForeground(Color.WHITE);
+			tab1.add(lblFREQ, "growx,cell 0 13");
+			
+			JLabel lblFftBinhz = new JLabel("FFT Bin [kHz] ");
 			lblFftBinhz.setForeground(Color.WHITE);
-			tab1.add(lblFftBinhz, "cell 0 10");
+			tab1.add(lblFftBinhz, "cell 0 13,alignx right");
 
 			spinnerFFTBinHz = new JSpinner();
-			spinnerFFTBinHz.setFont(new Font("Monospaced", Font.BOLD, 16));
-			spinnerModelFFTBinHz = new SpinnerListModel(new String[] { "1 000", "2 000", "5 000", "10 000", "20 000", 
-					"50 000", "100 000", "200 000", "500 000", "1 000 000", "2 000 000", "5 000 000" });
+			spinnerFFTBinHz.setFont(new Font("Monospaced", Font.BOLD, 14));
+			spinnerModelFFTBinHz = new SpinnerListModel(new String[] { "3", "10", "20", 
+					"50", "100", "200", "500", "1000", "2000" });
 			spinnerFFTBinHz.setModel(spinnerModelFFTBinHz);
-			tab1.add(spinnerFFTBinHz, "cell 0 12,growx");
+			tab1.add(spinnerFFTBinHz, "flowx, cell 0 13,alignx right");
 			((ListEditor) spinnerFFTBinHz.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
+			((ListEditor) spinnerFFTBinHz.getEditor()).getTextField().setColumns(5);
 			
 
 			hackRFSettings.getGain().addListener((gain) -> lbl_gainValue.setText(String.format(" %ddB  [LNA: %ddB  VGA: %ddB]", 
 					gain, hackRFSettings.getGainLNA().getValue(), hackRFSettings.getGainVGA().getValue())));
 			
-
-			JLabel lblNumberOfSamples = new JLabel("Number of samples");
+			JLabel lblDisplayFrequencyShift = new JLabel("Shift [MHz] ");
+			lblDisplayFrequencyShift.setForeground(Color.WHITE);
+			tab1.add(lblDisplayFrequencyShift, "cell 0 15,alignx right");
+			
+			spinner_FrequencyShift = new JSpinner();
+			spinner_FrequencyShift.setModel(new SpinnerListModel(new String[] { "0", "-120", "9750", "10600" }));
+			spinner_FrequencyShift.setFont(new Font("Monospaced", Font.BOLD, 14));
+			((ListEditor) spinner_FrequencyShift.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
+			((ListEditor) spinner_FrequencyShift.getEditor()).getTextField().setColumns(5);
+			tab1.add(spinner_FrequencyShift, "cell 0 15,alignx right");
+			
+			JLabel lblAmplitudeOffset = new JLabel("Amplitude Offset");
+			lblAmplitudeOffset.setForeground(Color.WHITE);
+			tab1.add(lblAmplitudeOffset, "cell 0 16");
+			
+			slider_AmplitudeOffset = new JSlider(JSlider.HORIZONTAL, 0, 100, 2);
+			slider_AmplitudeOffset.setForeground(Color.WHITE);
+			slider_AmplitudeOffset.setBackground(Color.BLACK);
+			slider_AmplitudeOffset.setFont(new Font("Monospaced", Font.BOLD, 14));
+			slider_AmplitudeOffset.setMinimum(0);
+			slider_AmplitudeOffset.setMaximum(60);
+			//slider_AmplitudeOffset.setValue(30);
+			tab1.add(slider_AmplitudeOffset, "cell 0 17,growx");
+		}
+		//tab2
+		{
+			chckbxDatestamp = new JCheckBox(" Timestamp");
+			chckbxDatestamp.setForeground(Color.WHITE);
+			chckbxDatestamp.setBackground(Color.BLACK);
+			tab2.add(chckbxDatestamp, "cell 0 0,alignx right");
+			/*
+			chckbxFilterSpectrum = new JCheckBox("Filter spectrum");
+			chckbxFilterSpectrum.setBackground(Color.BLACK);
+			chckbxFilterSpectrum.setForeground(Color.WHITE);
+			tab2.add(chckbxFilterSpectrum, "flowx,cell 0 0,growx");
+			*/
+			JLabel lblSpectrLineThickness = new JLabel("Lines Thickness ");
+			lblSpectrLineThickness.setForeground(Color.WHITE);
+			tab2.add(lblSpectrLineThickness, "cell 0 1,alignx right");
+			
+			spinnerLineThickness = new JSpinner();
+			spinnerLineThickness.setModel(new SpinnerListModel(new String[] { "1", "1.5", "2", "3" }));
+			spinnerLineThickness.setFont(new Font("Monospaced", Font.BOLD, 14));
+			((ListEditor) spinnerLineThickness.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
+			((ListEditor) spinnerLineThickness.getEditor()).getTextField().setColumns(3);
+			tab2.add(spinnerLineThickness, "cell 0 1,alignx right");
+			/*
+			comboBoxLineThickness = new JComboBox(new BigDecimal[] {
+					new BigDecimal("1"), new BigDecimal("1.5"), new BigDecimal("2"), new BigDecimal("3")
+					});
+			tab2.add(comboBoxLineThickness, "cell 0 1,alignx right");
+			*/
+			lblPeakFall = new JLabel("Peak Fallout Time ");
+			lblPeakFall.setForeground(Color.WHITE);
+			tab2.add(lblPeakFall, "cell 0 3,alignx right");
+			
+			spinnerPeakFallSpeed = new JSpinner();
+			spinnerPeakFallSpeed.setModel(new SpinnerListModel(new String[] { "1", "5", "10", "20", "30", "60" }));
+			spinnerPeakFallSpeed.setFont(new Font("Monospaced", Font.BOLD, 14));
+			((ListEditor) spinnerPeakFallSpeed.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
+			((ListEditor) spinnerPeakFallSpeed.getEditor()).getTextField().setColumns(2);
+			tab2.add(spinnerPeakFallSpeed, "cell 0 3,alignx right");
+			
+			lblPeakFallTrs = new JLabel("Peak Fall Threshold ");
+			lblPeakFallTrs.setForeground(Color.WHITE);
+			tab2.add(lblPeakFallTrs, "cell 0 5,alignx right");
+			
+			spinnerPeakFallTrs = new JSpinner();
+			spinnerPeakFallTrs.setModel(new SpinnerListModel(new String[] { "1", "2", "5", "10", "15" }));
+			spinnerPeakFallTrs.setFont(new Font("Monospaced", Font.BOLD, 14));
+			((ListEditor) spinnerPeakFallTrs.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
+			((ListEditor) spinnerPeakFallTrs.getEditor()).getTextField().setColumns(2);
+			tab2.add(spinnerPeakFallTrs, "cell 0 5,alignx right");
+			
+			lblDecayRate = new JLabel("Persistent Decay Rate ");
+			lblDecayRate.setForeground(Color.WHITE);
+			tab2.add(lblDecayRate, "cell 0 7,alignx right");
+			
+			spinnerDecayRate = new JSpinner();
+			spinnerDecayRate.setModel(new SpinnerNumberModel(10, 0, 500, 1));
+			spinnerDecayRate.setFont(new Font("Monospaced", Font.BOLD, 14));
+			tab2.add(spinnerDecayRate, "cell 0 7,alignx right");
+			/*
+			comboBoxDecayRate = new JComboBox(
+					new Vector<>(IntStream.rangeClosed(hRF.getPersistentDisplayDecayRate().getMin(), hRF.getPersistentDisplayDecayRate().getMax()).
+							boxed().collect(Collectors.toList())));
+			tab2.add(comboBoxDecayRate, "cell 0 5,alignx right");
+			*/
+			
+			lblAvgIterations = new JLabel("Average Iterations ");
+			lblAvgIterations.setForeground(Color.WHITE);
+			tab2.add(lblAvgIterations, "cell 0 9,alignx right");
+			
+			spinnerAvgIterations = new JSpinner();
+			spinnerAvgIterations.setModel(new SpinnerListModel(new String[] { "10", "20", "30" }));
+			spinnerAvgIterations.setFont(new Font("Monospaced", Font.BOLD, 14));
+			((ListEditor) spinnerAvgIterations.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
+			((ListEditor) spinnerAvgIterations.getEditor()).getTextField().setColumns(2);
+			tab2.add(spinnerAvgIterations, "cell 0 9,alignx right");
+			
+			lblAvgOffset = new JLabel("Average Offset");
+			lblAvgOffset.setForeground(Color.WHITE);
+			tab2.add(lblAvgOffset, "cell 0 10");
+			
+			sliderAvgOffset = new JSlider();
+			sliderAvgOffset.setForeground(Color.WHITE);
+			sliderAvgOffset.setBackground(Color.BLACK);
+			sliderAvgOffset.setFont(new Font("Monospaced", Font.BOLD, 14));
+			sliderAvgOffset.setMinimum(0);
+			sliderAvgOffset.setMaximum(30);
+			sliderAvgOffset.setValue(10);
+			tab2.add(sliderAvgOffset, "cell 0 11,growx");		
+			
+			JLabel lblNumberOfSamples = new JLabel("Samples ");
 			lblNumberOfSamples.setForeground(Color.WHITE);
-			tab1.add(lblNumberOfSamples, "cell 0 13");
+			tab2.add(lblNumberOfSamples, "cell 0 12,alignx right");
 
 			spinner_numberOfSamples = new JSpinner();
 			spinner_numberOfSamples.setModel(new SpinnerListModel(new String[] { "8192", "16384", "32768", "65536", "131072", "262144" }));
-			spinner_numberOfSamples.setFont(new Font("Monospaced", Font.BOLD, 16));
+			spinner_numberOfSamples.setFont(new Font("Monospaced", Font.BOLD, 14));
 			((ListEditor) spinner_numberOfSamples.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
-			((ListEditor) spinner_numberOfSamples.getEditor()).getTextField().setEditable(false);
-			tab1.add(spinner_numberOfSamples, "cell 0 14,growx");
-
-			JButton btnAbout = new JButton("Visit homepage");
-			btnAbout.addActionListener(e -> {
-				 if (Desktop.isDesktopSupported()) {
-			            Desktop desktop = Desktop.getDesktop();
-			            try {
-			                URI uri = new URI(Version.url);
-			                desktop.browse(uri);
-			            } catch (Exception ex) {
-			                ex.printStackTrace();
-			            }
-			    }
-			});
+			((ListEditor) spinner_numberOfSamples.getEditor()).getTextField().setColumns(6);
+			tab2.add(spinner_numberOfSamples, "cell 0 12,alignx right");
+			
+			JLabel lblDisplayFrequencyAllocation = new JLabel("Frequency Allocation Bands");
+			lblDisplayFrequencyAllocation.setForeground(Color.WHITE);
+			tab2.add(lblDisplayFrequencyAllocation, "cell 0 13");
+			
+			FrequencyAllocations frequencyAllocations	= new FrequencyAllocations();
+			Vector<FrequencyAllocationTable> freqAllocValues	= new Vector<>();
+			freqAllocValues.add(null);
+			freqAllocValues.addAll(frequencyAllocations.getTable().values());
+			DefaultComboBoxModel<FrequencyAllocationTable> freqAllocModel	= new  DefaultComboBoxModel<>(freqAllocValues);
+			comboBoxFrequencyAllocationBands = new JComboBox<FrequencyAllocationTable>(freqAllocModel);
+			tab2.add(comboBoxFrequencyAllocationBands, "cell 0 14,growx");
 			
 			
-			JLabel lblAntennaPower = new JLabel("Antenna power output");
-			lblAntennaPower.setForeground(Color.WHITE);
-			tab1.add(lblAntennaPower, "flowx,cell 0 16,growx");
+			/*
+			lblDebugDisplay = new JLabel("Debug display");
+			lblDebugDisplay.setForeground(Color.WHITE);
+			tab2.add(lblDebugDisplay, "flowx,cell 0 22,growx");
 			
-			chckbxAntennaPower = new JCheckBox("");
-			chckbxAntennaPower.setHorizontalTextPosition(SwingConstants.LEADING);
-			chckbxAntennaPower.setBackground(Color.BLACK);
-			chckbxAntennaPower.setForeground(Color.WHITE);
-			tab1.add(chckbxAntennaPower, "cell 0 16,alignx right");
-			
-			Label labelVersion = new Label("Version: v"+Version.version);
-			tab1.add(labelVersion, "flowx,cell 0 17");
-			btnAbout.setBackground(Color.BLACK);
-			tab1.add(btnAbout, "cell 0 17,alignx right");
+			checkBoxDebugDisplay = new JCheckBox("");
+			checkBoxDebugDisplay.setForeground(Color.WHITE);
+			checkBoxDebugDisplay.setBackground(Color.BLACK);
+			tab2.add(checkBoxDebugDisplay, "cell 0 22,alignx right");
+			*/
 		}
-		
-		chckbxFilterSpectrum = new JCheckBox("Filter spectrum");
-		chckbxFilterSpectrum.setBackground(Color.BLACK);
-		chckbxFilterSpectrum.setForeground(Color.WHITE);
-		
-		JLabel lblWaterfallEnabled = new JLabel("Waterfall enabled");
-		lblWaterfallEnabled.setForeground(Color.WHITE);
-		tab2.add(lblWaterfallEnabled, "flowx,cell 0 0,growx");
-
-
-		JLabel lblWaterfallPaletteStart = new JLabel("Waterfall palette start [dB]");
-		lblWaterfallPaletteStart.setForeground(Color.WHITE);
-		tab2.add(lblWaterfallPaletteStart, "cell 0 2");
-
-		slider_waterfallPaletteStart = new JSlider();
-		slider_waterfallPaletteStart.setForeground(Color.WHITE);
-		slider_waterfallPaletteStart.setBackground(Color.BLACK);
-		slider_waterfallPaletteStart.setMinimum(-100);
-		slider_waterfallPaletteStart.setMaximum(0);
-		slider_waterfallPaletteStart.setValue(-30);
-		tab2.add(slider_waterfallPaletteStart, "cell 0 3,growx");
-
-
-		JLabel lblWaterfallPaletteLength = new JLabel("Waterfall palette length [dB]");
-		lblWaterfallPaletteLength.setForeground(Color.WHITE);
-		tab2.add(lblWaterfallPaletteLength, "cell 0 5");
-
-		slider_waterfallPaletteSize = new JSlider(HackRFSweepSpectrumAnalyzer.SPECTRUM_PALETTE_SIZE_MIN, 100);
-		slider_waterfallPaletteSize.setBackground(Color.BLACK);
-		slider_waterfallPaletteSize.setForeground(Color.WHITE);
-		tab2.add(slider_waterfallPaletteSize, "cell 0 6,growx");
-		
-		JLabel lblSpectrLineThickness = new JLabel("Spectr. Line Thickness");
-		lblSpectrLineThickness.setForeground(Color.WHITE);
-		tab2.add(lblSpectrLineThickness, "flowx,cell 0 8,growx");
-		
-		JLabel lblShowPeaks = new JLabel("Show peaks");
-		lblShowPeaks.setForeground(Color.WHITE);
-		tab2.add(lblShowPeaks, "flowx,cell 0 10,growx");
-		
-		
-		chckbxShowPeaks = new JCheckBox("");
-		chckbxShowPeaks.setForeground(Color.WHITE);
-		chckbxShowPeaks.setBackground(Color.BLACK);
-		tab2.add(chckbxShowPeaks, "cell 0 10,alignx right");
-		
-		JLabel lblSpurFiltermay = new JLabel("Spur filter (may distort real signals)");
-		lblSpurFiltermay.setForeground(Color.WHITE);
-		tab2.add(lblSpurFiltermay, "flowx,cell 0 13,growx");
-		
-		chckbxRemoveSpurs = new JCheckBox("");
-		chckbxRemoveSpurs.setForeground(Color.WHITE);
-		chckbxRemoveSpurs.setBackground(Color.BLACK);
-		tab2.add(chckbxRemoveSpurs, "cell 0 13,alignx right");
-		
-		lblPeakFall = new JLabel("  Fall speed [s]");
-		lblPeakFall.setForeground(Color.WHITE);
-		tab2.add(lblPeakFall, "flowx,cell 0 11,growx");
-		
-		spinnerPeakFallSpeed = new JSpinner();
-		spinnerPeakFallSpeed.setModel(new SpinnerNumberModel(10, 0, 500, 1));
-		tab2.add(spinnerPeakFallSpeed, "cell 0 11,alignx right");
-		
-		lblPersistentDisplay = new JLabel("Persistent Display");
-		lblPersistentDisplay.setForeground(Color.WHITE);
-		tab2.add(lblPersistentDisplay, "flowx,cell 0 15,growx");
-		
-		lblDecayRate = new JLabel("  Persistence time [s]");
-		lblDecayRate.setForeground(Color.WHITE);
-		tab2.add(lblDecayRate, "flowx,cell 0 16,growx");
-		
-		JLabel lblDisplayFrequencyAllocation = new JLabel("Frequency Allocation Bands");
-		lblDisplayFrequencyAllocation.setForeground(Color.WHITE);
-		tab2.add(lblDisplayFrequencyAllocation, "cell 0 19");
-		
-		
-		FrequencyAllocations frequencyAllocations	= new FrequencyAllocations();
-		Vector<FrequencyAllocationTable> freqAllocValues	= new Vector<>();
-		freqAllocValues.add(null);
-		freqAllocValues.addAll(frequencyAllocations.getTable().values());
-		DefaultComboBoxModel<FrequencyAllocationTable> freqAllocModel	= new  DefaultComboBoxModel<>(freqAllocValues);
-		comboBoxFrequencyAllocationBands = new JComboBox<FrequencyAllocationTable>(freqAllocModel);
-		tab2.add(comboBoxFrequencyAllocationBands, "cell 0 20,growx");
-		
-		comboBoxLineThickness = new JComboBox(new BigDecimal[] {
-				new BigDecimal("1"), new BigDecimal("1.5"), new BigDecimal("2"), new BigDecimal("3")
-				});
-		tab2.add(comboBoxLineThickness, "cell 0 8,alignx right");
-		
-		checkBoxPersistentDisplay = new JCheckBox("");
-		checkBoxPersistentDisplay.setForeground(Color.WHITE);
-		checkBoxPersistentDisplay.setBackground(Color.BLACK);
-		tab2.add(checkBoxPersistentDisplay, "cell 0 15,alignx right");
-		
-		checkBoxWaterfallEnabled = new JCheckBox("");
-		checkBoxWaterfallEnabled.setForeground(Color.WHITE);
-		checkBoxWaterfallEnabled.setBackground(Color.BLACK);
-		tab2.add(checkBoxWaterfallEnabled, "cell 0 0,alignx right");
-		
-		comboBoxDecayRate = new JComboBox(
-				new Vector<>(IntStream.rangeClosed(hRF.getPersistentDisplayDecayRate().getMin(), hRF.getPersistentDisplayDecayRate().getMax()).
-						boxed().collect(Collectors.toList())));
-		tab2.add(comboBoxDecayRate, "cell 0 16,alignx right");
-		
-		lblDebugDisplay = new JLabel("Debug display");
-		lblDebugDisplay.setForeground(Color.WHITE);
-		tab2.add(lblDebugDisplay, "flowx,cell 0 22,growx");
-		
-		checkBoxDebugDisplay = new JCheckBox("");
-		checkBoxDebugDisplay.setForeground(Color.WHITE);
-		checkBoxDebugDisplay.setBackground(Color.BLACK);
-		tab2.add(checkBoxDebugDisplay, "cell 0 22,alignx right");
-		
+		//tab3 Waterfall
+		{
+			checkBoxWaterfallEnabled = new JCheckBox(" Waterfall");
+			checkBoxWaterfallEnabled.setForeground(Color.WHITE);
+			checkBoxWaterfallEnabled.setBackground(Color.BLACK);
+			tab3.add(checkBoxWaterfallEnabled, "cell 0 0,alignx right");
+			
+			JLabel lblWaterfallPaletteStart = new JLabel("Waterfall palette start [dB]");
+			lblWaterfallPaletteStart.setForeground(Color.WHITE);
+			tab3.add(lblWaterfallPaletteStart, "cell 0 2");
+	
+			slider_waterfallPaletteStart = new JSlider();
+			slider_waterfallPaletteStart.setForeground(Color.WHITE);
+			slider_waterfallPaletteStart.setBackground(Color.BLACK);
+			slider_waterfallPaletteStart.setMinimum(-150); //palette offset
+			slider_waterfallPaletteStart.setMaximum(-50);
+			slider_waterfallPaletteStart.setValue(-30);
+			tab3.add(slider_waterfallPaletteStart, "cell 0 3,growx");
+	
+	
+			JLabel lblWaterfallPaletteLength = new JLabel("Waterfall palette length [dB]");
+			lblWaterfallPaletteLength.setForeground(Color.WHITE);
+			tab3.add(lblWaterfallPaletteLength, "cell 0 5");
+	
+			slider_waterfallPaletteSize = new JSlider(HackRFSweepSpectrumAnalyzer.SPECTRUM_PALETTE_SIZE_MIN, 100);
+			slider_waterfallPaletteSize.setBackground(Color.BLACK);
+			slider_waterfallPaletteSize.setForeground(Color.WHITE);
+			tab3.add(slider_waterfallPaletteSize, "cell 0 6,growx");
+			
+			JLabel lblWaterfallSpeed = new JLabel("Waterfall speed");
+			lblWaterfallSpeed.setForeground(Color.WHITE);
+			tab3.add(lblWaterfallSpeed, "cell 0 16");
+			
+			slider_WaterfallSpeed = new JSlider();
+			slider_WaterfallSpeed.setForeground(Color.WHITE);
+			slider_WaterfallSpeed.setBackground(Color.BLACK);
+			slider_WaterfallSpeed.setFont(new Font("Monospaced", Font.BOLD, 14));
+			slider_WaterfallSpeed.setMinimum(1);
+			slider_WaterfallSpeed.setMaximum(10);
+			slider_WaterfallSpeed.setValue(4);
+			tab3.add(slider_WaterfallSpeed, "cell 0 17,growx");			
+		}
 		bindViewToModel();
 	}
 
@@ -386,10 +554,13 @@ public class HackRFSweepSettingsUI extends JPanel
 				});
 		new MVCController(sliderGain, hRF.getGain());
 		new MVCController(spinner_numberOfSamples, hRF.getSamples(), val -> Integer.parseInt(val.toString()), val -> val.toString());
+		new MVCController(spinner_FrequencyShift, hRF.getFreqShift(), val -> Integer.parseInt(val.toString()), val -> val.toString());
 		new MVCController(chckbxAntennaPower, hRF.getAntennaPowerEnable());
 		new MVCController(chckbxAntennaLNA, hRF.getAntennaLNA());
 		new MVCController(slider_waterfallPaletteStart, hRF.getSpectrumPaletteStart());
 		new MVCController(slider_waterfallPaletteSize, hRF.getSpectrumPaletteSize());
+		new MVCController(slider_AmplitudeOffset, hRF.getAmplitudeOffset());
+		new MVCController(slider_WaterfallSpeed, hRF.getWaterfallSpeed());
 		new MVCController(	(Consumer<FrequencyRange> valueChangedCall) ->  
 								frequencyRangeSelector.addPropertyChangeListener((PropertyChangeEvent evt) -> valueChangedCall.accept(frequencyRangeSelector.getFrequencyRange()) ) ,
 							(FrequencyRange newComponentValue) -> {
@@ -400,15 +571,46 @@ public class HackRFSweepSettingsUI extends JPanel
 							},
 							hRF.getFrequency()
 		); 
+		new MVCController(chckbxShowRealtime, hRF.isChartsRealtimeVisible());
+		new MVCController(chckbxShowAverage, hRF.isChartsAverageVisible());
 		new MVCController(chckbxShowPeaks, hRF.isChartsPeaksVisible());
-		new MVCController(chckbxFilterSpectrum, hRF.isFilterSpectrum());
+		new MVCController(chckbxShowMaxHold, hRF.isChartsMaxHoldVisible());
+		//new MVCController(chckbxFilterSpectrum, hRF.isFilterSpectrum());
 		new MVCController(chckbxRemoveSpurs, hRF.isSpurRemoval());
 		
 		new MVCController((valueChangedCall) -> btnPause.addActionListener((event) -> valueChangedCall.accept(!hRF.isCapturingPaused().getValue())), 
-				isCapt -> btnPause.setText(!isCapt ? "Pause"  : "Resume"), 
+				isCapt -> btnPause.setText(!isCapt ? "||"  : "►"), 
 				hRF.isCapturingPaused());
+		
+
 	
-		new MVCController(spinnerPeakFallSpeed, hRF.getPeakFallRate(), in -> (Integer)in, in -> in);
+		new MVCController(spinnerPeakFallSpeed, hRF.getPeakFallRate(), val -> Integer.parseInt(val.toString()), val -> val.toString());
+		new MVCController(spinnerPeakFallTrs, hRF.getPeakFallTrs(), val -> Integer.parseInt(val.toString()), val -> val.toString());
+		hRF.isChartsPeaksVisible().addListener((enabled) -> {
+			SwingUtilities.invokeLater(()->{
+				spinnerPeakFallSpeed.setEnabled(enabled);
+				spinnerPeakFallSpeed.setVisible(enabled);
+				lblPeakFall.setVisible(enabled);
+				spinnerPeakFallTrs.setEnabled(enabled);
+				spinnerPeakFallTrs.setVisible(enabled);
+				lblPeakFallTrs.setVisible(enabled);
+			});
+		});
+		hRF.isChartsPeaksVisible().callObservers();
+		
+		new MVCController(spinnerAvgIterations, hRF.getAvgIterations(), val -> Integer.parseInt(val.toString()), val -> val.toString());
+		new MVCController(sliderAvgOffset, hRF.getAvgOffset());
+		hRF.isChartsAverageVisible().addListener((enabled) -> {
+			SwingUtilities.invokeLater(()->{
+				spinnerAvgIterations.setEnabled(enabled);
+				spinnerAvgIterations.setVisible(enabled);
+				lblAvgIterations.setVisible(enabled);
+				sliderAvgOffset.setEnabled(enabled);
+				sliderAvgOffset.setVisible(enabled);
+				lblAvgOffset.setVisible(enabled);
+			});
+		});
+		hRF.isChartsAverageVisible().callObservers();
 	
 		new MVCController(comboBoxFrequencyAllocationBands, hRF.getFrequencyAllocationTable());
 		
@@ -424,30 +626,26 @@ public class HackRFSweepSettingsUI extends JPanel
 		new MVCController(sliderGainLNA, hRF.getGainLNA());
 		new MVCController(sliderGainVGA, hRF.getGainVGA());
 
-		new MVCController(comboBoxLineThickness, hRF.getSpectrumLineThickness());
+		//new MVCController(comboBoxLineThickness, hRF.getSpectrumLineThickness());
+		new MVCController(spinnerLineThickness, hRF.getSpectrumLineThickness(), val -> new BigDecimal (val.toString()), val -> val.toString());
 		
 		new MVCController(checkBoxPersistentDisplay, hRF.isPersistentDisplayVisible());
 		
+		new MVCController(chckbxDatestamp, hRF.isDatestampVisible());
+		
 		new MVCController(checkBoxWaterfallEnabled, hRF.isWaterfallVisible());
 		
-		new MVCController(checkBoxDebugDisplay, hRF.isDebugDisplay());
+		//new MVCController(checkBoxDebugDisplay, hRF.isDebugDisplay());
 		
-		hRF.isChartsPeaksVisible().addListener((enabled) -> {
-			SwingUtilities.invokeLater(()->{
-				spinnerPeakFallSpeed.setEnabled(enabled);
-				spinnerPeakFallSpeed.setVisible(enabled);
-				lblPeakFall.setVisible(enabled);
-			});
-		});
-		hRF.isChartsPeaksVisible().callObservers();
-		
-		new MVCController(comboBoxDecayRate, hRF.getPersistentDisplayDecayRate());
+		// new MVCController(comboBoxDecayRate, hRF.getPersistentDisplayDecayRate());		
+		new MVCController(spinnerDecayRate, hRF.getPersistentDisplayDecayRate(), in -> (Integer)in, in -> in);
 		hRF.isPersistentDisplayVisible().addListener((visible) -> {
 			SwingUtilities.invokeLater(()->{
-				comboBoxDecayRate.setVisible(visible);
+				spinnerDecayRate.setVisible(visible);
 				lblDecayRate.setVisible(visible);
 			});
 		});
+		
 		hRF.isPersistentDisplayVisible().callObservers();
 		
 		hRF.registerListener(new HackRFSettings.HackRFEventAdapter()
@@ -458,7 +656,7 @@ public class HackRFSweepSettingsUI extends JPanel
 			}
 			@Override public void hardwareStatusChanged(boolean hardwareSendingData)
 			{
-				txtHackrfConnected.setText("HackRF "+(hardwareSendingData ? "connected":"disconnected"));
+				txtHackrfConnected.setText("HW "+(hardwareSendingData ? "connected":"disconnected"));
 			}
 		});;
 		

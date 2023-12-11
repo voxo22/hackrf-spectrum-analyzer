@@ -20,7 +20,7 @@ public class EMA
 
 		return (result);
 	}
-
+	
 	private double	ema	= 0;
 
 	private int		order;

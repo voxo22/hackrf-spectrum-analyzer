@@ -7,13 +7,13 @@ public class FrequencyBand implements Comparable<FrequencyBand>{
 	private final long hzStartIncl;
 	private final long hzEndExcl;
 	private final String name;
-	private final String applications;
+	private final String color;
 	
-	public FrequencyBand(long hzStartIncl, long hzEndExcl, String name, String applications) {
+	public FrequencyBand(long hzStartIncl, long hzEndExcl, String name, String color) {
 		this.hzStartIncl = hzStartIncl;
 		this.hzEndExcl = hzEndExcl;
 		this.name = name;
-		this.applications = applications;
+		this.color = color;
 	}
 	public long getHzStartIncl() {
 		return hzStartIncl;
@@ -32,8 +32,8 @@ public class FrequencyBand implements Comparable<FrequencyBand>{
 	public String getName() {
 		return name;
 	}
-	public String getApplications() {
-		return applications;
+	public String getColor() {
+		return color;
 	}
 	
 	@Override

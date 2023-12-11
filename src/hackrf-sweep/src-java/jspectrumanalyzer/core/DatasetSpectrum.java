@@ -22,6 +22,7 @@ public class DatasetSpectrum implements Cloneable
 	protected  final int	freqStartMHz;
 	
 	protected  final int	freqStopMHz;
+	protected  final int	freqShift;
 	protected  float[]		spectrum;
 	protected  float		spectrumInitPower;
 	
@@ -35,12 +36,13 @@ public class DatasetSpectrum implements Cloneable
 	 * @param peakFallThreshold
 	 * @param peakFalloutMillis
 	 */
-	public DatasetSpectrum(float fftBinSizeHz, int freqStartMHz, int freqStopMHz, float spectrumInitPower)
+	public DatasetSpectrum(float fftBinSizeHz, int freqStartMHz, int freqStopMHz, float spectrumInitPower, int freqShift)
 	{
 		this.fftBinSizeHz = fftBinSizeHz;
 		this.freqStartMHz = freqStartMHz;
 		this.freqStartHz = freqStartMHz * 1000000l;
 		this.freqStopMHz = freqStopMHz;
+		this.freqShift = freqShift;
 		this.spectrumInitPower = spectrumInitPower;
 		int datapoints = (int) (Math.ceil(freqStopMHz - freqStartMHz) * 1000000d / fftBinSizeHz);
 		spectrum = new float[datapoints];
@@ -116,7 +118,7 @@ public class DatasetSpectrum implements Cloneable
 		for (int i = 0; i < spectrum.length; i++)
 		{
 			float freq = (freqStartHz + fftBinSizeHz * i) / 1000000f;
-			xValues[i]	= freq;
+			xValues[i]	= freq + freqShift;
 		}
 		XYSeriesImmutable xySeriesF	= new XYSeriesImmutable(name, xValues, yValues);
 		return xySeriesF;
@@ -145,6 +147,11 @@ public class DatasetSpectrum implements Cloneable
 	public int getFreqStopMHz()
 	{
 		return freqStopMHz;
+	}
+	
+	public int getFreqShift()
+	{
+		return freqShift;
 	}
 
 	/**

@@ -1,6 +1,8 @@
 package jspectrumanalyzer;
 
 import java.awt.BasicStroke;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
@@ -20,6 +22,7 @@ import java.awt.image.BufferedImage;
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.math.BigDecimal;
@@ -39,6 +42,7 @@ import javax.swing.UIManager;
 import org.jfree.chart.ChartFactory;
 import org.jfree.chart.ChartPanel;
 import org.jfree.chart.JFreeChart;
+import org.jfree.chart.axis.Axis;
 import org.jfree.chart.axis.AxisSpace;
 import org.jfree.chart.axis.NumberAxis;
 import org.jfree.chart.axis.NumberTickUnit;
@@ -163,37 +167,58 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	 */
 	protected static class ColorScheme {
 		Color	palette0	= Color.white;
-		Color	palette1	= new Color(0xe5e5e5);
-		Color	palette2	= new Color(0xFCA311);
-		Color	palette3	= new Color(0x14213D);
+		Color	cwhite	= new Color(0xaaaaaa); // 0xe5e5e5 darkwhite
+		Color	cgreen	= new Color(0x11FF11); // 0xFCA311 green
+		Color	palette3	= new Color(0x14213D); // 0x14213D dark blue
 		Color	palette4	= Color.BLACK;
+		Color	corange	= new Color(0xFCA311); // orange
+		Color	cyellow	= new Color(0xFCFC00); // yellow
+		Color	cred	= new Color(0xFF0000); // red
 	}
 
 	public static final int	SPECTRUM_PALETTE_SIZE_MIN	= 5;
-	private static boolean	captureGIF					= false;
-
-	private static long		initTime					= System.currentTimeMillis();
+	private static int	pFreqMin						= 920;
+	private static int	pFreqMax						= 960;
+	private static int	pFFT							= 20000;
+	private static int	pSamples						= 8192;
+	private static int	pGain							= 48;
+	private static boolean	pSpur						= true;
+	private static boolean	pAmp						= true;
+	private static BigDecimal pThick					= new BigDecimal("1");
+	private static boolean	pPeaks						= true;
+	private static int	pPeaksTime						= 60;
+	private static boolean	pPersist					= false;
+	private static int	pPersistTime					= 30;
+	private static boolean	pWfall						= true;
+	private static int	pPalSize						= 0;
+	private static int	pPalStart						= 0;
+	private static boolean	pAlloc						= false;
+	private static int	pDelay							= 10;
+	private static int	pTime							= 15;
+	private static int	pFps							= 15;
+	private static int	pX								= 680; //650 w/o waterfall
+	private static int	pY								= 580; //395
+	private static int	pSizeX							= 900;
+	private static int	pSizeY							= 600;
+	private static long	initTime						= System.currentTimeMillis();
+	private static int	cnt								= 0;
+	private static int	pOffset							= 30;
+	private static int	pWSpeed							= 4;	
 
 	public static void main(String[] args) throws IOException {
 		//		System.out.println(new File("").getAbsolutePath());
-		if (args.length > 0) {
-			if (args[0].equals("capturegif")) {
-				captureGIF = true;
-			}
-		}
+
 		//		try { Thread.sleep(20000); System.out.println("Started..."); } catch (InterruptedException e) {}
 
 		new HackRFSweepSpectrumAnalyzer();
 	}
 
-	public boolean									flagIsHWSendingData						= false;
+	public boolean									flagIsHWSendingData					= false;
 	private float									alphaFreqAllocationTableBandsImage	= 0.5f;
 	private float									alphaPersistentDisplayImage			= 1.0f;
 	private JFreeChart								chart;
-
-	private ModelValue<Rectangle2D>					chartDataArea						= new ModelValue<Rectangle2D>(
-			"Chart data area", new Rectangle2D.Double(0, 0, 1, 1));
-	private XYSeriesCollectionImmutable				chartDataset								= new XYSeriesCollectionImmutable();
+	private ModelValue<Rectangle2D>					chartDataArea						= new ModelValue<Rectangle2D>("Chart data area", new Rectangle2D.Double(0, 0, 1, 1));
+	private XYSeriesCollectionImmutable				chartDataset						= new XYSeriesCollectionImmutable();
 	private XYLineAndShapeRenderer					chartLineRenderer;
 	private ChartPanel								chartPanel;
 	private ColorScheme								colors								= new ColorScheme();
@@ -201,45 +226,45 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private int										dropped								= 0;
 	private volatile boolean						flagManualGain						= false;
 	private volatile boolean						forceStopSweep						= false;
-	/**
-	 * Capture a GIF of the program for the GITHUB page
-	 */
 	private ScreenCapture							gifCap								= null;
-	private ArrayList<HackRFEventListener>			hRFlisteners							= new ArrayList<>();
-	private ArrayBlockingQueue<FFTBins>				hwProcessingQueue						= new ArrayBlockingQueue<>(
-			1000);
+	private ModelValueBoolean						parameterIsRecorded					= new ModelValueBoolean("Recording", false);
+	private ModelValueBoolean						parameterIsRecordedWF				= new ModelValueBoolean("Recording", false);
+	private ArrayList<HackRFEventListener>			hRFlisteners						= new ArrayList<>();
+	private ArrayBlockingQueue<FFTBins>				hwProcessingQueue					= new ArrayBlockingQueue<>(1000);
 	private BufferedImage							imageFrequencyAllocationTableBands	= null;
-	private boolean											isChartDrawing						= false;
+	private boolean									isChartDrawing						= false;
 	private ReentrantLock							lock								= new ReentrantLock();
-
-	private ModelValueBoolean						parameterAntennaLNA   				= new ModelValueBoolean("Antenna LNA +14dB", false);
-	private ModelValueBoolean						parameterAntPower					= new ModelValueBoolean("Ant power", false);
-	private ModelValueInt							parameterFFTBinHz					= new ModelValueInt("FFT Bin [Hz]", 100000);
+	private ModelValueBoolean						parameterAntennaLNA   				= new ModelValueBoolean("RF amp", false);
+	private ModelValueBoolean						parameterAntPower					= new ModelValueBoolean("Antenna power", false);
+	private ModelValueInt							parameterFFTBinHz					= new ModelValueInt("FFT Bin [kHz]", 50);
 	private ModelValueBoolean						parameterFilterSpectrum				= new ModelValueBoolean("Filter", false);
-	private ModelValue<FrequencyRange>				parameterFrequency					= new ModelValue<>("Frequency range", new FrequencyRange(2400, 2500));
+	private ModelValue<FrequencyRange>				parameterFrequency					= new ModelValue<>("Frequency range", new FrequencyRange(920, 960));
 	private ModelValue<FrequencyAllocationTable>	parameterFrequencyAllocationTable	= new ModelValue<FrequencyAllocationTable>("Frequency allocation table", null);
-
 	private ModelValueInt							parameterGainLNA					= new ModelValueInt("LNA Gain",0, 8, 0, 40);
-	private ModelValueInt							parameterGainTotal					= new ModelValueInt("Gain [dB]", 40);
+	private ModelValueInt							parameterGainTotal					= new ModelValueInt("Gain [dB]", 52);
 	private ModelValueInt							parameterGainVGA					= new ModelValueInt("VGA Gain", 0, 2, 0, 60);
 	private ModelValueBoolean						parameterIsCapturingPaused			= new ModelValueBoolean("Capturing paused", false);
-
 	private ModelValueInt							parameterPersistentDisplayPersTime  = new ModelValueInt("Persistence time", 30, 1, 1, 60);
 	private ModelValueInt							parameterPeakFallRateSecs			= new ModelValueInt("Peak fall rate", 30);
+	private ModelValueInt							parameterPeakFallThreshold			= new ModelValueInt("Peak fall threshold", 15);
 	private ModelValueBoolean						parameterPersistentDisplay			= new ModelValueBoolean("Persistent display", false);
-
 	private ModelValueInt							parameterSamples					= new ModelValueInt("Samples", 8192);
-
-	private ModelValueBoolean						parameterShowPeaks					= new ModelValueBoolean("Show peaks", false);
-
+	private ModelValueInt							parameterFreqShift					= new ModelValueInt("FreqShift", 0);
+	private ModelValueBoolean						parameterDatestamp					= new ModelValueBoolean("Datestamp", true);
+	private ModelValueBoolean						parameterShowRealtime				= new ModelValueBoolean("Show Realtime", true);
+	private ModelValueBoolean						parameterShowAverage				= new ModelValueBoolean("Show Average", false);
+	private ModelValueBoolean						parameterShowPeaks					= new ModelValueBoolean("Show peaks", true);
+	private ModelValueBoolean						parameterShowMaxHold				= new ModelValueBoolean("Show MaxHold", false);
 	private ModelValueBoolean 						parameterDebugDisplay				= new ModelValueBoolean("Debug", false);
-	
 	private ModelValue<BigDecimal>					parameterSpectrumLineThickness		= new ModelValue<>("Spectrum line thickness", new BigDecimal("1"));
 	private ModelValueInt							parameterSpectrumPaletteSize		= new ModelValueInt("Spectrum palette size", 0);
 	private ModelValueInt							parameterSpectrumPaletteStart		= new ModelValueInt("Spectrum palette start", 0);
+	private ModelValueInt							parameterAmplitudeOffset			= new ModelValueInt("Amplitude offset", 20);
+	private ModelValueInt							parameterAvgIterations				= new ModelValueInt("Average iterations", 20);
+	private ModelValueInt							parameterAvgOffset					= new ModelValueInt("Average offset", 10);
+	private ModelValueInt							parameterWaterfallSpeed				= new ModelValueInt("Waterfall speed", 4);	
 	private ModelValueBoolean						parameterSpurRemoval				= new ModelValueBoolean("Spur removal", false);
 	private ModelValueBoolean						parameterWaterfallVisible			= new ModelValueBoolean("Waterfall visible", true);
-	
 	private PersistentDisplay						persistentDisplay					= new PersistentDisplay();
 	private float									spectrumInitValue					= -150;
 	private SpurFilter								spurFilter;
@@ -247,28 +272,22 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private ArrayBlockingQueue<Integer>				threadLaunchCommands				= new ArrayBlockingQueue<>(1);
 	private Thread									threadLauncher;
 	private Thread									threadProcessing;
-	private TextTitle								titleFreqBand						= new TextTitle("",
-			new Font("Dialog", Font.PLAIN, 11));
+	private TextTitle								titleFreqBand						= new TextTitle("",	new Font("Dialog", Font.PLAIN, 11));
 	private RuntimePerformanceWatch					perfWatch							= new RuntimePerformanceWatch();
 	private JFrame									uiFrame;
 	private ValueMarker								waterfallPaletteEndMarker;
 	private ValueMarker								waterfallPaletteStartMarker;
 	private WaterfallPlot							waterfallPlot;
 	private JLabel labelMessages;
+//	private ValueMarker freqMarker;
+//	private ValueMarker signalMarker;
+//	private int mouseX;
+//	private int mouseY;
 
-	public HackRFSweepSpectrumAnalyzer() {
-		printInit(0);
+	public HackRFSweepSpectrumAnalyzer() throws FileNotFoundException {
+		//printInit(0);
 
-		if (captureGIF) {
-//			parameterFrequency.setValue(new FrequencyRange(700, 2700));
-			parameterFrequency.setValue(new FrequencyRange(2400, 2700));
-			parameterGainTotal.setValue(60);
-			parameterSpurRemoval.setValue(true);
-			parameterPersistentDisplay.setValue(true);
-			parameterFFTBinHz.setValue(500000);
-			parameterFrequencyAllocationTable.setValue(new FrequencyAllocations().getTable().values().stream().findFirst().get());
-		}
-
+		parameterFrequencyAllocationTable.setValue(new FrequencyAllocations().getTable().values().stream().findFirst().get());
 		recalculateGains(parameterGainTotal.getValue());
 
 		try {
@@ -305,19 +324,19 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		setupChartMouseMarkers();
 
 		waterfallPlot = new WaterfallPlot(chartPanel, 300);
-		waterfallPaletteStartMarker = new ValueMarker(waterfallPlot.getSpectrumPaletteStart(), colors.palette2,
+		waterfallPaletteStartMarker = new ValueMarker(waterfallPlot.getSpectrumPaletteStart(), colors.cgreen,
 				new BasicStroke(1f));
 		waterfallPaletteEndMarker = new ValueMarker(
-				waterfallPlot.getSpectrumPaletteStart() + waterfallPlot.getSpectrumPaletteSize(), colors.palette2,
+				waterfallPlot.getSpectrumPaletteStart() + waterfallPlot.getSpectrumPaletteSize(), colors.cgreen,
 				new BasicStroke(1f));
 		//		chart.getXYPlot().addRangeMarker(waterfallPaletteStartMarker);
 		//		chart.getXYPlot().addRangeMarker(waterfallPaletteEndMarker);
 
-		printInit(2);
+		//printInit(2);
 
 		HackRFSweepSettingsUI settingsPanel = new HackRFSweepSettingsUI(this);
 
-		printInit(3);
+		//printInit(3);
 		
 		
 		JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, chartPanel, waterfallPlot);
@@ -338,13 +357,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		splitPanePanel.add(labelMessages, BorderLayout.SOUTH);
 
 		uiFrame = new JFrame();
-		uiFrame.setUndecorated(captureGIF);
 		uiFrame.setExtendedState(uiFrame.getExtendedState() | Frame.MAXIMIZED_BOTH);
 		uiFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 		uiFrame.setLayout(new BorderLayout());
 		uiFrame.setTitle("Spectrum Analyzer - hackrf_sweep");
 		uiFrame.add(splitPanePanel, BorderLayout.CENTER);
-		uiFrame.setMinimumSize(new Dimension(600, 600));
+		uiFrame.setMinimumSize(new Dimension(pSizeX, pSizeY));
 		uiFrame.add(settingsPanel, BorderLayout.EAST);
 		try {
 			uiFrame.setIconImage(new ImageIcon("program.png").getImage());
@@ -352,14 +370,14 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			//			e.printStackTrace();
 		}
 		
-		printInit(4);
+		//printInit(4);
 		setupFrequencyAllocationTable();
-		printInit(5);
+		//printInit(5);
 		
 		uiFrame.pack();
 		uiFrame.setVisible(true);
 
-		printInit(6);
+		//printInit(6);
 
 		startLauncherThread();
 		restartHackrfSweep();
@@ -371,14 +389,6 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 		//shutdown on exit
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> stopHackrfSweep()));
-
-		if (captureGIF) {
-			try {
-				gifCap = new ScreenCapture(uiFrame, 35 * 1, 10, 5, 760, 660, new File("screenshot.gif"));
-			} catch (Exception e) {
-				e.printStackTrace();
-			}
-		}
 	}
 
 	@Override
@@ -422,13 +432,38 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	}
 	
 	@Override
+	public ModelValueBoolean isDatestampVisible() {
+		return parameterDatestamp;
+	}
+	
+	@Override
 	public ModelValueInt getPeakFallRate() {
 		return parameterPeakFallRateSecs;
+	}
+	
+	@Override
+	public ModelValueInt getPeakFallTrs() {
+		return parameterPeakFallThreshold;
 	}
 
 	@Override
 	public ModelValueInt getSamples() {
 		return parameterSamples;
+	}
+	
+	@Override
+	public ModelValueInt getFreqShift() {
+		return parameterFreqShift;
+	}
+	
+	@Override
+	public ModelValueInt getAvgIterations() {
+		return parameterAvgIterations;
+	}
+	
+	@Override
+	public ModelValueInt getAvgOffset() {
+		return parameterAvgOffset;
 	}
 
 	@Override
@@ -455,10 +490,35 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	public ModelValueBoolean isCapturingPaused() {
 		return parameterIsCapturingPaused;
 	}
+	
+	@Override
+	public ModelValueBoolean isRecorded() {
+		return parameterIsRecorded;
+	}
 
+	@Override
+	public ModelValueBoolean isRecordedWF() {
+		return parameterIsRecordedWF;
+	}
+
+	@Override
+	public ModelValueBoolean isChartsRealtimeVisible() {
+		return parameterShowRealtime;
+	}
+	
+	@Override
+	public ModelValueBoolean isChartsAverageVisible() {
+		return parameterShowAverage;
+	}
+	
 	@Override
 	public ModelValueBoolean isChartsPeaksVisible() {
 		return parameterShowPeaks;
+	}
+	
+	@Override
+	public ModelValueBoolean isChartsMaxHoldVisible() {
+		return parameterShowMaxHold;
 	}
 	
 	@Override
@@ -484,6 +544,16 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	@Override
 	public ModelValueBoolean isWaterfallVisible() {
 		return parameterWaterfallVisible;
+	}
+	
+	@Override
+	public ModelValueInt getWaterfallSpeed() {
+		return parameterWaterfallSpeed;
+	}	
+	
+	@Override
+	public ModelValueInt getAmplitudeOffset() {
+		return parameterAmplitudeOffset;
 	}
 
 	@Override
@@ -537,7 +607,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			});
 		}
 	}
+	
 
+	
 	private FrequencyRange getFreq() {
 		return parameterFrequency.getValue();
 	}
@@ -567,21 +639,23 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			int limitChartRefreshFPS		= 30;
 			int limitPersistentRefreshEveryChartFrame	= 2;
 			
-			//			PowerCalibration calibration	 = new PowerCalibration(-45, -12.5, 40); 
+			// PowerCalibration calibration	 = new PowerCalibration(-45, -12.5, 40); 
 
 			datasetSpectrum = new DatasetSpectrumPeak(binHz, getFreq().getStartMHz(), getFreq().getEndMHz(),
-					spectrumInitValue, 15, parameterPeakFallRateSecs.getValue() * 1000);
-			chart.getXYPlot().getDomainAxis().setRange(getFreq().getStartMHz(), getFreq().getEndMHz());
+					spectrumInitValue, parameterPeakFallThreshold.getValue(), parameterPeakFallRateSecs.getValue() * 1000, parameterFreqShift.getValue(),
+					parameterAvgIterations.getValue(), parameterAvgOffset.getValue());
+			chart.getXYPlot().getDomainAxis().setRange(getFreq().getStartMHz()+parameterFreqShift.getValue(), getFreq().getEndMHz()+parameterFreqShift.getValue());
 
 			XYSeries spectrumPeaksEmpty	= new XYSeries("peaks");
+			XYSeries spectrumAverageEmpty	= new XYSeries("average");
+			XYSeries spectrumMaxHoldEmpty	= new XYSeries("maxhold");
 			
 			float maxPeakJitterdB = 6;
 			float peakThresholdAboveNoise = 4;
 			int maxPeakBins = 4;
 			int validIterations = 25;
-			spurFilter = new SpurFilter(maxPeakJitterdB, peakThresholdAboveNoise, maxPeakBins, validIterations,
-					datasetSpectrum);
-
+			spurFilter = new SpurFilter(maxPeakJitterdB, peakThresholdAboveNoise, maxPeakBins, validIterations,	datasetSpectrum);
+			
 			long lastChartUpdated = System.currentTimeMillis();
 			long lastScanStartTime = System.currentTimeMillis();
 			double lastFreq = 0;
@@ -592,11 +666,13 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					FFTBins bins = hwProcessingQueue.take();
 					if (parameterIsCapturingPaused.getValue())
 						continue;
+					
 					boolean triggerChartRefresh = bins.fullSweepDone;
 					//continue;
 				
 					if (bins.freqStart != null && bins.sigPowdBm != null) {
-						//						PowerCalibration.correctPower(calibration, parameterGaindB, bins);
+					//	PowerCalibration.correctPower(calibration, parameterGaindB, bins);
+						for (int i = 0; i < bins.sigPowdBm.length; i++) { bins.sigPowdBm[i]	-= (60-parameterAmplitudeOffset.getValue()); } //offset calibration
 						datasetSpectrum.addNewData(bins);
 					}
 
@@ -619,6 +695,14 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 							datasetSpectrum.refreshPeakSpectrum();
 							waterfallPlot.setStatusMessage(String.format("Total Spectrum Peak Power %.1fdBm",
 									datasetSpectrum.calculateSpectrumPeakPower()), 0);
+						}
+						
+						if (parameterShowAverage.getValue()) {
+							datasetSpectrum.refreshAverageSpectrum();
+						}
+						
+						if (parameterShowMaxHold.getValue()) {
+							datasetSpectrum.refreshMaxHoldSpectrum();
 						}
 
 						/**
@@ -650,6 +734,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						
 						XYSeries spectrumSeries;
 						XYSeries spectrumPeaks;
+						XYSeries spectrumAverage;
+						XYSeries spectrumMaxHold;
 
 						if (true) {
 							spectrumSeries = datasetSpectrum.createSpectrumDataset("spectrum");
@@ -658,6 +744,16 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 								spectrumPeaks = datasetSpectrum.createPeaksDataset("peaks");
 							} else {
 								spectrumPeaks = spectrumPeaksEmpty;
+							}
+							if (parameterShowAverage.getValue()) {
+								spectrumAverage = datasetSpectrum.createAverageDataset("average");
+							} else {
+								spectrumAverage = spectrumAverageEmpty;
+							}
+							if (parameterShowMaxHold.getValue()) {
+								spectrumMaxHold = datasetSpectrum.createMaxHoldDataset("maxhold");
+							} else {
+								spectrumMaxHold = spectrumMaxHoldEmpty;
 							}
 						} else {
 							spectrumSeries = new XYSeries("spectrum", false, true);
@@ -695,9 +791,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						 * do not render it in swing thread because it might
 						 * miss data
 						 */
-						if (parameterWaterfallVisible.getValue()) {
+						if (parameterWaterfallVisible.getValue()) {cnt++;
 							long start	= System.nanoTime();
-							waterfallPlot.addNewData(datasetSpectrum);
+							if ((cnt % (11 - parameterWaterfallSpeed.getValue())) == 0) {waterfallPlot.addNewData(datasetSpectrum);}
 							synchronized (perfWatch) {
 								perfWatch.waterfallUpdate.addDrawingTime(System.nanoTime()-start);	
 							}
@@ -713,12 +809,15 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 								chartDataset.removeAllSeries();
 								chartDataset.addSeries(spectrumPeaks);
-								chartDataset.addSeries(spectrumSeries);
+								chartDataset.addSeries(spectrumAverage);
+								chartDataset.addSeries(spectrumMaxHold);
+								
+								if(parameterShowRealtime.getValue()) {
+									chartDataset.addSeries(spectrumSeries);
+								}
+								
 								chart.setNotify(true);
 
-								if (gifCap != null) {
-									gifCap.captureFrame();
-								}
 							});
 						}
 
@@ -780,10 +879,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	}
 
 	private void setupChart() {
-		int axisWidthLeft = 70;
-		int axisWidthRight = 20;
+		int axisWidthLeft = 60;
+		int axisWidthRight = 40;
 
-		chart = ChartFactory.createXYLineChart("Spectrum analyzer", "Frequency [MHz]", "Power [dB]", chartDataset,
+		chart = ChartFactory.createXYLineChart("Spectrum analyzer", "Frequency (MHz)", "Amplitude (dBm)", chartDataset,
 				PlotOrientation.VERTICAL, false, false, false);
 		chart.getRenderingHints().put(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
 
@@ -795,14 +894,17 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		chartLineRenderer.setBaseStroke(new BasicStroke(parameterSpectrumLineThickness.getValue().floatValue()));
 
 		rangeAxis.setAutoRange(false);
-		rangeAxis.setRange(-110, 20);
+		rangeAxis.setRange(-110, -20); //amplitude range
 		rangeAxis.setTickUnit(new NumberTickUnit(10, new DecimalFormat("###")));
 
 		domainAxis.setNumberFormatOverride(new DecimalFormat(" #.### "));
 
 		chartLineRenderer.setAutoPopulateSeriesStroke(false);
 		chartLineRenderer.setAutoPopulateSeriesPaint(false);
-		chartLineRenderer.setSeriesPaint(0, colors.palette2);
+		chartLineRenderer.setSeriesPaint(0, colors.cgreen);  //max 
+		chartLineRenderer.setSeriesPaint(1, colors.cyellow);  //average
+		chartLineRenderer.setSeriesPaint(2, colors.cred);  //maxhold
+		chartLineRenderer.setSeriesPaint(3, colors.cwhite);  //realtime
 
 		if (false)
 			chart.addProgressListener(new ChartProgressListener() {
@@ -820,7 +922,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				}
 			});
 
-		plot.setDomainGridlinesVisible(false);
+		plot.setDomainGridlinesVisible(true);
 		plot.setRenderer(chartLineRenderer);
 
 		/**
@@ -839,35 +941,36 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 		plot.setAxisOffset(RectangleInsets.ZERO_INSETS); //no space between range axis and plot
 
-		Font labelFont = new Font(Font.MONOSPACED, Font.BOLD, 16);
+		Font labelFont = new Font(Font.SANS_SERIF, Font.BOLD, 14);
 		rangeAxis.setLabelFont(labelFont);
 		rangeAxis.setTickLabelFont(labelFont);
-		rangeAxis.setLabelPaint(colors.palette1);
-		rangeAxis.setTickLabelPaint(colors.palette1);
+		rangeAxis.setLabelPaint(colors.cwhite);
+		rangeAxis.setTickLabelPaint(colors.cwhite);
 		domainAxis.setLabelFont(labelFont);
 		domainAxis.setTickLabelFont(labelFont);
-		domainAxis.setLabelPaint(colors.palette1);
-		domainAxis.setTickLabelPaint(colors.palette1);
+		domainAxis.setLabelPaint(colors.cwhite);
+		domainAxis.setTickLabelPaint(colors.cwhite);
 		chartLineRenderer.setBasePaint(Color.white);
 		plot.setBackgroundPaint(colors.palette4);
 		chart.setBackgroundPaint(colors.palette4);
-		chartLineRenderer.setSeriesPaint(1, colors.palette1);
+
 
 		chartPanel = new ChartPanel(chart);
 		chartPanel.setMaximumDrawWidth(4096);
 		chartPanel.setMaximumDrawHeight(2160);
-		chartPanel.setMouseWheelEnabled(false);
-		chartPanel.setDomainZoomable(false);
+		chartPanel.setMouseWheelEnabled(true);
+		chartPanel.setDomainZoomable(true);
 		chartPanel.setRangeZoomable(false);
 		chartPanel.setPopupMenu(null);
 		chartPanel.setMinimumSize(new Dimension(200, 200));
 
 		printInit(1);
-
+		
 		/**
 		 * Draws overlay of waterfall's color scale next to main spectrum chart
 		 * to show
 		 */
+		if(true)
 		chartPanel.addOverlay(new Overlay() {
 			@Override
 			public void addChangeListener(OverlayChangeListener listener) {
@@ -875,6 +978,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 			@Override
 			public void paintOverlay(Graphics2D g, ChartPanel chartPanel) {
+				if(parameterIsRecorded.getValue() || parameterIsRecordedWF.getValue()) { return; }
 				Rectangle2D area = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
 				int plotStartX = (int) area.getX();
 				int plotWidth = (int) area.getWidth();
@@ -887,8 +991,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						waterfallPlot.getSpectrumPaletteStart() + waterfallPlot.getSpectrumPaletteSize(), subplotArea,
 						plot.getRangeAxisEdge());
 
-				int x = plotStartX + plotWidth;
-				int w = 15;
+				int x = plotStartX + plotWidth + 20;
+				int w = 10;
 				int h = y1 - y2;
 				waterfallPlot.drawScale(g, x, y2, w, h);
 			}
@@ -912,7 +1016,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				BufferedImage img = imageFrequencyAllocationTableBands;
 				if (img != null) {
 					Rectangle2D area = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
-					g2.drawImage(img, (int) area.getX(), (int) area.getY(), null);
+					g2.drawImage(img, (int) area.getX(), (int) area.getY()+20, null);
 				}
 			}
 
@@ -920,7 +1024,59 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			public void removeChangeListener(OverlayChangeListener listener) {
 			}
 		});
+		
+		/**
+		 * Date Time overlay
+		 */
+		if(true)
+		chartPanel.addOverlay(new Overlay() {
+			@Override
+			public void addChangeListener(OverlayChangeListener listener) {
+			}
 
+			@Override
+			public void paintOverlay(Graphics2D g2, ChartPanel chartPanel) {
+					g2.setColor(Color.gray);
+					LocalDateTime datetime1 = LocalDateTime.now();
+					DateTimeFormatter dtFormat = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
+					if(parameterDatestamp.getValue()) {
+						g2.drawString(datetime1.format(dtFormat), 20, 15);
+					}
+			}
+
+			@Override
+			public void removeChangeListener(OverlayChangeListener listener) {
+			}
+		});
+		
+		/**
+		 * Mouse Cross overlay
+		 */
+		/*
+		chartPanel.addOverlay(new Overlay() {
+			@Override
+			public void addChangeListener(OverlayChangeListener listener) {
+			}
+
+			@Override
+			public void paintOverlay(Graphics2D g2, ChartPanel chartPanel) {
+
+				XYPlot plot = chart.getXYPlot();
+				Rectangle2D subplotArea = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
+				double crosshairRange = plot.getRangeAxis().java2DToValue(mouseY, subplotArea, plot.getRangeAxisEdge());
+				signalMarker.setValue(crosshairRange);
+				signalMarker.setLabel(String.format("%.1fdB", crosshairRange));
+				double crosshairDomain = plot.getDomainAxis().java2DToValue(mouseX, subplotArea, plot.getDomainAxisEdge());
+				freqMarker.setValue(crosshairDomain);
+				freqMarker.setLabel(String.format("%.2fMHz", crosshairDomain));
+			}
+
+			@Override
+			public void removeChangeListener(OverlayChangeListener listener) {
+			}
+		});
+		*/
+		
 		/**
 		 * monitors chart data area for change due to no other way to extract
 		 * that info from jfreechart when it changes
@@ -951,7 +1107,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		
 		
 	}
-
+	
 	/**
 	 * Displays a cross marker with current frequency and signal strength when
 	 * mouse hovers over the frequency chart
@@ -961,18 +1117,21 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		freqMarker.setLabelPaint(Color.white);
 		freqMarker.setLabelAnchor(RectangleAnchor.TOP_RIGHT);
 		freqMarker.setLabelTextAnchor(TextAnchor.TOP_LEFT);
-		freqMarker.setLabelFont(new Font(Font.MONOSPACED, Font.BOLD, 16));
+		freqMarker.setLabelFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
 		ValueMarker signalMarker = new ValueMarker(0, Color.WHITE, new BasicStroke(1f));
 		signalMarker.setLabelPaint(Color.white);
 		signalMarker.setLabelAnchor(RectangleAnchor.TOP_RIGHT);
 		signalMarker.setLabelTextAnchor(TextAnchor.BOTTOM_RIGHT);
-		signalMarker.setLabelFont(new Font(Font.MONOSPACED, Font.BOLD, 16));
+		signalMarker.setLabelFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
 
 		chartPanel.addMouseMotionListener(new MouseMotionAdapter() {
 			DecimalFormat format = new DecimalFormat("0.#");
 
 			@Override
 			public void mouseMoved(MouseEvent e) {
+				//mouseX = e.getX();
+				//mouseY = e.getY();
+
 				int x = e.getX();
 				int y = e.getY();
 
@@ -983,18 +1142,19 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				signalMarker.setLabel(String.format("%.1fdB", crosshairRange));
 				double crosshairDomain = plot.getDomainAxis().java2DToValue(x, subplotArea, plot.getDomainAxisEdge());
 				freqMarker.setValue(crosshairDomain);
-				freqMarker.setLabel(String.format("%.1fMHz", crosshairDomain));
+				freqMarker.setLabel(String.format("%.2fMHz", crosshairDomain));
 
+				/*
 				FrequencyAllocationTable activeTable = parameterFrequencyAllocationTable.getValue();
 				if (activeTable != null) {
 					FrequencyBand band = activeTable.lookupBand((long) (crosshairDomain * 1000000l));
 					if (band == null)
-						titleFreqBand.setText(" ");
+						titleFreqBand.setText("");
 					else {
 						titleFreqBand.setText(String.format("%s - %s MHz  %s", format.format(band.getMHzStartIncl()),
 								format.format(band.getMHzEndExcl()), band.getApplications().replaceAll("/", " / ")));
 					}
-				}
+				}*/
 			}
 		});
 		chartPanel.addMouseListener(new MouseAdapter() {
@@ -1010,7 +1170,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			public void mouseExited(MouseEvent e) {
 				chart.getXYPlot().clearDomainMarkers();
 				chart.getXYPlot().clearRangeMarkers();
-				titleFreqBand.setText(" ");
+				titleFreqBand.setText("");
 			}
 		});
 
@@ -1048,7 +1208,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		parameterAntennaLNA.addListener(restartHackrf);
 		parameterFFTBinHz.addListener(restartHackrf);
 		parameterSamples.addListener(restartHackrf);
+		parameterFreqShift.addListener(restartHackrf);
 		parameterIsCapturingPaused.addListener(this::fireCapturingStateChanged);
+		
 
 		parameterGainTotal.addListener((gainTotal) -> {
 			if (flagManualGain) //flag is being adjusted manually by LNA or VGA, do not recalculate the gains
@@ -1083,6 +1245,18 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				p.resetPeaks();
 			}
 		});
+		parameterShowAverage.addListener(() -> {
+			DatasetSpectrumPeak p = datasetSpectrum;
+			if (p != null) {
+				p.resetAverage();
+			}
+		});
+		parameterShowMaxHold.addListener(() -> {
+			DatasetSpectrumPeak p = datasetSpectrum;
+			if (p != null) {
+				p.resetMaxHold();
+			}
+		});
 		parameterSpectrumPaletteStart.setValue((int) waterfallPlot.getSpectrumPaletteStart());
 		parameterSpectrumPaletteSize.setValue((int) waterfallPlot.getSpectrumPaletteSize());
 		parameterSpectrumPaletteStart.addListener((dB) -> {
@@ -1106,6 +1280,16 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		});
 		parameterPeakFallRateSecs.addListener((fallRate) -> {
 			datasetSpectrum.setPeakFalloutMillis(fallRate * 1000l);
+		});
+		
+		parameterPeakFallThreshold.addListener((threshold) -> {
+			datasetSpectrum.setPeakFallThreshold(threshold);
+		});
+		
+		parameterAvgIterations.addListener(restartHackrf);
+		
+		parameterAvgOffset.addListener((offset) -> {
+			datasetSpectrum.setAvgOffset(offset);
 		});
 
 		parameterSpectrumLineThickness.addListener((thickness) -> {
@@ -1235,7 +1419,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						+ "  lna: " + parameterGainLNA.getValue() + " vga: " + parameterGainVGA.getValue() + " antenna_lna: "+parameterAntennaLNA.getValue());
 				fireHardwareStateChanged(false);
 				HackRFSweepNativeBridge.start(this, getFreq().getStartMHz(), getFreq().getEndMHz(),
-						parameterFFTBinHz.getValue(), parameterSamples.getValue(), parameterGainLNA.getValue(),
+						parameterFFTBinHz.getValue()*1000, parameterSamples.getValue(), parameterGainLNA.getValue(),
 						parameterGainVGA.getValue(), parameterAntPower.getValue(), parameterAntennaLNA.getValue());
 				fireHardwareStateChanged(false);
 				if (forceStopSweep == false) {
@@ -1257,12 +1441,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			imageFrequencyAllocationTableBands = null;
 		} else if (area.getWidth() > 0 && area.getHeight() > 0) {
 			imageFrequencyAllocationTableBands = activeTable.drawAllocationTable((int) area.getWidth(),
-					(int) area.getHeight(), alphaFreqAllocationTableBandsImage, getFreq().getStartMHz() * 1000000l,
-					getFreq().getEndMHz() * 1000000l,
+					(int) area.getHeight(), alphaFreqAllocationTableBandsImage, (getFreq().getStartMHz() + parameterFreqShift.getValue()) * 1000000l,
+					(getFreq().getEndMHz() + parameterFreqShift.getValue()) * 1000000l,
 					//colors.palette4, 
 					Color.white,
 					//colors.palette1
-					Color.DARK_GRAY);
+					Color.green);
 		}
 	}
 }

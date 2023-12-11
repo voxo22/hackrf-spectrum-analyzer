@@ -42,15 +42,29 @@ public interface HackRFSettings {
 	public ModelValueBoolean isDebugDisplay();
 
 	public ModelValueInt getSamples();
+	
+	public ModelValueInt getFreqShift();
 
 	public ModelValueInt getSpectrumPaletteSize();
 	
+	public ModelValueInt getAmplitudeOffset();
+	
+	public ModelValueInt getWaterfallSpeed();
+	
 	public ModelValueBoolean isPersistentDisplayVisible();
 	public ModelValueBoolean isWaterfallVisible();
+	
+	public ModelValueBoolean isDatestampVisible();
 
 	public ModelValueInt getSpectrumPaletteStart();
 	
 	public ModelValueInt getPeakFallRate();
+	
+	public ModelValueInt getPeakFallTrs();
+	
+	public ModelValueInt getAvgIterations();
+	
+	public ModelValueInt getAvgOffset();
 	
 	public ModelValue<FrequencyAllocationTable> getFrequencyAllocationTable();
 
@@ -59,8 +73,18 @@ public interface HackRFSettings {
 	public ModelValueInt getGainVGA();
 
 	public ModelValueBoolean isCapturingPaused();
+	
+	public ModelValueBoolean isRecorded();
+	
+	public ModelValueBoolean isRecordedWF();
+	
+	public ModelValueBoolean isChartsRealtimeVisible();
+	
+	public ModelValueBoolean isChartsAverageVisible();
 
 	public ModelValueBoolean isChartsPeaksVisible();
+	
+	public ModelValueBoolean isChartsMaxHoldVisible();
 
 	public ModelValueBoolean isFilterSpectrum();
 

@@ -1,30 +1,45 @@
 package jspectrumanalyzer.core;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 
 public class FrequencyAllocations {
 	private HashMap<String, FrequencyAllocationTable> table	= new HashMap<>();
 	
-	public FrequencyAllocations() {
+	public FrequencyAllocations() throws FileNotFoundException {
 		loadEurope();
 	}
-
-	
 	
 	public HashMap<String, FrequencyAllocationTable> getTable() {
 		return new HashMap<>(table);
 	}
 
-	private void loadEurope() {
-		loadTableFromCSV("Europe", getClass().getResourceAsStream("/resources/freq-europe.csv"));		
-		loadTableFromCSV("USA", getClass().getResourceAsStream("/resources/freq-usa.csv"));
+	private void loadEurope() throws FileNotFoundException {
+		File dir = new File("./freq");
+		File[] fileList = dir.listFiles();
+		Arrays.sort(fileList, Comparator.comparingLong(File::lastModified).reversed());
+		SimpleDateFormat dft = new SimpleDateFormat("yyyy-MM");
+
+		for(int i = 0; i < fileList.length; i++) {
+			if(fileList[i].isFile()) {				
+				loadTableFromCSV(dft.format(fileList[i].lastModified())+" "+fileList[i].getName(), new FileInputStream(dir+"/"+fileList[i].getName()));				
+			}
+		}
 	}
 	
 	private void loadTableFromCSV(String locationName, InputStream is) {
@@ -38,7 +53,6 @@ public class FrequencyAllocations {
 			 * https://www.efis.dk/views2/search-general.jsp
 			 */
 			//"- Europe (ECA) -";"526.500 - 1606.500 kHz";"Broadcasting";"Inductive applications/Broadcasting"
-			//"- Europe (ECA) -";"5925.000 - 6700.000 MHz";"Fixed/Fixed-Satellite (Earth-to-space)/Earth Exploration-Satellite (passive)";"Passive sensors (satellite)/Fixed/FSS Earth stations/Radiodetermination applications/UWB applications/-/ESV/Radio astronomy"
 			Pattern patternCSV	= Pattern.compile("\"[^\"]+\";\"([0-9.]+)\\s+-\\s+([0-9.]+)\\s+([kM])Hz\";\"([^\"]+)\";\"([^\"]+)\"");
 			
 			reader	= new BufferedReader(new InputStreamReader(is));
