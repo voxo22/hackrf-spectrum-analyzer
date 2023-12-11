@@ -41,9 +41,9 @@ Additionaly, in "freq" folder you can edit frequency allocation tables or make y
 GPL v3 
 
 ### Screenshots:
-![screenshot]("# spec 1805-1880 MHz.gif" "screenshot")
+![screenshot](waterfall_920-960.gif "screenshot")
 
-![screenshot]("# wfall 920-960 MHz.gif" "screenshot")
+![screenshot](spectrum_1805-1880.gif "screenshot")
 
 ![screenshot](screen2.gif "screenshot")
 
