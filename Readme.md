@@ -1,5 +1,5 @@
 # HackRF Spectrum Analyzer for Windows
-based on Pavsa's famous HackRF hackrf_sweep Spectrum Analyzer
+based on Pavsa's HackRF hackrf_sweep Spectrum Analyzer
 
 ![screenshot](screen1.gif "screenshot")
 
@@ -41,10 +41,8 @@ Additionaly, in "freq" folder you can edit frequency allocation tables or make y
 GPL v3 
 
 ### Screenshots:
-![screenshot](waterfall_920-960.gif "screenshot")
+
 
 ![screenshot](spectrum_1805-1880.gif "screenshot")
 
 ![screenshot](screen2.gif "screenshot")
-
-![screenshot](screen3.gif "screenshot")
