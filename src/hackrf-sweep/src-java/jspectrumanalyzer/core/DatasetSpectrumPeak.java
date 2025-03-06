@@ -11,13 +11,16 @@ import jspectrumanalyzer.core.jfc.XYSeriesImmutable;
 public class DatasetSpectrumPeak extends DatasetSpectrum
 {
 	protected long		lastAdded			= System.currentTimeMillis();
+	protected long[]	peakHoldTime;
 	protected long		peakFalloutMillis	= 1000;
+	protected long		peakHoldMillis;
 	protected float		peakFallThreshold;
 	protected int		iteration			= 0;
 	protected float[]	sumVal;
 	protected float[][]	spectrumVal;
 	protected int		avgIterations;
 	protected int		avgOffset;
+	protected int		useMarkerHold;
 	
 	/**
 	 * stores EMA decaying peaks
@@ -31,11 +34,14 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 	protected float[]	spectrumPeakHold;
 	protected float[]	spectrumAverage;
 	
-	public DatasetSpectrumPeak(float fftBinSizeHz, int freqStartMHz, int freqStopMHz, float spectrumInitPower, float peakFallThreshold, long peakFalloutMillis, int freqShift, int avgIterations, int avgOffset)
+	public DatasetSpectrumPeak(float fftBinSizeHz, int freqStartMHz, int freqStopMHz, float spectrumInitPower,
+			float peakFallThreshold, long peakFalloutMillis, long peakHoldMillis, int freqShift, int avgIterations,
+			int avgOffset)
 	{
 		super(fftBinSizeHz, freqStartMHz, freqStopMHz, spectrumInitPower, freqShift);
 
 		this.peakFalloutMillis = peakFalloutMillis;
+		this.peakHoldMillis = peakHoldMillis;
 		this.spectrumInitPower = spectrumInitPower;
 		this.peakFallThreshold = peakFallThreshold;
 		this.avgIterations = avgIterations;
@@ -56,6 +62,8 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
             Arrays.fill(row, spectrumInitPower);
 		sumVal = new float[datapoints];
 		Arrays.fill(sumVal, avgIterations * spectrumInitPower);
+		peakHoldTime = new long[datapoints];
+		Arrays.fill(peakHoldTime, System.currentTimeMillis());
 		
 	}
 
@@ -65,6 +73,10 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 	
 	public void setPeakFallThreshold(int peakFallThreshold) {
 		this.peakFallThreshold = peakFallThreshold;
+	}
+	
+	public void setPeakHoldMillis(long peakHoldMillis) {
+		this.peakHoldMillis = peakHoldMillis;
 	}
 	
 	public void setAvgIterations(int avgIterations) {
@@ -128,13 +140,58 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 		return xySeriesF;
 	}
 	
-	public double calculateSpectrumPeakPower(){
+	public double[] calculateSpectrumPeakPower(int PowerFluxCalibration){
 		double powerSum	= 0;
+		double powerFluxSum = 0;
+		double[] out = new double[4];
+		float maxAmp = spectrumInitPower;
+		double maxFreq = freqStartMHz + freqShift;
+		double freqStep = fftBinSizeHz / 1000000d;
 		for (int i = 0; i < spectrumPeakHold.length; i++) {
-			if (spectrumPeakHold[i] > -90) {powerSum += Math.pow(10, spectrumPeakHold[i]/10);} /*convert dB to mW to sum power in linear form*/
+			if (spectrumPeakHold[i] > -95) {powerSum += Math.pow(10, spectrumPeakHold[i] / 10);} /*convert dB to mW to sum power in linear form*/
+			if (spectrumPeakHold[i] > maxAmp) {
+				maxAmp = spectrumPeakHold[i];
+				maxFreq = (double)Math.round(Math.round(1 / freqStep) * (freqStartMHz + freqStep * i)) / Math.round(1 / freqStep) + freqShift;
+			}
 		}
-		powerSum	= 10*Math.log10(powerSum); /*convert back to dB*/ 
-		return powerSum;
+		powerFluxSum = (powerSum * Math.pow(10,(PowerFluxCalibration/10f))) * (4 * Math.PI * Math.pow(maxFreq / 1E3, 2) * 1E18) / Math.pow(299792458, 2);
+		powerSum	= 10 * Math.log10(powerSum); /*convert back to dB*/
+		out[0] = powerSum;
+		out[1] = (double) Math.round(10 * maxAmp) / 10;
+		out[2] = maxFreq;
+		out[3] = roundToSignificantFigures(powerFluxSum,2);
+		return out;
+	}
+	
+	public double[] calculateMarkerHold(){
+		double[] out = new double[2];
+		float maxAmpHold = spectrumInitPower;
+		double maxFreqHold = freqStartMHz + freqShift;
+		double freqStep = fftBinSizeHz / 1000000d;
+
+		for (int i = 0; i < spectrumMaxHold.length; i++) {
+			if (spectrumMaxHold[i] > maxAmpHold) {
+				maxAmpHold = spectrumMaxHold[i];
+				maxFreqHold = (double)Math.round(Math.round(1 / freqStep) * (freqStartMHz + freqStep * i)) / Math.round(1 / freqStep) + freqShift;
+			}
+		}
+		out[0] = (double) Math.round(10 * maxAmpHold) / 10;
+		out[1] = maxFreqHold;
+		return out;
+	}
+	
+	public static double roundToSignificantFigures(double num, int n) {
+	    if(num == 0) {
+	        return 0;
+	    }
+
+	    final double d = Math.ceil(Math.log10(num));
+	    final int power = n - (int) d;
+
+	    final double magnitude = Math.pow(10, power);
+	    final long shifted = Math.round(num*magnitude);
+	    final double res = shifted/magnitude;
+	    return res;
 	}
 	
 	private long debugLastPeakRerfreshTime	= 0;
@@ -157,14 +214,17 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 //		peakFalloutMillis	= 30000;
 		for (int spectrIndex = 0; spectrIndex < spectrum.length; spectrIndex++)
 		{
-			float spectrumVal = spectrum[spectrIndex];
-			if (spectrumVal > spectrumPeakHold[spectrIndex])
+			//float spectrumVal = spectrum[spectrIndex];
+			if (spectrum[spectrIndex] > spectrumPeakHold[spectrIndex])
 			{
-				spectrumPeakHold[spectrIndex] = spectrumPeak[spectrIndex] = spectrumVal;
+				spectrumPeakHold[spectrIndex] = spectrumPeak[spectrIndex] = spectrum[spectrIndex];
+				peakHoldTime[spectrIndex] = System.currentTimeMillis();
 			}
-			spectrumPeak[spectrIndex] = (float) EMA.calculateTimeDependent(spectrumVal, spectrumPeak[spectrIndex], timeDiffFromPrevValueMillis, peakFalloutMillis);
+			spectrumPeak[spectrIndex] = (float) EMA.calculateTimeDependent(spectrum[spectrIndex], spectrumPeak[spectrIndex],
+					timeDiffFromPrevValueMillis, peakFalloutMillis);
 
-			if (spectrumPeakHold[spectrIndex] - spectrumPeak[spectrIndex] > peakFallThreshold)
+			if (spectrumPeakHold[spectrIndex] - spectrumPeak[spectrIndex] > peakFallThreshold
+					&& System.currentTimeMillis() - peakHoldTime[spectrIndex] > peakHoldMillis)
 			{
 				spectrumPeakHold[spectrIndex] = spectrumPeak[spectrIndex];
 			}
@@ -180,6 +240,7 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 				spectrumMaxHold[spectrIndex] = spectrum[spectrIndex];
 			}
 		}
+		//System.out.println(System.currentTimeMillis());
 	}
 	
 	public void refreshAverageSpectrum()
@@ -189,7 +250,7 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 			float previousVal = spectrumVal[iteration][spectrIndex];
 			spectrumVal[iteration][spectrIndex] = spectrum[spectrIndex];
 			sumVal[spectrIndex] = sumVal[spectrIndex] + spectrum[spectrIndex] - previousVal;
-			spectrumAverage[spectrIndex] = sumVal[spectrIndex]/avgIterations + avgOffset;
+			spectrumAverage[spectrIndex] = sumVal[spectrIndex]/avgIterations + avgOffset + 10;
 		}
 		iteration++;
 		if (iteration == avgIterations) { iteration = 0; }

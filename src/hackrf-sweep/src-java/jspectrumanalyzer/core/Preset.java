@@ -43,3 +43,4 @@ public class Preset {
 		return amplitudeOffset;
 	}
 }
+

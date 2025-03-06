@@ -62,21 +62,35 @@ public interface HackRFSettings {
 	
 	public ModelValueInt getPeakFallTrs();
 	
+	public ModelValueInt getPeakHoldTime();
+	
 	public ModelValueInt getAvgIterations();
 	
 	public ModelValueInt getAvgOffset();
+	
+	public ModelValueInt getPowerFluxCal();
 	
 	public ModelValue<FrequencyAllocationTable> getFrequencyAllocationTable();
 
 	public ModelValue<BigDecimal> getSpectrumLineThickness();
 	
+	public ModelValue<String> getLogDetail();
+	
+	public ModelValue<String> getVideoArea();
+	
+	public ModelValue<String> getVideoFormat();
+	
+	public ModelValueInt getVideoResolution();
+	
+	public ModelValueInt getVideoFrameRate();
+	
 	public ModelValueInt getGainVGA();
 
 	public ModelValueBoolean isCapturingPaused();
 	
-	public ModelValueBoolean isRecorded();
+	public ModelValueBoolean isRecordedVideo();
 	
-	public ModelValueBoolean isRecordedWF();
+	public ModelValueBoolean isRecordedData();
 	
 	public ModelValueBoolean isChartsRealtimeVisible();
 	
@@ -85,6 +99,10 @@ public interface HackRFSettings {
 	public ModelValueBoolean isChartsPeaksVisible();
 	
 	public ModelValueBoolean isChartsMaxHoldVisible();
+	
+	public ModelValueBoolean isPeakMarkerVisible();
+	
+	public ModelValueBoolean isMaxHoldMarkerVisible();
 
 	public ModelValueBoolean isFilterSpectrum();
 
