@@ -41,6 +41,6 @@ Additionaly, in "freq" folder you can edit frequency allocation tables or make y
 GPL v3 
 
 ### Screenshots:
-![screen3](https://github.com/user-attachments/assets/68dd8a80-c428-4a22-8997-0747cfe1582b)
+![screen3](https://github.com/user-attachments/assets/e814fb42-3696-4fcb-b692-c714d128670e)
 
 ![screenshot](spectrum_1805-1880.gif "screenshot")
