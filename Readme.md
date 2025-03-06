@@ -1,7 +1,7 @@
 # HackRF Spectrum Analyzer for Windows
 based on Pavsa's HackRF hackrf_sweep Spectrum Analyzer
 
-![screenshot](screen1.gif "screenshot")
+![# SP+W 920-960 MHz](https://github.com/user-attachments/assets/e2437acd-83d6-4ac5-9b82-443aa10c15ec)
 
 ### Download:
 [Download the latest version](https://github.com/voxo22/hackrf-spectrum-analyzer/releases) 
@@ -41,8 +41,6 @@ Additionaly, in "freq" folder you can edit frequency allocation tables or make y
 GPL v3 
 
 ### Screenshots:
-
+![screen3](https://github.com/user-attachments/assets/68dd8a80-c428-4a22-8997-0747cfe1582b)
 
 ![screenshot](spectrum_1805-1880.gif "screenshot")
-
-![screenshot](screen2.gif "screenshot")
