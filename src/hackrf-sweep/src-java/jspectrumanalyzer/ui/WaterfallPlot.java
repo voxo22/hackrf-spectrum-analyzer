@@ -189,7 +189,7 @@ public class WaterfallPlot extends JPanel {
 			g.draw(rect);
 		}
 
-		renderingInfo = String.format("RBW %.1fkHz / FFT bins: %d%s / %.1ffps",
+		renderingInfo = String.format("RBW %.1f kHz / FFT bins: %d%s / %.1f fps",
 				lastSpectrum == null ? 0 : lastSpectrum.getFFTBinSizeHz() / 1000d, size >= 10000 ? size / 1000 : size,
 				size >= 10000 ? "k" : "", fps.getEma());
 		fpsRenderedFrames++;
@@ -295,8 +295,8 @@ public class WaterfallPlot extends JPanel {
 
 	private double translateChartXToFrequency(int x) {
 		if (lastSpectrum != null) {
-			double startFreq = lastSpectrum.getFreqStartMHz() * 1000000d;
-			double stopFreq = lastSpectrum.getFreqStopMHz() * 1000000d;
+			double startFreq = (lastSpectrum.getFreqStartMHz() + lastSpectrum.getFreqShift()) * 1000000d;
+			double stopFreq = (lastSpectrum.getFreqStopMHz() + lastSpectrum.getFreqShift()) * 1000000d;
 			double freqRange = (stopFreq - startFreq);
 			double width = bufferedImages[0].getWidth();
 			double percentageFreq = x / (double) chartWidth;
@@ -326,14 +326,14 @@ public class WaterfallPlot extends JPanel {
 		if (displayMarker) {
 			g.setColor(Color.gray);
 			g.drawLine(displayMarkerX, 0, displayMarkerX, h);
-			g.drawString(String.format("%.1fMHz", displayMarkerFrequency / 1000000.0), displayMarkerX + 5, h / 2);
+			g.drawString(String.format("%.1f MHz", displayMarkerFrequency / 1000000.0), displayMarkerX + 5, h / 2);
 		} //finish marker 
 
 		g.setColor(Color.white);
 		if (stringBounds == null)
 			stringBounds = g.getFontMetrics().getStringBounds("TEST", g);
 		int fontHeight = (int) stringBounds.getHeight();
-		int x = chartXOffset + w - 350;
+		int x = chartXOffset + w - 280;
 		int y = h - fontHeight * (statusMessage.length + 1);
 		g.drawString(renderingInfo, x, y);
 
