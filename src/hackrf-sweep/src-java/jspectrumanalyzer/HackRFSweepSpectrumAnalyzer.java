@@ -406,7 +406,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		uiFrame.setExtendedState(uiFrame.getExtendedState() | Frame.MAXIMIZED_BOTH);
 		uiFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 		uiFrame.setLayout(new BorderLayout());
-		uiFrame.setTitle("Spectrum Analyzer - hackrf_sweep");
+		uiFrame.setTitle("HackRF Spectrum Analyzer");
 		uiFrame.add(splitPanePanel, BorderLayout.CENTER);
 		uiFrame.setMinimumSize(new Dimension(pSizeX, pSizeY));
 		uiFrame.add(settingsPanel, BorderLayout.EAST);
@@ -1025,14 +1025,17 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 								if(parameterShowPeaks.getValue() && parameterShowPeakMarker.getValue()) {
 									//CircleDrawer cd = new CircleDrawer(new BasicStroke(1.5f), Color.white, null); //outline, fill
 									//XYAnnotation pointPeak = new XYDrawableAnnotation(markerFrequencyPeak, markerAmplitudePeak, 5, 5, cd);
+									/*
 									XYPointerAnnotation pointerPeak = new XYPointerAnnotation(String.format("%.2f MHz", markerFrequencyPeak),
 											markerFrequencyPeak, markerAmplitudePeak + 1.2f, 4.71f);
-									XYPointerAnnotation pointerPeak2 = new XYPointerAnnotation(String.format("%.1f dBm", markerAmplitudePeak),
-											markerFrequencyPeak, markerAmplitudePeak - 1.5f, 4.71f);
 							        pointerPeak.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
 							        pointerPeak.setPaint(colors.clime);
 							        pointerPeak.setTextAnchor(TextAnchor.TOP_LEFT);
 							        pointerPeak.setLabelOffset(10);
+							        */
+									XYPointerAnnotation pointerPeak2 = new XYPointerAnnotation(String.format("%.1f", markerAmplitudePeak)
+											+ " / " + String.format("%.2f", markerFrequencyPeak),
+											markerFrequencyPeak, markerAmplitudePeak - 1.8f, 4.71f);
 							        pointerPeak2.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
 							        pointerPeak2.setPaint(colors.clime);
 							        pointerPeak2.setTextAnchor(TextAnchor.TOP_LEFT);
@@ -1041,31 +1044,35 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 							        pointerPeak2.setArrowPaint(Color.white);
 									
 									//chart.getXYPlot().addAnnotation(pointPeak);
-									chart.getXYPlot().addAnnotation(pointerPeak);
+									//chart.getXYPlot().addAnnotation(pointerPeak);
 									chart.getXYPlot().addAnnotation(pointerPeak2);
 								}
 
 								if(parameterShowMaxHold.getValue() && parameterShowMaxHoldMarker.getValue()) {
 									//CircleDrawer cd = new CircleDrawer(new BasicStroke(1.5f), Color.white, null); //outline, fill
 									//XYAnnotation pointHold = new XYDrawableAnnotation(markerFrequencyHold, markerAmplitudeHold, 5, 5, cd);
+									/*
 									XYPointerAnnotation pointerHold = new XYPointerAnnotation(String.format("%.2f MHz", markerFrequencyHold),
 											markerFrequencyHold, markerAmplitudeHold + 1.2f, 4.71f);
-									XYPointerAnnotation pointerHold2 = new XYPointerAnnotation(String.format("%.1f dBm", markerAmplitudeHold),
-											markerFrequencyHold, markerAmplitudeHold - 1.5f, 4.71f);
 							        pointerHold.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
 							        pointerHold.setPaint(colors.cpink);
 							        pointerHold.setTextAnchor(TextAnchor.TOP_LEFT);
 							        pointerHold.setLabelOffset(10);
+							        */
+							        
+									XYPointerAnnotation pointerHold2 = new XYPointerAnnotation(String.format("%.1f", markerAmplitudeHold)
+											+ " / " + String.format("%.2f", markerFrequencyHold),
+											markerFrequencyHold, markerAmplitudeHold - 1.8f, 4.71f);
 							        pointerHold2.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
 							        pointerHold2.setPaint(colors.cpink);
 							        pointerHold2.setTextAnchor(TextAnchor.TOP_LEFT);
-							        pointerHold2.setLabelOffset(15);
+							        pointerHold2.setLabelOffset(20);
 							        pointerHold2.setArrowLength(12);
 							        pointerHold2.setArrowPaint(Color.white);
 							        //pointerHold2.setBaseRadius(15);
 							        
 									//chart.getXYPlot().addAnnotation(pointHold);
-									chart.getXYPlot().addAnnotation(pointerHold);
+									//chart.getXYPlot().addAnnotation(pointerHold);
 									chart.getXYPlot().addAnnotation(pointerHold2);
 								}
 						        
