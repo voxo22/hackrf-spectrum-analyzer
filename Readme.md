@@ -8,16 +8,22 @@ based on Pavsa's HackRF hackrf_sweep Spectrum Analyzer
 
 ### Features:
 - Make your HackRF a semi-profi spectrum analyzer
+- RBW from 3 kHz to 2 MHz
 - Realtime / Peak / Average / Max Hold / Persistent display with adjustable timings
-- Customizable Frequency presets selector
-- Customizable multicolored Frequency allocation bands (default SK) -> make your own!
-- Fully adjustable high resolution Waterfall Plot
-- Spur filter (DC) for removing spur artifacts
+- Customizable Frequency band presets with detail setting
+- Customizable multicolored Frequency allocation bands -> you can make your own!
+- Adjustable high resolution Waterfall Plot
+- Widely adjustable live screen recording into GIF or MP4 video
+- Data recording feature into CSV file with Max Frequency, Total spectrum power + selectable timing (minutes, seconds, fractions)
+- Spur filter (no DC) for removing spur artifacts
 - Arrow left/right button for comfortable tuning
 - Adjustable amplitude and average chart offset
 - Selectable Frequency Shift for up/down-converters
 - Switchable Datestamp
 - hackrf_sweep integrated as a shared library
+
+You can customize "presets.csv" file by adding or deleting requested rows. Follow the structure and column meaning.
+Additionaly, in "freq" folder you can edit frequency allocation tables or make your own. "Slash" character (/) in text columns hyphenates rows.
 
 ### Requirements:
 * HackRF One with [Firmware 2023.01.1](https://github.com/mossmann/hackrf/releases/tag/v2023.01.1) or newer 
@@ -32,10 +38,7 @@ Make sure HackRF is using at least the minimum firmware version (see above)
     - [Download Zadig](https://zadig.akeo.ie/) (or use packed one) and install
     - Goto Options and check List All Devices
     - Find "HackRF One" and select Driver "WinUSB" and click install
-5. Run "hackRF_spectrum_analyzer.jar"
-
-You can customize "presets.csv" file by adding or deleting requested rows. Follow the structure and column meaning.
-Additionaly, in "freq" folder you can edit frequency allocation tables or make your own. "Slash" character (/) in text columns hyphenates rows.
+5. Run "v2.21.jar"
 
 ### License:
 GPL v3 
