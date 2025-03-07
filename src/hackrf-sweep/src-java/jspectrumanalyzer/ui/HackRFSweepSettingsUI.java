@@ -157,9 +157,9 @@ public class HackRFSweepSettingsUI extends JPanel
 		frequencySelectorEnd = new FrequencySelectorPanel(minFreq, maxFreq, freqStep, maxFreq);
 		panelMainSettings.add(frequencySelectorEnd, "cell 0 4,grow");
 		
-		JLabel lblFrequencyShift = new JLabel("Frequency presets");
-		lblFrequencyShift.setForeground(Color.WHITE);
-		panelMainSettings.add(lblFrequencyShift, "cell 0 7,alignx left,aligny center");
+		JLabel lblFrequencyPreset = new JLabel("Frequency presets");
+		lblFrequencyPreset.setForeground(Color.WHITE);
+		panelMainSettings.add(lblFrequencyPreset, "cell 0 7,alignx left,aligny center");
 
 		FrequencyPresets presets = new FrequencyPresets();
 		Vector presetValues = new Vector<>();
