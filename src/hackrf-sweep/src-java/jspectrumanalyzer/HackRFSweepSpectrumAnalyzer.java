@@ -275,7 +275,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private ModelValueBoolean						parameterShowPeaks					= new ModelValueBoolean("Show Peaks", true);
 	private ModelValueBoolean						parameterShowMaxHold				= new ModelValueBoolean("Show MaxHold", true);
 	private ModelValueBoolean						parameterShowPeakMarker				= new ModelValueBoolean("Show PeakMarker", false);
-	private ModelValueBoolean						parameterShowMaxHoldMarker			= new ModelValueBoolean("Show MaxHoldMarker", true);
+	private ModelValueBoolean						parameterShowMaxHoldMarker			= new ModelValueBoolean("Show MaxHoldMarker", false);
 	private ModelValueBoolean 						parameterDebugDisplay				= new ModelValueBoolean("Debug", false);
 	private ModelValue<BigDecimal>					parameterSpectrumLineThickness		= new ModelValue<>("Spectrum Line Thickness", new BigDecimal("1"));
 	private ModelValueInt							parameterSpectrumPaletteSize		= new ModelValueInt("Palette Size", 0);
@@ -312,6 +312,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private WaterfallPlot							waterfallPlot;
 	private JLabel									labelMessages;
 	private FileWriter		 						dataCap;
+	private float									fSlope;
+    private float									fShift;
 //	private ValueMarker freqMarker;
 //	private ValueMarker signalMarker;
 //	private int mouseX;
@@ -432,7 +434,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		 * register parameter observers
 		 */
 		setupParameterObservers();
-
+		
 		//shutdown on exit
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> stopHackrfSweep()));
 	}
@@ -646,7 +648,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	public ModelValueInt getVideoFrameRate() {
 		return parameterVideoFrameRate;
 	}
-		
+	
 	@Override
 	public void newSpectrumData(boolean fullSweepDone, double[] frequencyStart, float fftBinWidthHz,
 			float[] signalPowerdBm) {
@@ -903,9 +905,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						
 						if (parameterShowMaxHold.getValue()) {
 							datasetSpectrum.refreshMaxHoldSpectrum();
-							double[] mh = datasetSpectrum.calculateMarkerHold();
-							markerFrequencyHold = mh[1];
-							markerAmplitudeHold = mh[0];
+							if (parameterShowMaxHoldMarker.getValue())
+							{
+								double[] mh = datasetSpectrum.calculateMarkerHold();
+								markerFrequencyHold = mh[1];
+								markerAmplitudeHold = mh[0];
+							}
 						}
 						
 						/**
@@ -1025,55 +1030,48 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 								if(parameterShowPeaks.getValue() && parameterShowPeakMarker.getValue()) {
 									//CircleDrawer cd = new CircleDrawer(new BasicStroke(1.5f), Color.white, null); //outline, fill
 									//XYAnnotation pointPeak = new XYDrawableAnnotation(markerFrequencyPeak, markerAmplitudePeak, 5, 5, cd);
-									/*
-									XYPointerAnnotation pointerPeak = new XYPointerAnnotation(String.format("%.2f MHz", markerFrequencyPeak),
-											markerFrequencyPeak, markerAmplitudePeak + 1.2f, 4.71f);
+									XYPointerAnnotation pointerPeak = new XYPointerAnnotation(String.format("%.1f", markerAmplitudePeak)
+											+ " @ " + String.format("%.2f", markerFrequencyPeak),
+											markerFrequencyPeak, markerAmplitudePeak - 1.8f, 4.71f);
 							        pointerPeak.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
 							        pointerPeak.setPaint(colors.clime);
-							        pointerPeak.setTextAnchor(TextAnchor.TOP_LEFT);
-							        pointerPeak.setLabelOffset(10);
-							        */
-									XYPointerAnnotation pointerPeak2 = new XYPointerAnnotation(String.format("%.1f", markerAmplitudePeak)
-											+ " / " + String.format("%.2f", markerFrequencyPeak),
-											markerFrequencyPeak, markerAmplitudePeak - 1.8f, 4.71f);
-							        pointerPeak2.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
-							        pointerPeak2.setPaint(colors.clime);
-							        pointerPeak2.setTextAnchor(TextAnchor.TOP_LEFT);
-							        pointerPeak2.setLabelOffset(15);
-							        pointerPeak2.setArrowLength(12);
-							        pointerPeak2.setArrowPaint(Color.white);
+							        double xPeak = markerFrequencyPeak * fSlope - fShift;
+							        if (xPeak < 9)
+							        	pointerPeak.setTextAnchor(TextAnchor.BOTTOM_LEFT);
+							        else if (xPeak > 91)
+							        	pointerPeak.setTextAnchor(TextAnchor.BOTTOM_RIGHT);
+							        else
+							        	pointerPeak.setTextAnchor(TextAnchor.BOTTOM_CENTER);
+							        //pointerPeak2.setLabelOffset(15);
+							        pointerPeak.setArrowLength(12);
+							        pointerPeak.setArrowPaint(Color.white);
 									
 									//chart.getXYPlot().addAnnotation(pointPeak);
-									//chart.getXYPlot().addAnnotation(pointerPeak);
-									chart.getXYPlot().addAnnotation(pointerPeak2);
+									chart.getXYPlot().addAnnotation(pointerPeak);
 								}
 
 								if(parameterShowMaxHold.getValue() && parameterShowMaxHoldMarker.getValue()) {
 									//CircleDrawer cd = new CircleDrawer(new BasicStroke(1.5f), Color.white, null); //outline, fill
 									//XYAnnotation pointHold = new XYDrawableAnnotation(markerFrequencyHold, markerAmplitudeHold, 5, 5, cd);
-									/*
-									XYPointerAnnotation pointerHold = new XYPointerAnnotation(String.format("%.2f MHz", markerFrequencyHold),
-											markerFrequencyHold, markerAmplitudeHold + 1.2f, 4.71f);
+									XYPointerAnnotation pointerHold = new XYPointerAnnotation(String.format("%.1f", markerAmplitudeHold)
+											+ " @ " + String.format("%.2f", markerFrequencyHold),
+											markerFrequencyHold, markerAmplitudeHold - 1.8f, 4.71f);
 							        pointerHold.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
 							        pointerHold.setPaint(colors.cpink);
-							        pointerHold.setTextAnchor(TextAnchor.TOP_LEFT);
-							        pointerHold.setLabelOffset(10);
-							        */
-							        
-									XYPointerAnnotation pointerHold2 = new XYPointerAnnotation(String.format("%.1f", markerAmplitudeHold)
-											+ " / " + String.format("%.2f", markerFrequencyHold),
-											markerFrequencyHold, markerAmplitudeHold - 1.8f, 4.71f);
-							        pointerHold2.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
-							        pointerHold2.setPaint(colors.cpink);
-							        pointerHold2.setTextAnchor(TextAnchor.TOP_LEFT);
-							        pointerHold2.setLabelOffset(20);
-							        pointerHold2.setArrowLength(12);
-							        pointerHold2.setArrowPaint(Color.white);
+							        double xMaxHold = markerFrequencyHold * fSlope - fShift;
+							        if (xMaxHold < 9)
+							        	pointerHold.setTextAnchor(TextAnchor.BOTTOM_LEFT);
+							        else if (xMaxHold > 91)
+							        	pointerHold.setTextAnchor(TextAnchor.BOTTOM_RIGHT);
+							        else
+							        	pointerHold.setTextAnchor(TextAnchor.BOTTOM_CENTER);
+							        //pointerHold2.setLabelOffset(20);
+							        pointerHold.setArrowLength(12);
+							        pointerHold.setArrowPaint(Color.white);
 							        //pointerHold2.setBaseRadius(15);
 							        
 									//chart.getXYPlot().addAnnotation(pointHold);
-									//chart.getXYPlot().addAnnotation(pointerHold);
-									chart.getXYPlot().addAnnotation(pointerHold2);
+									chart.getXYPlot().addAnnotation(pointerHold);
 								}
 						        
 								/*
@@ -1178,8 +1176,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 		chartLineRenderer.setAutoPopulateSeriesStroke(false);
 		chartLineRenderer.setAutoPopulateSeriesPaint(false);
-		chartLineRenderer.setSeriesPaint(0, colors.cgreen);  //max 
-		chartLineRenderer.setSeriesPaint(1, colors.cyellow);  //average
+		chartLineRenderer.setSeriesPaint(0, colors.cgreen);  //peak
+		chartLineRenderer.setSeriesPaint(1, colors.cyellow);  //avg
 		chartLineRenderer.setSeriesPaint(2, colors.cred);  //maxhold
 		chartLineRenderer.setSeriesPaint(3, colors.cwhite);  //realtime
 
@@ -1421,6 +1419,18 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				double crosshairDomain = plot.getDomainAxis().java2DToValue(x, subplotArea, plot.getDomainAxisEdge());
 				freqMarker.setValue(crosshairDomain);
 				freqMarker.setLabel(String.format("%.2f MHz", crosshairDomain));
+		        double xCross = (double) crosshairDomain * fSlope - fShift;
+		        //System.out.println(xCross);
+		        if (xCross > 90)
+		        {
+		        	freqMarker.setLabelAnchor(RectangleAnchor.TOP_LEFT);
+		    		freqMarker.setLabelTextAnchor(TextAnchor.TOP_RIGHT);
+		        }
+		        else
+		        {
+		        	freqMarker.setLabelAnchor(RectangleAnchor.TOP_RIGHT);
+		        	freqMarker.setLabelTextAnchor(TextAnchor.TOP_LEFT);
+		        }
 
 				/*
 				FrequencyAllocationTable activeTable = parameterFrequencyAllocationTable.getValue();
@@ -1451,7 +1461,20 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				titleFreqBand.setText("");
 			}
 		});
+		
+		chartPanel.addMouseMotionListener(new MouseMotionAdapter() {
 
+		    @Override
+		    public void mouseDragged(MouseEvent e) {
+		        // process before
+		    	//System.out.println(chart.getXYPlot().getDomainAxis().getRange().getLowerBound());
+		        super.mouseDragged(e);
+		        // process after
+		        //chart.getXYPlot().getDomainAxis().setRange(getFreq().getStartMHz()+parameterFreqShift.getValue(),
+		        // getFreq().getEndMHz()+parameterFreqShift.getValue());
+		    }
+		});
+		
 		titleFreqBand.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
 		titleFreqBand.setPosition(RectangleEdge.BOTTOM);
 		titleFreqBand.setHorizontalAlignment(HorizontalAlignment.LEFT);
@@ -1707,6 +1730,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			 * Ensures auto-restart if HW disconnects
 			 */
 			while (forceStopSweep == false) {
+				fSlope = 100 / (float) (getFreq().getEndMHz() - getFreq().getStartMHz());
+				fShift = fSlope * getFreq().getStartMHz();
 				System.out.println(
 						"Starting hackrf_sweep... " + getFreq().getStartMHz() + "-" + getFreq().getEndMHz() + " MHz ");
 				System.out.println("hackrf_sweep params:  freq " + getFreq().getStartMHz() + "-" + getFreq().getEndMHz()
