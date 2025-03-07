@@ -1,5 +1,5 @@
-# HackRF Spectrum Analyzer for Windows
-based on Pavsa's HackRF hackrf_sweep Spectrum Analyzer
+# HackRF Spectrum Analyzer 
+based on Pavsa's HackRF hackrf_sweep Spectrum Analyzer for Java
 
 ![# SP+W 920-960 MHz](https://github.com/user-attachments/assets/e2437acd-83d6-4ac5-9b82-443aa10c15ec)
 
