@@ -51,6 +51,7 @@ import jspectrumanalyzer.core.Preset;
 import net.miginfocom.swing.MigLayout;
 import shared.mvc.MVCController;
 import shared.mvc.ModelValue;
+import shared.mvc.ModelValue.ModelValueBoolean;
 
 import javax.swing.border.BevelBorder;
 import javax.swing.border.CompoundBorder;
@@ -540,7 +541,7 @@ public class HackRFSweepSettingsUI extends JPanel
 			lblAvgOffset2.setForeground(Color.WHITE);
 			tab2.add(lblAvgOffset2, "cell 0 12, alignx right");
 			
-			hackRFSettings.getAvgOffset().addListener((avgoff) -> lblAvgOffset2.setText(String.format("%d dB", avgoff)));
+			hackRFSettings.getAvgOffset().addListener((avgOff) -> lblAvgOffset2.setText(String.format("%d dB", avgOff)));
 			
 			JLabel lblNumberOfSamples = new JLabel("Samples ");
 			lblNumberOfSamples.setForeground(Color.WHITE);
@@ -784,7 +785,7 @@ public class HackRFSweepSettingsUI extends JPanel
 				sliderAvgOffset.setEnabled(enabled);
 				sliderAvgOffset.setVisible(enabled);
 				lblAvgOffset.setVisible(enabled);
-				lblAvgOffset2.setVisible(enabled);
+				//lblAvgOffset2.setVisible(enabled);
 			});
 		});
 		hRF.isChartsAverageVisible().callObservers();
