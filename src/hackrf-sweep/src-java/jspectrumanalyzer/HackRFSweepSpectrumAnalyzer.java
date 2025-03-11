@@ -5,11 +5,13 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Frame;
 import java.awt.Graphics2D;
 import java.awt.Insets;
+import java.awt.Point;
 import java.awt.RenderingHints;
 //import java.awt.Shape;
 import java.awt.event.ComponentAdapter;
@@ -18,6 +20,8 @@ import java.awt.event.ComponentListener;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
+import java.awt.event.MouseWheelEvent;
+import java.awt.event.MouseWheelListener;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.beans.PropertyChangeEvent;
@@ -31,10 +35,13 @@ import java.lang.reflect.InvocationTargetException;
 import java.math.BigDecimal;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
+import java.util.Vector;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 
 import javax.swing.ImageIcon;
+import javax.swing.JComboBox;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -87,9 +94,11 @@ import jspectrumanalyzer.core.FFTBins;
 import jspectrumanalyzer.core.FrequencyAllocationTable;
 import jspectrumanalyzer.core.FrequencyAllocations;
 import jspectrumanalyzer.core.FrequencyBand;
+import jspectrumanalyzer.core.FrequencyPresets;
 import jspectrumanalyzer.core.FrequencyRange;
 import jspectrumanalyzer.core.HackRFSettings;
 import jspectrumanalyzer.core.PersistentDisplay;
+import jspectrumanalyzer.core.Preset;
 //import jspectrumanalyzer.core.PowerCalibration;
 import jspectrumanalyzer.core.SpurFilter;
 import jspectrumanalyzer.core.jfc.XYSeriesCollectionImmutable;
@@ -98,7 +107,6 @@ import jspectrumanalyzer.nativebridge.HackRFSweepNativeBridge;
 import jspectrumanalyzer.ui.HackRFSweepSettingsUI;
 import jspectrumanalyzer.ui.WaterfallPlot;
 //import jspectrumanalyzer.ui.CircleDrawer;
-import shared.mvc.MVCController;
 import shared.mvc.ModelValue;
 import shared.mvc.ModelValue.ModelValueBoolean;
 import shared.mvc.ModelValue.ModelValueInt;
@@ -314,6 +322,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private FileWriter		 						dataCap;
 	private float									fSlope;
     private float									fShift;
+    private int										lastX;
+    private int										lastY;
+    private boolean									dragging;
 //	private ValueMarker freqMarker;
 //	private ValueMarker signalMarker;
 //	private int mouseX;
@@ -1228,12 +1239,13 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		chartLineRenderer.setBasePaint(Color.white);
 		plot.setBackgroundPaint(colors.palette4);
 		chart.setBackgroundPaint(colors.palette4);
-
+		//plot.setDomainPannable(true); //pan with CTRL key
 
 		chartPanel = new ChartPanel(chart);
 		chartPanel.setMaximumDrawWidth(4096);
 		chartPanel.setMaximumDrawHeight(2160);
 		chartPanel.setMouseWheelEnabled(true);
+		//chartPanel.setMouseZoomable(true);
 		chartPanel.setDomainZoomable(true);
 		chartPanel.setRangeZoomable(false);
 		chartPanel.setPopupMenu(null);
@@ -1357,6 +1369,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		 * monitors chart data area for change due to no other way to extract
 		 * that info from jfreechart when it changes
 		 */
+
 		chart.addChangeListener(event -> {
 			Rectangle2D aN = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
 			Rectangle2D aO = chartDataArea.getValue();
@@ -1432,6 +1445,14 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		        	freqMarker.setLabelTextAnchor(TextAnchor.TOP_LEFT);
 		        }
 
+		        
+		        if (isInAxisArea(e.getX(), e.getY())) {
+                    chartPanel.setCursor(Cursor.getPredefinedCursor((Cursor.HAND_CURSOR)));
+                }
+		        else
+		        {
+		        	chartPanel.setCursor(Cursor.getDefaultCursor());
+		        }
 				/*
 				FrequencyAllocationTable activeTable = parameterFrequencyAllocationTable.getValue();
 				if (activeTable != null) {
@@ -1460,8 +1481,96 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				chart.getXYPlot().clearRangeMarkers();
 				titleFreqBand.setText("");
 			}
+			
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (isInAxisArea(e.getX(), e.getY())) {
+                    dragging = true;
+                    lastX = (int) chart.getXYPlot().getDomainAxis().java2DToValue(e.getX(),
+                    		chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), chart.getXYPlot().getDomainAxisEdge());
+                    chartPanel.setDomainZoomable(false);
+                    chartPanel.setCursor(Cursor.getPredefinedCursor((Cursor.HAND_CURSOR)));
+                }
+            }
+
+			
+            @Override
+            public void mouseReleased(MouseEvent e) {
+            	dragging = false;
+            	chartPanel.setDomainZoomable(true);
+            	chart.getXYPlot().getRangeAxis().setAutoRange(false);
+            	chart.getXYPlot().getRangeAxis().setRange(-100, -10);
+            	int newLowerX = (int) Math.round(chart.getXYPlot().getDomainAxis().getLowerBound());
+                int newUpperX = (int) Math.round(chart.getXYPlot().getDomainAxis().getUpperBound());                
+                double newDif = newUpperX - newLowerX;
+                if (newDif < 1) newUpperX = newLowerX + 1;
+                int[] newChartParams = setupChartParams(newDif);
+                parameterFrequency.setValue(new FrequencyRange(newLowerX, newUpperX));
+                parameterFFTBinHz.setValue(newChartParams[0]);
+                parameterAmplitudeOffset.setValue(newChartParams[1]);
+                restartHackrfSweep();
+                
+            }
 		});
 		
+		chartPanel.addMouseWheelListener(new MouseWheelListener() {
+            @Override
+            public void mouseWheelMoved(MouseWheelEvent e) {
+                int notches = e.getWheelRotation();
+                // Get current domain and range
+                double lowerX = chart.getXYPlot().getDomainAxis().getLowerBound();
+                double upperX = chart.getXYPlot().getDomainAxis().getUpperBound();
+                double zoomFactor = 0.3; //from center, 0.2 from edges
+                double dif = upperX - lowerX;
+                double mouseX = chart.getXYPlot().getDomainAxis().java2DToValue(e.getX(),
+                		chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), chart.getXYPlot().getDomainAxisEdge());
+                
+                if (notches < 0) {
+                    // Zoom in
+                	//int newLowerX = (int) Math.round(lowerX + dif * zoomFactor); //from edge
+                    int newLowerX = (int) Math.round(mouseX - dif * zoomFactor); //from center
+                	//int newUpperX = (int) Math.round(upperX - dif * zoomFactor);
+                    int newUpperX = (int) Math.round(mouseX + dif * zoomFactor);
+                    double newDif = newUpperX - newLowerX;
+                    if (newDif < 1) newUpperX = newLowerX + 1;
+                    int[] newChartParams = setupChartParams(newDif);
+                    parameterFrequency.setValue(new FrequencyRange(newLowerX, newUpperX));
+                    parameterFFTBinHz.setValue(newChartParams[0]);
+                    parameterAmplitudeOffset.setValue(newChartParams[1]);
+                    //restartHackrfSweep();
+                } else {
+                    // Zoom out
+                	int newLowerX = (int) Math.round(lowerX - dif * zoomFactor); //from edge
+                    if (newLowerX < 0) newLowerX = 0;
+                    int newUpperX = (int) Math.round(upperX + dif * zoomFactor);
+                    if (newUpperX > 7200) newUpperX = 7200;
+                    double newDif = newUpperX - newLowerX;
+                    int[] newChartParams = setupChartParams(newDif);
+                    parameterFrequency.setValue(new FrequencyRange(newLowerX, newUpperX));
+                    parameterFFTBinHz.setValue(newChartParams[0]);
+                    parameterAmplitudeOffset.setValue(newChartParams[1]);
+                    restartHackrfSweep();
+                }
+            }
+        });
+
+        chartPanel.addMouseMotionListener(new MouseAdapter() {
+            @Override
+            public void mouseDragged(MouseEvent e) {
+                if (dragging) {
+                    int deltaX = lastX - (int) chart.getXYPlot().getDomainAxis().java2DToValue(e.getX(),
+                    		chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), chart.getXYPlot().getDomainAxisEdge());
+                    
+                    // Pan the plot
+                    chart.getXYPlot().getDomainAxis().setLowerBound(chart.getXYPlot().getDomainAxis().getLowerBound() + deltaX);
+                    chart.getXYPlot().getDomainAxis().setUpperBound(chart.getXYPlot().getDomainAxis().getUpperBound() + deltaX);
+                    lastX = (int) chart.getXYPlot().getDomainAxis().java2DToValue(e.getX(),
+                    		chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), chart.getXYPlot().getDomainAxisEdge());
+                }
+            }
+        });
+
+		/*		
 		chartPanel.addMouseMotionListener(new MouseMotionAdapter() {
 
 		    @Override
@@ -1474,6 +1583,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		        // getFreq().getEndMHz()+parameterFreqShift.getValue());
 		    }
 		});
+		 */
 		
 		titleFreqBand.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
 		titleFreqBand.setPosition(RectangleEdge.BOTTOM);
@@ -1482,7 +1592,43 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		titleFreqBand.setPaint(Color.white);
 		chart.addSubtitle(titleFreqBand);
 	}
-
+	
+	private boolean isInAxisArea(int mouseX, int mouseY)
+	{
+	    // Check if the mouse is in the X-axis area
+	    if (mouseY >= chartPanel.getHeight() - 56 &&
+	        mouseY <= chartPanel.getHeight() &&
+	        mouseX >= chartPanel.getInsets().left &&
+	        mouseX <= chartPanel.getWidth() - chartPanel.getInsets().right)
+	    {
+	    	return true;
+	    }
+	    else
+	    {
+	    	return false;
+	    }
+	}
+	
+	private int[] setupChartParams(double newDif)
+	{
+        int RBW = 0;
+        int ampOff = 0;
+		int out[] = new int[2]; 
+        if (newDif < 10) {RBW = 3; ampOff = 10;}
+        else if (newDif < 20) {RBW = 10; ampOff = 6;}
+        else if (newDif < 40) {RBW = 20; ampOff = 3;}
+        else if (newDif < 80) {RBW = 50; ampOff = 0;}
+        else if (newDif < 160) {RBW = 100; ampOff = -3;}
+        else if (newDif < 320) {RBW = 200; ampOff = -6;}
+        else if (newDif < 640) {RBW = 500; ampOff = -9;}
+        else if (newDif < 1280) {RBW = 1000; ampOff = -11;}
+        else {RBW = 2000; ampOff = -12;}
+        
+        out[0] = RBW;
+        out[1] = ampOff;
+        return out;
+	}
+	
 	private void setupFrequencyAllocationTable() {
 		SwingUtilities.invokeLater(() -> {
 			chartPanel.addComponentListener(new ComponentAdapter() {
@@ -1495,7 +1641,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			});
 			chart.getXYPlot().getRangeAxis().addChangeListener(event -> {
 				redrawFrequencySpectrumTable();
-				System.out.println(event);
+				//System.out.println(event);
 			});
 
 		});
