@@ -10,6 +10,7 @@ based on Pavsa's HackRF hackrf_sweep Spectrum Analyzer for Java
 - Make your HackRF a semi-profi spectrum analyzer
 - RBW from 3 kHz to 2 MHz
 - Realtime / Peak / Average / Max Hold / Persistent scanning with adjustable timings
+- Peak and Max Hold markers
 - Customizable Frequency band presets with detail setting
 - Customizable multicolored Frequency allocation bands -> you can make your own!
 - Adjustable high resolution Waterfall Plot
