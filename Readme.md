@@ -9,15 +9,16 @@ based on Pavsa's HackRF hackrf_sweep Spectrum Analyzer for Java
 ### Features:
 - Make your HackRF a semi-profi spectrum analyzer
 - RBW from 3 kHz to 2 MHz
-- Realtime / Peak / Average / Max Hold / Persistent display with adjustable timings
+- Realtime / Peak / Average / Max Hold / Persistent scanning with adjustable timings
 - Customizable Frequency band presets with detail setting
 - Customizable multicolored Frequency allocation bands -> you can make your own!
 - Adjustable high resolution Waterfall Plot
 - Widely adjustable live screen recording into GIF or MP4 video
 - Data recording feature into CSV file with MaxFreq, TotalPower, PeakPower + adjustable timing (minutes, seconds, fractions)
-- Power Calibration adjustment for RF Power Flux density sum reading in µW/m²
+- Power Calibration adjustment for RF Power Flux Density sum reading in µW/m²
 - Spur filter (no DC) for removing spur artifacts
-- Arrow left/right button for comfortable tuning
+- Arrow left/right button, X-axis mouse drag for comfortable frequency range setting
+- Spectrum zooming by mouse dragging, mouse wheel for quick zooming/unzooming
 - Adjustable amplitude and average chart offset
 - Selectable Frequency Shift for up/down-converters
 - Switchable Datestamp
