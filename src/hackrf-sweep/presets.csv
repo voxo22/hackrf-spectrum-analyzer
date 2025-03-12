@@ -1,8 +1,6 @@
 ﻿Preset Name;Freq Min;Freq Max;FFT Bin Width;Freq Shift;Amplitude Offset
 AM radio;1;21;10;0;0
 AM radio SpyVerter;2;21;10;-120;7
-700-800 uplink;703;863;100;0;-3
-1800-2600 uplink;1710;2570;1000;0;-10
 CB radio;26;28;3;0;5
 PMR 40;28;46;20;0;-3
 PMR 80;50;87;50;0;-2
