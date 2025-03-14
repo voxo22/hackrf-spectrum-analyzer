@@ -12,32 +12,34 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
+import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 
 public class FrequencyAllocations {
-	private HashMap<String, FrequencyAllocationTable> table	= new HashMap<>();
-	
+	//private TreeMap<String, FrequencyAllocationTable> table	= new TreeMap<>(Collections.reverseOrder());
+	private TreeMap<String, FrequencyAllocationTable> table	= new TreeMap<>();
+
 	public FrequencyAllocations() throws FileNotFoundException {
 		loadEurope();
 	}
-	
-	public HashMap<String, FrequencyAllocationTable> getTable() {
-		return new HashMap<>(table);
+
+	public TreeMap<String, FrequencyAllocationTable> getTable() {
+		return new TreeMap<>(table);
 	}
 
 	private void loadEurope() throws FileNotFoundException {
 		File dir = new File("./freq");
 		File[] fileList = dir.listFiles();
-		Arrays.sort(fileList, Comparator.comparingLong(File::lastModified).reversed());
-		SimpleDateFormat dft = new SimpleDateFormat("yyyy-MM");
+		//Arrays.sort(fileList, Comparator.comparingLong(File::lastModified));
+		//SimpleDateFormat dft = new SimpleDateFormat("yyyy-MM");
 
 		for(int i = 0; i < fileList.length; i++) {
-			if(fileList[i].isFile()) {				
-				loadTableFromCSV(dft.format(fileList[i].lastModified())+" "+fileList[i].getName(), new FileInputStream(dir+"/"+fileList[i].getName()));				
+			if(fileList[i].isFile()) {
+				//loadTableFromCSV(dft.format(fileList[i].lastModified())+" "+fileList[i].getName(), new FileInputStream(dir+"/"+fileList[i].getName()));				
+				loadTableFromCSV(fileList[i].getName(), new FileInputStream(dir+"/"+fileList[i].getName()));
 			}
 		}
 	}
