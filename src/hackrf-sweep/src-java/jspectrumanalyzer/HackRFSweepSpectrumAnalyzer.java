@@ -267,7 +267,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private ModelValueInt							parameterFFTBinHz					= new ModelValueInt("RBW", 50);
 	private ModelValueBoolean						parameterFilterSpectrum				= new ModelValueBoolean("Filter", false);
 	private ModelValue<FrequencyRange>				parameterFrequency					= new ModelValue<>("Frequency Range", new FrequencyRange(920, 960));
-	private ModelValue<FrequencyAllocationTable>	parameterFrequencyAllocationTable	= new ModelValue<FrequencyAllocationTable>("Frequency Allocation Ttable", null);
+	private ModelValue<FrequencyAllocationTable>	parameterFrequencyAllocationTable	= new ModelValue<FrequencyAllocationTable>("Frequency Allocation Table", new FrequencyAllocations().getTable().get("- Slovakia.csv"));
 	private ModelValueInt							parameterGainLNA					= new ModelValueInt("LNA Gain",0, 8, 0, 40);
 	private ModelValueInt							parameterGainTotal					= new ModelValueInt("Gain", 52);
 	private ModelValueInt							parameterGainVGA					= new ModelValueInt("VGA Gain", 0, 2, 0, 60);
@@ -335,7 +335,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	public HackRFSweepSpectrumAnalyzer() throws FileNotFoundException {
 		//printInit(0);
 
-		parameterFrequencyAllocationTable.setValue(new FrequencyAllocations().getTable().values().stream().findFirst().get());
+		//parameterFrequencyAllocationTable.setValue(new FrequencyAllocations().getTable().values().stream().findFirst().get());
+		//parameterFrequencyAllocationTable.setValue(new FrequencyAllocations().getTable().get("SK.csv"));
 		recalculateGains(parameterGainTotal.getValue());
 
 		try {
@@ -741,14 +742,20 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			if(parameterVideoFormat.getValue().equals("GIF"))
 			{
 				gifCap = new ScreenCapture(uiFrame, 1, 0, parameterVideoFrameRate.getValue(), videoWidth, videoHeight,
-					parameterVideoArea.getValue(), new File("# "+parameterVideoArea.getValue()+" "+(getFreq().getStartMHz()+parameterFreqShift.getValue())+"-"+
-					(getFreq().getEndMHz()+parameterFreqShift.getValue())+" MHz "+dateStamp.format(dStampFormat)+".gif"));
+					parameterVideoArea.getValue(), new File("# "+parameterVideoArea.getValue() + " "
+							+ (getFreq().getStartMHz()+parameterFreqShift.getValue()) + "-"
+							+ (getFreq().getEndMHz()+parameterFreqShift.getValue()) + " MHz "
+							+ dateStamp.format(dStampFormat) + ".gif")
+					);
 			}
 			else
 			{
 				h264Cap = new ScreenCaptureH264(uiFrame, 1, 0, parameterVideoFrameRate.getValue(), videoWidth, videoHeight,
-					parameterVideoArea.getValue(), new String("# "+parameterVideoArea.getValue()+" "+(getFreq().getStartMHz()+parameterFreqShift.getValue())+"-"+
-					(getFreq().getEndMHz()+parameterFreqShift.getValue())+" MHz "+dateStamp.format(dStampFormat)+".mp4"));
+					parameterVideoArea.getValue(), new String("# " + parameterVideoArea.getValue() + " "
+							+ (getFreq().getStartMHz()+parameterFreqShift.getValue()) + "-"
+							+ (getFreq().getEndMHz()+parameterFreqShift.getValue()) + " MHz "
+							+ dateStamp.format(dStampFormat) + ".mp4")
+					);
 			}
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -769,9 +776,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			DateTimeFormatter dStampFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm");
 			LocalDateTime dateStamp = LocalDateTime.now();
 			//System.out.println(frequencyStart+" "+fftBinWidthHz+" "+signalPowerdBm);
-			dataCap = new FileWriter("# DATA "+(getFreq().getStartMHz()+parameterFreqShift.getValue())+"-"+
-					(getFreq().getEndMHz()+parameterFreqShift.getValue())+" MHz "+dateStamp.format(dStampFormat)+".csv");
-			dataCap.write("Timestamp;Total Spectrum Power;Power Flux Density;Max Amplitude;Frequency\r\n");
+			dataCap = new FileWriter("# DATA " + (getFreq().getStartMHz() + parameterFreqShift.getValue()) + "-" +
+					(getFreq().getEndMHz() + parameterFreqShift.getValue()) + " MHz "+dateStamp.format(dStampFormat) + ".csv");
+			dataCap.write("Timestamp,Total Spectrum Power [dBm],Power Flux Density [µW/m²],Max Amplitude [dBm],Frequency [MHz]\r\n");
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
@@ -829,7 +836,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					spectrumInitValue, parameterPeakFallThreshold.getValue(), parameterPeakFallRateSecs.getValue() * 1000,
 					parameterPeakHoldTime.getValue() * 1000, parameterFreqShift.getValue(), parameterAvgIterations.getValue(),
 					parameterAvgOffset.getValue());
-			chart.getXYPlot().getDomainAxis().setRange(getFreq().getStartMHz()+parameterFreqShift.getValue(), getFreq().getEndMHz()+parameterFreqShift.getValue());
+			chart.getXYPlot().getDomainAxis().setRange(getFreq().getStartMHz()+parameterFreqShift.getValue(),
+					getFreq().getEndMHz()+parameterFreqShift.getValue());
 
 			XYSeries spectrumPeaksEmpty	= new XYSeries("peaks");
 			XYSeries spectrumAverageEmpty	= new XYSeries("average");
@@ -858,7 +866,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					if (bins.freqStart != null && bins.sigPowdBm != null) {
 					//	PowerCalibration.correctPower(calibration, parameterGaindB, bins);
 						for (int i = 0; i < bins.sigPowdBm.length; i++) {
-							bins.sigPowdBm[i]	-= (30-parameterAmplitudeOffset.getValue()); //offset calibration
+							bins.sigPowdBm[i] -= (30-parameterAmplitudeOffset.getValue()); //offset calibration
 						}
 						datasetSpectrum.addNewData(bins);
 					}
@@ -881,8 +889,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						if (parameterShowPeaks.getValue()) {
 							datasetSpectrum.refreshPeakSpectrum();
 							double[] spp = datasetSpectrum.calculateSpectrumPeakPower(parameterPowerFluxCal.getValue());
-							waterfallPlot.setStatusMessage(String.format("Total Peak Power: %.1f dBm (≈ %s µW/m²)", spp[0], spp[3]),0);
-							waterfallPlot.setStatusMessage(String.format("Max: %.1f dBm @ %.2f MHz", spp[1], spp[2]),1);
+							waterfallPlot.setStatusMessage(String.format("Total Peak Power: %.1f dBm (≈ %s µW/m²)", spp[0], spp[3]).replace(',', '.'),0);
+							waterfallPlot.setStatusMessage(String.format("Max: %.1f dBm @ %.2f MHz", spp[1], spp[2]).replace(',', '.'),1);
 							dt1 = LocalDateTime.now().format(dtFormat);
 							/*
 							markerFrequencyPeak.setValue(spp[2]);
@@ -897,8 +905,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 							if(parameterIsRecordedData.getValue()) {
 								dcap = true;
 								if(!dt1.equals(dt2)) {
-									dataCap.write(dt1+";"+String.format("%.1f", spp[0])+";"+String.format("%s", spp[3])+";"
-											+String.format("%.1f", spp[1])+";"+String.format("%.2f", spp[2])+"\r\n");
+									dataCap.write(dt1 + ","
+											+ String.format("%.1f", spp[0]).replace(',', '.') + ","
+											+ String.format("%s", spp[3]).replace(',', '.') + ","
+											+ String.format("%.1f", spp[1]).replace(',', '.') + ","
+											+ String.format("%.2f", spp[2]).replace(',', '.') + "\r\n"
+											);
 									dt2 = dt1;
 								}
 							}
@@ -1491,7 +1503,6 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                     lastX = (int) chart.getXYPlot().getDomainAxis().java2DToValue(e.getX(),
                     		chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), chart.getXYPlot().getDomainAxisEdge());
                     chartPanel.setDomainZoomable(false);
-                    chartPanel.setCursor(Cursor.getPredefinedCursor((Cursor.HAND_CURSOR)));
                 }
                 lastXX = e.getX();
                 chartPanel.requestFocus();
@@ -1506,7 +1517,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		        	chart.getXYPlot().getRangeAxis().setAutoRange(false);
 		        	chart.getXYPlot().getRangeAxis().setRange(-100, -10);
 		        	int newLowerX = (int) Math.round(chart.getXYPlot().getDomainAxis().getLowerBound());
-		            int newUpperX = (int) Math.round(chart.getXYPlot().getDomainAxis().getUpperBound());                
+		            int newUpperX = (int) Math.round(chart.getXYPlot().getDomainAxis().getUpperBound());
+		            if (newLowerX < 0) newLowerX = 0;
+                    if (newUpperX > 7200) newUpperX = 7200;
 		            double newDif = newUpperX - newLowerX;
 		            if (newDif < 1) newUpperX = newLowerX + 1;
 		            int[] newChartParams = setupChartParams(newDif);
@@ -1564,14 +1577,18 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
             @Override
             public void mouseDragged(MouseEvent e) {
                 if (dragging) {
-                    int deltaX = lastX - (int) chart.getXYPlot().getDomainAxis().java2DToValue(e.getX(),
-                    		chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), chart.getXYPlot().getDomainAxisEdge());
-                    
-                    // Pan the plot
-                    chart.getXYPlot().getDomainAxis().setLowerBound(chart.getXYPlot().getDomainAxis().getLowerBound() + deltaX);
-                    chart.getXYPlot().getDomainAxis().setUpperBound(chart.getXYPlot().getDomainAxis().getUpperBound() + deltaX);
-                    lastX = (int) chart.getXYPlot().getDomainAxis().java2DToValue(e.getX(),
-                    		chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), chart.getXYPlot().getDomainAxisEdge());
+                	double lowerX = chart.getXYPlot().getDomainAxis().getLowerBound();
+                	double upperX = chart.getXYPlot().getDomainAxis().getUpperBound();
+                	if (lowerX >= 0 && upperX <= 7200) {
+	                    int deltaX = lastX - (int) chart.getXYPlot().getDomainAxis().java2DToValue(e.getX(),
+	                    		chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), chart.getXYPlot().getDomainAxisEdge());
+	                    
+	                    // Pan the plot
+	                    chart.getXYPlot().getDomainAxis().setLowerBound(lowerX + deltaX);
+	                    chart.getXYPlot().getDomainAxis().setUpperBound(upperX + deltaX);
+	                    lastX = (int) chart.getXYPlot().getDomainAxis().java2DToValue(e.getX(),
+	                    		chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), chart.getXYPlot().getDomainAxisEdge());
+                	}
                 }
             }
         });
@@ -1677,10 +1694,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			chart.getXYPlot().getDomainAxis().addChangeListener((e) -> {
 				redrawFrequencySpectrumTable();
 			});
-			chart.getXYPlot().getRangeAxis().addChangeListener(event -> {
+			/*chart.getXYPlot().getRangeAxis().addChangeListener(event -> {
 				redrawFrequencySpectrumTable();
 				//System.out.println(event);
-			});
+			});*/
 
 		});
 		parameterFrequencyAllocationTable.addListener(this::redrawFrequencySpectrumTable);
