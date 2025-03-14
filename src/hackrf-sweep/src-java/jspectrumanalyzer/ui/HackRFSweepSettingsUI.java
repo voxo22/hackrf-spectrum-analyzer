@@ -560,8 +560,8 @@ public class HackRFSweepSettingsUI extends JPanel
 			
 			FrequencyAllocations frequencyAllocations	= new FrequencyAllocations();
 			Vector<FrequencyAllocationTable> freqAllocValues	= new Vector<>();
-			freqAllocValues.add(null);
 			freqAllocValues.addAll(frequencyAllocations.getTable().values());
+			freqAllocValues.add(null);
 			DefaultComboBoxModel<FrequencyAllocationTable> freqAllocModel	= new  DefaultComboBoxModel<>(freqAllocValues);
 			comboBoxFrequencyAllocationBands = new JComboBox<FrequencyAllocationTable>(freqAllocModel);
 			tab2.add(comboBoxFrequencyAllocationBands, "cell 0 16,growx");

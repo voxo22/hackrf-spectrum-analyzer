@@ -191,7 +191,7 @@ public class WaterfallPlot extends JPanel {
 
 		renderingInfo = String.format("RBW %.1f kHz / FFT bins: %d%s / %.1f fps",
 				lastSpectrum == null ? 0 : lastSpectrum.getFFTBinSizeHz() / 1000d, size >= 10000 ? size / 1000 : size,
-				size >= 10000 ? "k" : "", fps.getEma());
+				size >= 10000 ? "k" : "", fps.getEma()).replace(',', '.');
 		fpsRenderedFrames++;
 		if (System.currentTimeMillis() - lastFPSRecalculated > 1000) {
 			double rawfps = fpsRenderedFrames / ((System.currentTimeMillis() - (double) lastFPSRecalculated) / 1000d);
