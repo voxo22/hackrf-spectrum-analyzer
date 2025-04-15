@@ -1,7 +1,7 @@
 # HackRF Spectrum Analyzer for Windows
 based on Pavsa's HackRF hackrf_sweep Spectrum Analyzer for Java
 
-
+![screenshot](spectrum_1805-1880.gif "screenshot")
 
 ### Download:
 [Download the latest version](https://github.com/voxo22/hackrf-spectrum-analyzer/releases) 
