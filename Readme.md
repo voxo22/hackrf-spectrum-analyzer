@@ -1,7 +1,9 @@
 # HackRF Spectrum Analyzer for Windows
-based on Pavsa's HackRF hackrf_sweep Spectrum Analyzer for Java
+based on Pavsa's HackRF hackrf_sweep Spectrum Analyzer
 
-![# SP+W 920-960 MHz](https://github.com/user-attachments/assets/e2437acd-83d6-4ac5-9b82-443aa10c15ec)
+### Screenshots:
+![FULL_920-960MHz_demo](https://github.com/user-attachments/assets/63bb1506-ebf1-4002-b53a-cc934590743b)
+![FULL_2400-2483MHz_demo3](https://github.com/user-attachments/assets/699d551f-88f3-4ad6-a107-120bf3b513e4)
 
 ### Download:
 [Download the latest version](https://github.com/voxo22/hackrf-spectrum-analyzer/releases) 
@@ -44,9 +46,4 @@ Make sure HackRF is using at least the minimum firmware version (see above)
 5. Run "v2.21.jar"
 
 ### License:
-GPL v3 
-
-### Screenshots:
-![screen3](https://github.com/user-attachments/assets/e814fb42-3696-4fcb-b692-c714d128670e)
-
-![screenshot](spectrum_1805-1880.gif "screenshot")
+GPL v3
