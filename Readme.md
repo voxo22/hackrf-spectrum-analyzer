@@ -8,6 +8,9 @@ based on Pavsa's HackRF hackrf_sweep Spectrum Analyzer
 ### Download:
 [Download the latest version](https://github.com/voxo22/hackrf-spectrum-analyzer/releases) 
 
+### User manual:
+See Wiki
+
 ### Features:
 - Make your HackRF a semi-profi spectrum analyzer
 - RBW from 3 kHz to 2 MHz
