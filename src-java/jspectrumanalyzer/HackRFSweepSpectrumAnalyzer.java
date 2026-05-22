@@ -1029,6 +1029,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					parameterAvgOffset.getValue());
 			// If multiple ranges are selected, compress X axis so gaps are removed
 			int[] pairs = parseRangePairs(parameterFreqRange.getValue());
+			datasetSpectrum.setActiveRangePairs(pairs);
 			if (pairs != null && pairs.length > 2) {
 				double total = totalRangesLength(pairs);
 				chart.getXYPlot().getDomainAxis().setRange(0, total);

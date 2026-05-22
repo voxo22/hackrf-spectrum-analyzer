@@ -25,6 +25,7 @@ public class DatasetSpectrum implements Cloneable
 	protected  final int	freqShift;
 	protected  float[]		spectrum;
 	protected  float		spectrumInitPower;
+	private int[]			activeRangePairsMHz;
 	
 	/**
 	 * Inits
@@ -175,6 +176,28 @@ public class DatasetSpectrum implements Cloneable
 		return spectrum;
 	}
 
+	public void setActiveRangePairs(int[] activeRangePairsMHz)
+	{
+		if (activeRangePairsMHz == null || activeRangePairsMHz.length < 2) {
+			this.activeRangePairsMHz = null;
+		} else {
+			this.activeRangePairsMHz = activeRangePairsMHz.clone();
+		}
+	}
+
+	protected boolean isActiveSpectrumIndex(int index)
+	{
+		if (activeRangePairsMHz == null)
+			return true;
+
+		double freqMHz = (freqStartHz + fftBinSizeHz * index) / 1000000d;
+		for (int i = 0; i + 1 < activeRangePairsMHz.length; i += 2) {
+			if (freqMHz >= activeRangePairsMHz[i] && freqMHz < activeRangePairsMHz[i + 1])
+				return true;
+		}
+		return false;
+	}
+
 	public void resetSpectrum()
 	{
 		Arrays.fill(spectrum, spectrumInitPower);
@@ -193,6 +216,7 @@ public class DatasetSpectrum implements Cloneable
 	{
 		DatasetSpectrum copy	= (DatasetSpectrum) super.clone();
 		copy.spectrum			= spectrum.clone();
+		copy.activeRangePairsMHz	= activeRangePairsMHz == null ? null : activeRangePairsMHz.clone();
 		return copy;
 	}
 	

@@ -193,6 +193,8 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 		double maxFreq = freqStartMHz + freqShift;
 		double freqStep = fftBinSizeHz / 1000000d;
 		for (int i = 0; i < spectrumPeakHold.length; i++) {
+			if (!isActiveSpectrumIndex(i))
+				continue;
 			if (spectrumPeakHold[i] > -95) {powerSum += Math.pow(10, spectrumPeakHold[i] / 10);} /*convert dB to mW to sum power in linear form*/
 			if (spectrumPeakHold[i] > maxAmp) {
 				maxAmp = spectrumPeakHold[i];
@@ -220,6 +222,8 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 		double minFreqHold = maxFreqHold;
 		double freqStep = fftBinSizeHz / 1000000d;
 		for (int i = 0; i < spectrumMaxHold.length; i++) {
+			if (!isActiveSpectrumIndex(i))
+				continue;
 			if (spectrumMaxHold[i] > -95) {
 				powerSum += Math.pow(10, spectrumMaxHold[i] / 10);
 				powerSumMin += Math.pow(10, spectrumMinHold[i] / 10);
