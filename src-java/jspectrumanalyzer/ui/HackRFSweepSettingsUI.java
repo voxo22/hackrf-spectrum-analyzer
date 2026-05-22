@@ -614,6 +614,7 @@ public class HackRFSweepSettingsUI extends JPanel
 					hRF.getFreqShift().setValue(0);
 					hRF.isPersistentDisplayVisible().setValue(false);
 					hRF.getPersistentDisplayDecayRate().setValue(5);
+					hRF.isChartsRealtimeVisible().setValue(false);
 					hRF.isChartsPeaksVisible().setValue(true);
 					hRF.isChartsAverageVisible().setValue(false);
 					hRF.isChartsMaxHoldVisible().setValue(true);

@@ -553,18 +553,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			// simple mapping of properties to parameters
 			if (p.getProperty("paramFreqRange") != null) {
 				parameterFreqRange.setValue(p.getProperty("paramFreqRange"));
-				// set main frequency from first range (if single range like 920-960)
-				String v = parameterFreqRange.getValue();
-				if (v != null && v.contains("-")) {
-					String first = v.split(",")[0].trim();
-					String[] se = first.split("-");
-					try {
-						int s = Integer.parseInt(se[0].trim());
-						int e = Integer.parseInt(se[1].trim());
-						parameterFrequency.setValue(new FrequencyRange(s, e));
-					} catch (Exception ex) {
-						// ignore
-					}
+				int[] pairs = parseRangePairs(parameterFreqRange.getValue());
+				if (pairs != null && pairs.length >= 2) {
+					parameterFrequency.setValue(new FrequencyRange(pairs[0], pairs[pairs.length - 1]));
 				}
 			}
 			if (p.getProperty("FFTBinHz") != null) parameterFFTBinHz.setValue(Integer.parseInt(p.getProperty("FFTBinHz")));
@@ -578,6 +569,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			if (p.getProperty("FreqShift") != null) parameterFreqShift.setValue(Integer.parseInt(p.getProperty("FreqShift")));
 			if (p.getProperty("PersistentDisplay") != null) parameterPersistentDisplay.setValue(Boolean.parseBoolean(p.getProperty("PersistentDisplay")));
 			if (p.getProperty("PersistentDisplayPersTime") != null) parameterPersistentDisplayPersTime.setValue(Integer.parseInt(p.getProperty("PersistentDisplayPersTime")));
+			if (p.getProperty("RealTime") != null) parameterShowRealtime.setValue(Boolean.parseBoolean(p.getProperty("RealTime")));
 			if (p.getProperty("ShowPeaks") != null) parameterShowPeaks.setValue(Boolean.parseBoolean(p.getProperty("ShowPeaks")));
 			if (p.getProperty("ShowAverage") != null) parameterShowAverage.setValue(Boolean.parseBoolean(p.getProperty("ShowAverage")));
 			if (p.getProperty("ShowMaxHold") != null) parameterShowMaxHold.setValue(Boolean.parseBoolean(p.getProperty("ShowMaxHold")));
@@ -623,6 +615,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			p.setProperty("FreqShift", Integer.toString(parameterFreqShift.getValue()));
 			p.setProperty("PersistentDisplay", Boolean.toString(parameterPersistentDisplay.getValue()));
 			p.setProperty("PersistentDisplayPersTime", Integer.toString(parameterPersistentDisplayPersTime.getValue()));
+			p.setProperty("RealTime", Boolean.toString(parameterShowRealtime.getValue()));
 			p.setProperty("ShowPeaks", Boolean.toString(parameterShowPeaks.getValue()));
 			p.setProperty("ShowAverage", Boolean.toString(parameterShowAverage.getValue()));
 			p.setProperty("ShowMaxHold", Boolean.toString(parameterShowMaxHold.getValue()));
