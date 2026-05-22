@@ -12,6 +12,18 @@ import jspectrumanalyzer.core.jfc.XYSeriesImmutable;
 
 public class DatasetSpectrumPeak extends DatasetSpectrum
 {
+	public static class SpectrumMarker
+	{
+		public final double frequencyMHz;
+		public final double amplitudeDbm;
+
+		public SpectrumMarker(double frequencyMHz, double amplitudeDbm)
+		{
+			this.frequencyMHz = frequencyMHz;
+			this.amplitudeDbm = amplitudeDbm;
+		}
+	}
+
 	protected long		lastAdded			= System.currentTimeMillis();
 	protected long[]	peakHoldTime;
 	protected long		peakFalloutMillis	= 1000;
@@ -209,6 +221,10 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 		out[3] = roundToSignificantFigures(powerFluxSum,2);
 		return out;
 	}
+
+	public SpectrumMarker[] calculatePeakMarkers(int markerCount) {
+		return calculateTopMarkers(spectrumPeakHold, markerCount, spectrumInitPower, true);
+	}
 	
 	public double[] calculateMarkerHold(int PowerFluxCalibration){
 		double powerSum	= 0;
@@ -248,6 +264,63 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 		out[4] = powerSumMin;
 		out[5] = roundToSignificantFigures(powerFluxSumMin,2);
 		return out;
+	}
+
+	public SpectrumMarker[] calculateMaxHoldMarkers(int markerCount) {
+		return calculateTopMarkers(spectrumMaxHold, markerCount, spectrumInitPower, true);
+	}
+
+	private SpectrumMarker[] calculateTopMarkers(float[] values, int markerCount, float initialMaxAmp, boolean onlyLocalMaxima) {
+		int count = Math.max(1, Math.min(5, markerCount));
+		int[] bestIndexes = new int[count];
+		float[] bestAmps = new float[count];
+		Arrays.fill(bestIndexes, -1);
+		Arrays.fill(bestAmps, initialMaxAmp);
+
+		for (int i = 0; i < values.length; i++) {
+			if (!isActiveSpectrumIndex(i) || values[i] <= -95)
+				continue;
+			if (onlyLocalMaxima && !isLocalMaximum(values, i))
+				continue;
+			insertMarkerCandidate(i, values[i], bestIndexes, bestAmps);
+		}
+
+		int found = 0;
+		for (int index : bestIndexes) {
+			if (index >= 0)
+				found++;
+		}
+
+		SpectrumMarker[] markers = new SpectrumMarker[found];
+		double freqStep = fftBinSizeHz / 1000000d;
+		int freqRound = Math.round(1 / (float) freqStep);
+		if (freqRound < 1)
+			freqRound = 1;
+		for (int i = 0; i < found; i++) {
+			int index = bestIndexes[i];
+			double freq = (double)Math.round(freqRound * (freqStartMHz + freqStep * index)) / freqRound + freqShift;
+			markers[i] = new SpectrumMarker(freq, (double) Math.round(10 * values[index]) / 10);
+		}
+		return markers;
+	}
+
+	private boolean isLocalMaximum(float[] values, int index) {
+		float value = values[index];
+		return (index == 0 || value >= values[index - 1]) && (index == values.length - 1 || value > values[index + 1]);
+	}
+
+	private void insertMarkerCandidate(int index, float amplitude, int[] bestIndexes, float[] bestAmps) {
+		for (int i = 0; i < bestAmps.length; i++) {
+			if (amplitude <= bestAmps[i])
+				continue;
+			for (int j = bestAmps.length - 1; j > i; j--) {
+				bestAmps[j] = bestAmps[j - 1];
+				bestIndexes[j] = bestIndexes[j - 1];
+			}
+			bestAmps[i] = amplitude;
+			bestIndexes[i] = index;
+			return;
+		}
 	}
 	
 	public static double roundToSignificantFigures(double num, int n) {

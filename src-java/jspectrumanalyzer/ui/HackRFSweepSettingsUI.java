@@ -109,6 +109,8 @@ public class HackRFSweepSettingsUI extends JPanel
 	private FrequencySelectorRangeBinder frequencyRangeSelector;
 	private JCheckBox chckbxFilterSpectrum;
 	private JSpinner spinnerPeakFallSpeed;
+	private JSpinner spinnerPeakMarkerCount;
+	private JSpinner spinnerHoldMarkerCount;
 	private JComboBox<FrequencyAllocationTable> comboBoxFrequencyAllocationBands;
 	private JComboBox<Preset> comboBoxFrequencyPresets;
 	private JButton btnSavePreset;
@@ -136,6 +138,8 @@ public class HackRFSweepSettingsUI extends JPanel
 	private JLabel lblPeakFall;
 	private JLabel lblPeakFallTrs;
 	private JLabel lblPeakHoldTime;
+	private JLabel lblPeakMarkerCount;
+	private JLabel lblHoldMarkerCount;
 	private JLabel lblAvgIterations;
 	private JLabel lblAvgOffset;
 	private JLabel lblAvgOffset2;
@@ -697,17 +701,39 @@ public class HackRFSweepSettingsUI extends JPanel
 			((ListEditor) spinnerPeakHoldTime.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
 			((ListEditor) spinnerPeakHoldTime.getEditor()).getTextField().setColumns(2);
 			tab2.add(spinnerPeakHoldTime, "cell 0 7,alignx right");
+
+			lblPeakMarkerCount = new JLabel("Peak Markers ");
+			lblPeakMarkerCount.setForeground(Color.WHITE);
+			tab2.add(lblPeakMarkerCount, "cell 0 8,alignx right");
+
+			spinnerPeakMarkerCount = new JSpinner();
+			spinnerPeakMarkerCount.setModel(new SpinnerListModel(new String[] { "1", "2", "3", "4", "5" }));
+			spinnerPeakMarkerCount.setFont(new Font("Monospaced", Font.BOLD, 14));
+			((ListEditor) spinnerPeakMarkerCount.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
+			((ListEditor) spinnerPeakMarkerCount.getEditor()).getTextField().setColumns(1);
+			tab2.add(spinnerPeakMarkerCount, "cell 0 8,alignx right");
+
+			lblHoldMarkerCount = new JLabel("MaxHold Markers ");
+			lblHoldMarkerCount.setForeground(Color.WHITE);
+			tab2.add(lblHoldMarkerCount, "cell 0 9,alignx right");
+
+			spinnerHoldMarkerCount = new JSpinner();
+			spinnerHoldMarkerCount.setModel(new SpinnerListModel(new String[] { "1", "2", "3", "4", "5" }));
+			spinnerHoldMarkerCount.setFont(new Font("Monospaced", Font.BOLD, 14));
+			((ListEditor) spinnerHoldMarkerCount.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
+			((ListEditor) spinnerHoldMarkerCount.getEditor()).getTextField().setColumns(1);
+			tab2.add(spinnerHoldMarkerCount, "cell 0 9,alignx right");
 			
 			lblDecayRate = new JLabel("Persistent Decay Rate ");
 			lblDecayRate.setForeground(Color.WHITE);
-			tab2.add(lblDecayRate, "cell 0 9,alignx right");
+			tab2.add(lblDecayRate, "cell 0 10,alignx right");
 			
 			spinnerDecayRate = new JSpinner();
 			spinnerDecayRate.setModel(new SpinnerListModel(new String[] { "1", "5", "10", "30", "60" }));
 			spinnerDecayRate.setFont(new Font("Monospaced", Font.BOLD, 14));
 			((ListEditor) spinnerDecayRate.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
 			((ListEditor) spinnerDecayRate.getEditor()).getTextField().setColumns(2);
-			tab2.add(spinnerDecayRate, "cell 0 9,alignx right");
+			tab2.add(spinnerDecayRate, "cell 0 10,alignx right");
 			/*
 			spinnerDecayRate = new JSpinner();
 			spinnerDecayRate.setModel(new SpinnerNumberModel(10, 0, 500, 1));
@@ -974,6 +1000,8 @@ public class HackRFSweepSettingsUI extends JPanel
 		new MVCController(spinnerPeakFallSpeed, hRF.getPeakFallRate(), val -> Integer.parseInt(val.toString()), val -> val.toString());
 		new MVCController(spinnerPeakFallTrs, hRF.getPeakFallTrs(), val -> Integer.parseInt(val.toString()), val -> val.toString());
 		new MVCController(spinnerPeakHoldTime, hRF.getPeakHoldTime(), val -> Integer.parseInt(val.toString()), val -> val.toString());
+		new MVCController(spinnerPeakMarkerCount, hRF.getPeakMarkerCount(), val -> Integer.parseInt(val.toString()), val -> val.toString());
+		new MVCController(spinnerHoldMarkerCount, hRF.getHoldMarkerCount(), val -> Integer.parseInt(val.toString()), val -> val.toString());
 		hRF.isChartsPeaksVisible().addListener((enabled) -> {
 			SwingUtilities.invokeLater(()->{
 				spinnerPeakFallSpeed.setEnabled(enabled);
@@ -985,6 +1013,9 @@ public class HackRFSweepSettingsUI extends JPanel
 				spinnerPeakHoldTime.setEnabled(enabled);
 				spinnerPeakHoldTime.setVisible(enabled);
 				lblPeakHoldTime.setVisible(enabled);
+				spinnerPeakMarkerCount.setEnabled(enabled);
+				spinnerPeakMarkerCount.setVisible(enabled);
+				lblPeakMarkerCount.setVisible(enabled);
 				btnRecData.setVisible(enabled);
 				chckbxShowPeakMarker.setVisible(enabled);
 			});
@@ -1041,8 +1072,12 @@ public class HackRFSweepSettingsUI extends JPanel
 		hRF.isChartsMaxHoldVisible().addListener((enabled) -> {
 			SwingUtilities.invokeLater(()->{
 				chckbxShowHoldMarker.setVisible(enabled);
+				spinnerHoldMarkerCount.setEnabled(enabled);
+				spinnerHoldMarkerCount.setVisible(enabled);
+				lblHoldMarkerCount.setVisible(enabled);
 			});
 		});
+		hRF.isChartsMaxHoldVisible().callObservers();
 		
 		new MVCController(checkBoxWaterfallEnabled, hRF.isWaterfallVisible());
 		new MVCController(checkBoxInfoBoxEnabled, hRF.isInfoBoxVisible());

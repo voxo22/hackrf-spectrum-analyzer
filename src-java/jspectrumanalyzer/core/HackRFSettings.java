@@ -63,6 +63,10 @@ public interface HackRFSettings {
 	public ModelValueInt getPeakFallTrs();
 	
 	public ModelValueInt getPeakHoldTime();
+
+	public ModelValueInt getPeakMarkerCount();
+
+	public ModelValueInt getHoldMarkerCount();
 	
 	public ModelValueInt getAvgIterations();
 	
