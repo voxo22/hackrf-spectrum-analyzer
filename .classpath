@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<classpath>
+	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-1.8"/>
+	<classpathentry kind="src" path="src-java">
+		<attributes>
+			<attribute name="org.eclipse.jdt.launching.CLASSPATH_ATTR_LIBRARY_PATH_ENTRY" value="hackrf-sweep/build/lib"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="c:/Users/Lenka/Desktop/hrf-sa-vsc/hackrf-sweep/miglayout15-swing.jar"/>
+	<classpathentry kind="lib" path="c:/Users/Lenka/Desktop/hrf-sa-vsc/hackrf-sweep/lib/jcommon-1.0.17.jar"/>
+	<classpathentry kind="lib" path="c:/Users/Lenka/Desktop/hrf-sa-vsc/hackrf-sweep/lib/jfreechart-1.0.14.jar"/>
+	<classpathentry kind="lib" path="c:/Users/Lenka/Desktop/hrf-sa-vsc/hackrf-sweep/lib/jna/jna-4.5.1.jar"/>
+	<classpathentry kind="lib" path="c:/Users/Lenka/Desktop/hrf-sa-vsc/hackrf-sweep/lib/hackrf-sweep-jna.jar"/>
+	<classpathentry kind="lib" path="c:/Users/Lenka/Desktop/hrf-sa-vsc/hackrf-sweep/lib/slf4j-api-1.6.4.jar"/>
+	<classpathentry kind="lib" path="c:/Users/Lenka/Desktop/hrf-sa-vsc/hackrf-sweep/lib/logback-classic-1.0.0.jar"/>
+	<classpathentry kind="lib" path="c:/Users/Lenka/Desktop/hrf-sa-vsc/hackrf-sweep/lib/logback-core-1.0.0.jar"/>
+	<classpathentry kind="lib" path="c:/Users/Lenka/Desktop/hrf-sa-vsc/hackrf-sweep/lib/xuggle-xuggler-5.4.jar"/>
+	<classpathentry kind="output" path="bin"/>
+</classpath>
