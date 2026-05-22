@@ -198,6 +198,16 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		}
 	}
 
+	private static class MarkerLabelPlacement {
+		final double xPercent;
+		final int row;
+
+		MarkerLabelPlacement(double xPercent, int row) {
+			this.xPercent = xPercent;
+			this.row = row;
+		}
+	}
+
 	/**
 	 * Color palette for UI
 	 */
@@ -302,8 +312,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private ModelValueBoolean						parameterShowMaxHold				= new ModelValueBoolean("Show MaxHold", true);
 	private ModelValueBoolean						parameterShowPeakMarker				= new ModelValueBoolean("Show PeakMarker", false);
 	private ModelValueBoolean						parameterShowHoldMarker				= new ModelValueBoolean("Show MaxHoldMarker", false);	
-	private ModelValueInt							parameterPeakMarkerCount			= new ModelValueInt("Peak Marker Count", 1, 1, 1, 5);
-	private ModelValueInt							parameterHoldMarkerCount			= new ModelValueInt("MaxHold Marker Count", 1, 1, 1, 5);
+	private ModelValueInt							parameterMarkerCount				= new ModelValueInt("Marker Count", 1, 1, 1, 5);
 	private ModelValueBoolean 						parameterDebugDisplay				= new ModelValueBoolean("Debug", false);
 	private ModelValue<BigDecimal>					parameterSpectrumLineThickness		= new ModelValue<>("Spectrum Line Thickness", new BigDecimal("1"));
 	private ModelValueInt							parameterSpectrumPaletteSize		= new ModelValueInt("Palette Size", 0);
@@ -574,8 +583,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			if (p.getProperty("ShowMaxHold") != null) parameterShowMaxHold.setValue(Boolean.parseBoolean(p.getProperty("ShowMaxHold")));
 			if (p.getProperty("ShowPeakMarker") != null) parameterShowPeakMarker.setValue(Boolean.parseBoolean(p.getProperty("ShowPeakMarker")));
 			if (p.getProperty("ShowHoldMarker") != null) parameterShowHoldMarker.setValue(Boolean.parseBoolean(p.getProperty("ShowHoldMarker")));
-			if (p.getProperty("PeakMarkerCount") != null) parameterPeakMarkerCount.setValue(clampMarkerCount(Integer.parseInt(p.getProperty("PeakMarkerCount"))));
-			if (p.getProperty("HoldMarkerCount") != null) parameterHoldMarkerCount.setValue(clampMarkerCount(Integer.parseInt(p.getProperty("HoldMarkerCount"))));
+			if (p.getProperty("MarkerCount") != null) parameterMarkerCount.setValue(clampMarkerCount(Integer.parseInt(p.getProperty("MarkerCount"))));
 			if (p.getProperty("SpurRemoval") != null) parameterSpurRemoval.setValue(Boolean.parseBoolean(p.getProperty("SpurRemoval")));
 			if (p.getProperty("SpectrumLineThickness") != null) parameterSpectrumLineThickness.setValue(new java.math.BigDecimal(p.getProperty("SpectrumLineThickness")));
 			if (p.getProperty("SpectrumPaletteSize") != null) parameterSpectrumPaletteSize.setValue(Integer.parseInt(p.getProperty("SpectrumPaletteSize")));
@@ -620,8 +628,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			p.setProperty("ShowMaxHold", Boolean.toString(parameterShowMaxHold.getValue()));
 			p.setProperty("ShowPeakMarker", Boolean.toString(parameterShowPeakMarker.getValue()));
 			p.setProperty("ShowHoldMarker", Boolean.toString(parameterShowHoldMarker.getValue()));
-			p.setProperty("PeakMarkerCount", Integer.toString(parameterPeakMarkerCount.getValue()));
-			p.setProperty("HoldMarkerCount", Integer.toString(parameterHoldMarkerCount.getValue()));
+			p.setProperty("MarkerCount", Integer.toString(parameterMarkerCount.getValue()));
 			p.setProperty("SpurRemoval", Boolean.toString(parameterSpurRemoval.getValue()));
 			p.setProperty("SpectrumLineThickness", parameterSpectrumLineThickness.getValue().toString());
 			p.setProperty("SpectrumPaletteSize", Integer.toString(parameterSpectrumPaletteSize.getValue()));
@@ -712,13 +719,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	}
 
 	@Override
-	public ModelValueInt getPeakMarkerCount() {
-		return parameterPeakMarkerCount;
-	}
-
-	@Override
-	public ModelValueInt getHoldMarkerCount() {
-		return parameterHoldMarkerCount;
+	public ModelValueInt getMarkerCount() {
+		return parameterMarkerCount;
 	}
 	
 	@Override
@@ -1161,7 +1163,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 							
 							markerFrequencyPeak = spp[2];
 							markerAmplitudePeak = spp[1];
-							markersPeak = datasetSpectrum.calculatePeakMarkers(parameterPeakMarkerCount.getValue());
+							markersPeak = datasetSpectrum.calculatePeakMarkers(parameterMarkerCount.getValue());
 					        
 							if(parameterIsRecordedData.getValue()) {
 								dcap = true;
@@ -1197,7 +1199,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 								double[] mh = datasetSpectrum.calculateMarkerHold(parameterPowerFluxCal.getValue());
 								markerFrequencyMaxHold = mh[1];
 								markerAmplitudeMaxHold = mh[0];
-								markersMaxHold = datasetSpectrum.calculateMaxHoldMarkers(parameterHoldMarkerCount.getValue());
+								markersMaxHold = datasetSpectrum.calculateMaxHoldMarkers(parameterMarkerCount.getValue());
 								waterfallPlot.setStatusMessage(String.format("Total MaxHold Power: %.1f dBm (≈ %s µW/m²)", mh[2], mh[3]).replace(',', '.'),0);
 								waterfallPlot.setStatusMessage(String.format("MaxHold: %.1f dBm @ %.2f MHz", mh[0], mh[1]).replace(',', '.'),1);
 								waterfallPlot.setStatusMessage(String.format("Total MinHold Power: %.1f dBm (≈ %s µW/m²)", mh[4], mh[5]).replace(',', '.'),2);
@@ -1341,16 +1343,17 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 								}
 
 								chart.getXYPlot().clearAnnotations();
+								ArrayList<MarkerLabelPlacement> markerLabelPlacements = new ArrayList<>();
 								
 								if(parameterShowPeaks.getValue() && parameterShowPeakMarker.getValue()) {
 									for (DatasetSpectrumPeak.SpectrumMarker marker : markersPeak) {
-										addSpectrumMarkerAnnotation(marker, colors.clime);
+										addSpectrumMarkerAnnotation(marker, colors.clime, markerLabelPlacements);
 									}
 								}
 
 								if(parameterShowMaxHold.getValue() && parameterShowHoldMarker.getValue()) {
 									for (DatasetSpectrumPeak.SpectrumMarker marker : markersMaxHold) {
-										addSpectrumMarkerAnnotation(marker, colors.cpink);
+										addSpectrumMarkerAnnotation(marker, colors.cpink, markerLabelPlacements);
 									}
 								}
 
@@ -1998,7 +2001,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						return new XYSeriesImmutable(src.getKey(), xArr, yArr);
 					}
 
-	private void addSpectrumMarkerAnnotation(DatasetSpectrumPeak.SpectrumMarker marker, Color color) {
+	private void addSpectrumMarkerAnnotation(DatasetSpectrumPeak.SpectrumMarker marker, Color color,
+			ArrayList<MarkerLabelPlacement> placements) {
 		int[] pairsForAnnot = parseRangePairs(parameterFreqRange.getValue());
 		double pointerX = marker.frequencyMHz;
 		if (pairsForAnnot != null && pairsForAnnot.length > 2) {
@@ -2006,15 +2010,19 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			pointerX = mapRealToCompressed(origNoShift, pairsForAnnot);
 		}
 
+		double lowerX = chart.getXYPlot().getDomainAxis().getLowerBound();
+		double upperX = chart.getXYPlot().getDomainAxis().getUpperBound();
+		double xPercent = upperX == lowerX ? 50 : (pointerX - lowerX) * 100 / (upperX - lowerX);
+		int row = findMarkerLabelRow(xPercent, placements);
+		placements.add(new MarkerLabelPlacement(xPercent, row));
+
 		XYPointerAnnotation pointer = new XYPointerAnnotation(String.format(new Locale("sk","SK"), "%.1f", marker.amplitudeDbm)
 				+ " @ " + String.format(new Locale("sk","SK"), "%.2f", marker.frequencyMHz),
 				pointerX, marker.amplitudeDbm - 1.8f, 4.71f);
 		pointer.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
 		pointer.setPaint(color);
+		pointer.setLabelOffset(3 + row * 18);
 
-		double lowerX = chart.getXYPlot().getDomainAxis().getLowerBound();
-		double upperX = chart.getXYPlot().getDomainAxis().getUpperBound();
-		double xPercent = upperX == lowerX ? 50 : (pointerX - lowerX) * 100 / (upperX - lowerX);
 		if (xPercent < 9)
 			pointer.setTextAnchor(TextAnchor.BOTTOM_LEFT);
 		else if (xPercent > 91)
@@ -2025,6 +2033,23 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		pointer.setArrowLength(12);
 		pointer.setArrowPaint(Color.white);
 		chart.getXYPlot().addAnnotation(pointer);
+	}
+
+	private int findMarkerLabelRow(double xPercent, ArrayList<MarkerLabelPlacement> placements) {
+		int row = 0;
+		while (row < 5) {
+			boolean occupied = false;
+			for (MarkerLabelPlacement placement : placements) {
+				if (placement.row == row && Math.abs(placement.xPercent - xPercent) < 9) {
+					occupied = true;
+					break;
+				}
+			}
+			if (!occupied)
+				return row;
+			row++;
+		}
+		return 4;
 	}
 	
 	private int[] setupChartParams(double newDif)
