@@ -2,32 +2,18 @@ package jspectrumanalyzer.ui;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
-import java.awt.Component;
-import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.Font;
-import java.awt.GridLayout;
-//import java.awt.Insets;
-import java.awt.Label;
 import java.awt.event.ActionListener;
 import java.awt.event.ActionEvent;
 
 import java.beans.PropertyChangeEvent;
-import java.io.File;
 import java.io.FileNotFoundException;
 import java.math.BigDecimal;
-import java.net.URI;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Optional;
 import java.util.Vector;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
-import java.util.stream.Stream;
-
 import javax.swing.BorderFactory;
-import javax.swing.ComboBoxModel;
 import javax.swing.DefaultBoundedRangeModel;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
@@ -43,29 +29,18 @@ import javax.swing.JTextField;
 import javax.swing.SpinnerListModel;
 import javax.swing.UIManager;
 
-import jspectrumanalyzer.HackRFSweepSpectrumAnalyzer;
-import jspectrumanalyzer.Version;
-import jspectrumanalyzer.capture.ScreenCaptureH264;
 import jspectrumanalyzer.core.FrequencyAllocationTable;
 import jspectrumanalyzer.core.FrequencyAllocations;
 import jspectrumanalyzer.core.FrequencyPresets;
 import jspectrumanalyzer.core.FrequencyRange;
 import jspectrumanalyzer.core.HackRFSettings;
-import jspectrumanalyzer.core.HackRFSettings.HackRFEventAdapter;
 import jspectrumanalyzer.core.Preset;
 import jspectrumanalyzer.core.Ranges;
 import net.miginfocom.swing.MigLayout;
 import shared.mvc.MVCController;
-import shared.mvc.ModelValue;
-import shared.mvc.ModelValue.ModelValueBoolean;
-
-import javax.swing.border.BevelBorder;
-import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
-import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
 import javax.swing.JComboBox;
-import javax.swing.JFrame;
 import javax.swing.SwingConstants;
 import javax.swing.JOptionPane;
 

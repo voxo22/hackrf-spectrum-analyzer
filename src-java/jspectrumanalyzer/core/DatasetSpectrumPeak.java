@@ -2,10 +2,6 @@ package jspectrumanalyzer.core;
 
 //import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-//import java.util.List;
-
 import org.jfree.data.xy.XYSeries;
 
 import jspectrumanalyzer.core.jfc.XYSeriesImmutable;
@@ -340,13 +336,6 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 	private long debugLastPeakRerfreshTime	= 0;
 	public void refreshPeakSpectrum()
 	{
-		if (false) {
-			long debugMinPeakRefreshTime	= 100;
-			if (System.currentTimeMillis()-debugLastPeakRerfreshTime < debugMinPeakRefreshTime)
-				return;
-			debugLastPeakRerfreshTime	= System.currentTimeMillis();
-		}
-		
 		long timeDiffFromPrevValueMillis = System.currentTimeMillis() - lastAdded;
 		if (timeDiffFromPrevValueMillis < 1)
 			timeDiffFromPrevValueMillis = 1;

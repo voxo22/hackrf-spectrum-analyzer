@@ -10,9 +10,6 @@ import javax.swing.JSpinner;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.event.ChangeEvent;
-import javax.swing.event.ListDataEvent;
-import javax.swing.event.ListDataListener;
-
 import shared.mvc.ModelValue.ModelValueBoolean;
 import shared.mvc.ModelValue.ModelValueInt;
 

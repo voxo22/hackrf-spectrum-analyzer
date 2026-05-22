@@ -5,7 +5,6 @@ import java.beans.PropertyVetoException;
 import java.beans.VetoableChangeListener;
 
 import jspectrumanalyzer.core.FrequencyRange;
-import jspectrumanalyzer.core.HackRFSettings;
 
 /**
  * Limits frequency selection of two selectors (start/end)

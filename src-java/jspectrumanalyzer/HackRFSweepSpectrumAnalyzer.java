@@ -11,12 +11,10 @@ import java.awt.Font;
 import java.awt.Frame;
 import java.awt.Graphics2D;
 import java.awt.Insets;
-import java.awt.Point;
 import java.awt.RenderingHints;
 //import java.awt.Shape;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
-import java.awt.event.ComponentListener;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
@@ -26,32 +24,21 @@ import java.awt.event.MouseWheelEvent;
 import java.awt.event.MouseWheelListener;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
-import java.beans.PropertyChangeEvent;
-import java.beans.PropertyChangeListener;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.io.OutputStreamWriter;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.util.Properties;
 import java.net.URISyntaxException;
-import java.lang.reflect.InvocationTargetException;
 import java.math.BigDecimal;
 import java.util.Locale;
 import java.text.DecimalFormat;
-import java.text.FieldPosition;
-import java.text.NumberFormat;
-import java.text.ParsePosition;
 import java.util.ArrayList;
-import java.util.Vector;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.Consumer;
-
 import javax.swing.ImageIcon;
-import javax.swing.JComboBox;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -65,32 +52,22 @@ import org.jfree.chart.JFreeChart;
 //import org.jfree.chart.annotations.XYAnnotation;
 //import org.jfree.chart.annotations.XYDrawableAnnotation;
 import org.jfree.chart.annotations.XYPointerAnnotation;
-import org.jfree.chart.axis.Axis;
 import org.jfree.chart.axis.AxisSpace;
 import org.jfree.chart.axis.NumberAxis;
 import org.jfree.chart.axis.NumberTickUnit;
 import org.jfree.chart.axis.StandardTickUnitSource;
-import org.jfree.chart.event.ChartChangeEvent;
-import org.jfree.chart.event.ChartChangeListener;
 import org.jfree.chart.event.ChartProgressEvent;
 import org.jfree.chart.event.ChartProgressListener;
 import org.jfree.chart.event.OverlayChangeListener;
-import org.jfree.chart.event.PlotChangeEvent;
-import org.jfree.chart.event.PlotChangeListener;
 import org.jfree.chart.panel.Overlay;
-import org.jfree.chart.plot.CombinedDomainXYPlot;
-import org.jfree.chart.plot.Marker;
 import org.jfree.chart.plot.PlotOrientation;
 import org.jfree.chart.plot.ValueMarker;
 import org.jfree.chart.plot.XYPlot;
 import org.jfree.chart.renderer.xy.XYLineAndShapeRenderer;
-import org.jfree.chart.renderer.xy.XYSplineRenderer;
 //import org.jfree.chart.renderer.xy.XYSplineRenderer;
 import org.jfree.chart.title.TextTitle;
 import org.jfree.data.Range;
 import org.jfree.data.xy.XYSeries;
-import org.jfree.data.xy.XYSeriesCollection;
-import org.jfree.ui.Align;
 //import org.jfree.ui.Drawable;
 import org.jfree.ui.HorizontalAlignment;
 import org.jfree.ui.RectangleAnchor;
@@ -105,12 +82,9 @@ import jspectrumanalyzer.core.DatasetSpectrumPeak;
 import jspectrumanalyzer.core.FFTBins;
 import jspectrumanalyzer.core.FrequencyAllocationTable;
 import jspectrumanalyzer.core.FrequencyAllocations;
-import jspectrumanalyzer.core.FrequencyBand;
-import jspectrumanalyzer.core.FrequencyPresets;
 import jspectrumanalyzer.core.FrequencyRange;
 import jspectrumanalyzer.core.HackRFSettings;
 import jspectrumanalyzer.core.PersistentDisplay;
-import jspectrumanalyzer.core.Preset;
 import jspectrumanalyzer.core.Ranges;
 //import jspectrumanalyzer.core.PowerCalibration;
 import jspectrumanalyzer.core.SpurFilter;
@@ -1232,43 +1206,27 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						XYSeries spectrumMaxHold;
 						XYSeries spectrumMinHold;
 
-						if (true) {
-							spectrumSeries = datasetSpectrum.createSpectrumDataset("spectrum");
+						spectrumSeries = datasetSpectrum.createSpectrumDataset("spectrum");
 
-							if (parameterShowPeaks.getValue()) {
-								spectrumPeaks = datasetSpectrum.createPeaksDataset("peaks");
-							} else {
-								spectrumPeaks = spectrumPeaksEmpty;
-							}
-							if (parameterShowAverage.getValue()) {
-								spectrumAverage = datasetSpectrum.createAverageDataset("average");
-							} else {
-								spectrumAverage = spectrumAverageEmpty;
-							}
-							if (parameterShowMaxHold.getValue()) {
-								spectrumMaxHold = datasetSpectrum.createMaxHoldDataset("maxhold");
-							} else {
-								spectrumMaxHold = spectrumMaxHoldEmpty;
-							}
-							if (parameterShowHoldMarker.getValue()) {
-								spectrumMinHold = datasetSpectrum.createMinHoldDataset("minhold");
-							} else {
-								spectrumMinHold = spectrumMinHoldEmpty;
-							}
+						if (parameterShowPeaks.getValue()) {
+							spectrumPeaks = datasetSpectrum.createPeaksDataset("peaks");
 						} else {
-							spectrumSeries = new XYSeries("spectrum", false, true);
-							spectrumSeries.setNotify(false);
-							datasetSpectrum.fillToXYSeries(spectrumSeries);
-							spectrumSeries.setNotify(true);
-
-							spectrumPeaks =
-									//									new XYSeries("peaks");
-									new XYSeries("peaks", false, true);
-							if (parameterShowPeaks.getValue()) {
-								spectrumPeaks.setNotify(false);
-								datasetSpectrum.fillPeaksToXYSeries(spectrumPeaks);
-								spectrumPeaks.setNotify(false);
-							}
+							spectrumPeaks = spectrumPeaksEmpty;
+						}
+						if (parameterShowAverage.getValue()) {
+							spectrumAverage = datasetSpectrum.createAverageDataset("average");
+						} else {
+							spectrumAverage = spectrumAverageEmpty;
+						}
+						if (parameterShowMaxHold.getValue()) {
+							spectrumMaxHold = datasetSpectrum.createMaxHoldDataset("maxhold");
+						} else {
+							spectrumMaxHold = spectrumMaxHoldEmpty;
+						}
+						if (parameterShowHoldMarker.getValue()) {
+							spectrumMinHold = datasetSpectrum.createMinHoldDataset("minhold");
+						} else {
+							spectrumMinHold = spectrumMinHoldEmpty;
 						}
 
 						if (parameterPersistentDisplay.getValue()) {
@@ -1451,22 +1409,6 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		chartLineRenderer.setSeriesPaint(2, colors.cred);  //maxhold
 		chartLineRenderer.setSeriesPaint(3, colors.blue);  //minhold
 		chartLineRenderer.setSeriesPaint(4, colors.cwhite);  //realtime
-
-		if (false)
-			chart.addProgressListener(new ChartProgressListener() {
-				StandardTickUnitSource tus = new StandardTickUnitSource();
-
-				@Override
-				public void chartProgress(ChartProgressEvent event) {
-					if (event.getType() == ChartProgressEvent.DRAWING_STARTED) {
-						Range r = domainAxis.getRange();
-						domainAxis.setTickUnit((NumberTickUnit) tus.getCeilingTickUnit(r.getLength() / 20));
-						domainAxis.setMinorTickCount(2);
-						domainAxis.setMinorTickMarksVisible(true);
-
-					}
-				}
-			});
 
 		plot.setDomainGridlinesVisible(true);
 		plot.setRenderer(chartLineRenderer);

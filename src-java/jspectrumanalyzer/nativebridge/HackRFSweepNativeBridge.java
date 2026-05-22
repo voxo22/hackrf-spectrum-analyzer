@@ -9,7 +9,6 @@ import com.sun.jna.ptr.FloatByReference;
 
 import hackrfsweep.HackrfSweepLibrary;
 import hackrfsweep.HackrfSweepLibrary.hackrf_sweep_lib_start__fft_power_callback_callback;
-import jspectrumanalyzer.core.Preset;
 
 public class HackRFSweepNativeBridge
 {

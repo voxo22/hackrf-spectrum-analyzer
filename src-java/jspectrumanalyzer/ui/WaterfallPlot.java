@@ -134,74 +134,55 @@ public class WaterfallPlot extends JPanel {
 		float minimumValueDrawBuffer = -150;
 		Arrays.fill(drawMaxBuffer, minimumValueDrawBuffer);
 
-		/**
-		 * draw in two passes - first determines maximum power for the pixel,
-		 * second draws it
-		 */
-		if (true) {
-			//optimized drawing
-			double widthDivSize = (double)width / size;
-			double inverseSpectrumPaletteSize	= 1d/spectrumPaletteSize;
-			double spectrumPaletteStartDivSpectrumPaletteSize	= (double)spectrumPaletteStart/spectrumPaletteSize;
-			for (int i = 0; i < size; i++) {
-				double power = spectrum.getPower(i);
-				double percentagePower	= 0;
-				if (power > spectrumPaletteStart) {
-					if ( power < spectrumPalleteMax) { 
+		//optimized drawing
+		double widthDivSize = (double)width / size;
+		double inverseSpectrumPaletteSize	= 1d/spectrumPaletteSize;
+		double spectrumPaletteStartDivSpectrumPaletteSize	= (double)spectrumPaletteStart/spectrumPaletteSize;
+		for (int i = 0; i < size; i++) {
+			double power = spectrum.getPower(i);
+			double percentagePower	= 0;
+			if (power > spectrumPaletteStart) {
+				if ( power < spectrumPalleteMax) { 
 //						percentagePower	= (power - spectrumPaletteStart) / spectrumPaletteSize;
-						//percentagePower	= power/spectrumPaletteSize - spectrumPaletteStart/spectrumPaletteSize;
-						percentagePower	= power*inverseSpectrumPaletteSize - spectrumPaletteStartDivSpectrumPaletteSize;
-					}
-					else
-						percentagePower = 1;
+					//percentagePower	= power/spectrumPaletteSize - spectrumPaletteStart/spectrumPaletteSize;
+					percentagePower	= power*inverseSpectrumPaletteSize - spectrumPaletteStartDivSpectrumPaletteSize;
 				}
-				int pixelX;
-				if (rangePairs != null && rangePairs.length > 2 && compressedTotalLength > 0) {
-					// compute original frequency in MHz (without shift)
-					double originalNoShiftMHz = (spectrum.getFreqStartMHz() + (spectrum.getFFTBinSizeHz() * i) / 1000000d);
-					// check if in any selected range
-					boolean inRange = false;
-					for (int r = 0; r < rangePairs.length; r += 2) {
-						if (originalNoShiftMHz >= rangePairs[r] && originalNoShiftMHz <= rangePairs[r+1]) { inRange = true; break; }
-					}
-					if (!inRange) {
-						continue; // skip this bin
-					}
-					// map to compressed coordinate
-					double cum = 0;
-					double mapped = 0;
-					for (int r = 0; r < rangePairs.length; r += 2) {
-						int s = rangePairs[r];
-						int e = rangePairs[r+1];
-						double len = e - s;
-						if (originalNoShiftMHz >= s && originalNoShiftMHz <= e) {
-							mapped = cum + (originalNoShiftMHz - s);
-							break;
-						}
-						cum += len;
-					}
-					double percentage = mapped / compressedTotalLength;
-					pixelX = (int) Math.round(percentage * width);
-				} else {
-					pixelX = (int) Math.round(widthDivSize * i);
+				else
+					percentagePower = 1;
+			}
+			int pixelX;
+			if (rangePairs != null && rangePairs.length > 2 && compressedTotalLength > 0) {
+				// compute original frequency in MHz (without shift)
+				double originalNoShiftMHz = (spectrum.getFreqStartMHz() + (spectrum.getFFTBinSizeHz() * i) / 1000000d);
+				// check if in any selected range
+				boolean inRange = false;
+				for (int r = 0; r < rangePairs.length; r += 2) {
+					if (originalNoShiftMHz >= rangePairs[r] && originalNoShiftMHz <= rangePairs[r+1]) { inRange = true; break; }
 				}
-				pixelX = pixelX >= drawMaxBuffer.length ? drawMaxBuffer.length - 1 : pixelX < 0 ? 0 : pixelX;
-				if (percentagePower > drawMaxBuffer[pixelX])
-					drawMaxBuffer[pixelX] = (float) percentagePower;
+				if (!inRange) {
+					continue; // skip this bin
+				}
+				// map to compressed coordinate
+				double cum = 0;
+				double mapped = 0;
+				for (int r = 0; r < rangePairs.length; r += 2) {
+					int s = rangePairs[r];
+					int e = rangePairs[r+1];
+					double len = e - s;
+					if (originalNoShiftMHz >= s && originalNoShiftMHz <= e) {
+						mapped = cum + (originalNoShiftMHz - s);
+						break;
+					}
+					cum += len;
+				}
+				double percentage = mapped / compressedTotalLength;
+				pixelX = (int) Math.round(percentage * width);
+			} else {
+				pixelX = (int) Math.round(widthDivSize * i);
 			}
-		} else {
-			//unoptimized drawing
-			for (int i = 0; i < size; i++) {
-				double freq = spectrum.getFrequency(i);
-				double power = spectrum.getPower(i);
-				double percentageFreq = (freq - startFreq) / freqRange;
-				double percentagePower = power < spectrumPaletteStart ? 0
-						: power > spectrumPalleteMax ? 1 : (power - spectrumPaletteStart) / spectrumPaletteSize;
-				int pixelX = (int) Math.round(width * percentageFreq);
-				pixelX = pixelX >= drawMaxBuffer.length ? drawMaxBuffer.length - 1 : pixelX < 0 ? 0 : pixelX;
-				if (percentagePower > drawMaxBuffer[pixelX])
-					drawMaxBuffer[pixelX] = (float) percentagePower;
-			}
+			pixelX = pixelX >= drawMaxBuffer.length ? drawMaxBuffer.length - 1 : pixelX < 0 ? 0 : pixelX;
+			if (percentagePower > drawMaxBuffer[pixelX])
+				drawMaxBuffer[pixelX] = (float) percentagePower;
 		}
 
 		/**
