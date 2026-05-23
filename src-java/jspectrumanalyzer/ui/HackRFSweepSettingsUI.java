@@ -2,6 +2,8 @@ package jspectrumanalyzer.ui;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
+import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.event.ActionListener;
@@ -77,6 +79,8 @@ public class HackRFSweepSettingsUI extends JPanel
 	private JButton btnPause;
 	private JButton btnRecVideo;
 	private JButton btnRecData;
+	private JButton btnRecSpectrum;
+	private JButton btnPlaySpectrum;
 	private JButton btnReset;
 	private JButton button_plus;
 	private JButton button_minus;
@@ -107,6 +111,7 @@ public class HackRFSweepSettingsUI extends JPanel
 	private JSpinner spinnerVideoFormat;
 	private JSpinner spinnerVideoResolution;
 	private JSpinner spinnerVideoFrameRate;
+	private JSpinner spinnerSpectrumRecordFrameRate;
 	private JSpinner spinnerVideoArea;
 	private JSlider sliderAvgOffset;
 	private JLabel lblPeakFall;
@@ -148,7 +153,7 @@ public class HackRFSweepSettingsUI extends JPanel
 		frequencySelectorEnd = new FrequencySelectorPanel(minFreq, maxFreq, freqStep, maxFreq);
 		panelMainSettings.add(frequencySelectorEnd, "cell 0 4,grow");
 		
-		JButton button_minus = new JButton("<---");
+		button_minus = new JButton("<---");
 		button_minus.setBackground(Color.BLACK);
 		button_minus.addActionListener(e -> {
 			int dif = (int) Math.round((frequencySelectorEnd.getValue() - frequencySelectorStart.getValue()) * 0.9);
@@ -158,7 +163,7 @@ public class HackRFSweepSettingsUI extends JPanel
 		});
 		panelMainSettings.add(button_minus, "cell 0 6,alignx left,growx");
 
-		JButton button_plus = new JButton("--->");
+		button_plus = new JButton("--->");
 		button_plus.setBackground(Color.BLACK);
 		button_plus.addActionListener(e -> {
 			int dif = (int) Math.round((frequencySelectorEnd.getValue() - frequencySelectorStart.getValue()) * 0.9);
@@ -329,28 +334,42 @@ public class HackRFSweepSettingsUI extends JPanel
 		panelMainSettings.add(txtHackrfConnected, "cell 0 23,growx");
 		txtHackrfConnected.setBorder(null);
 		
-		btnPause = new JButton("Pause");
+		btnPause = new JButton("PAUSE");
 		panelMainSettings.add(btnPause, "cell 0 25,growx,alignx left");
 		btnPause.setBackground(Color.yellow);
 		//btnPause.setBorderPainted(false);
 		btnPause.setPreferredSize(new Dimension(16, 20));
 		btnPause.setBorder(BorderFactory.createEmptyBorder());
 		
-		btnRecVideo = new JButton("S");
+		btnRecVideo = new JButton("VIDEO");
 		panelMainSettings.add(btnRecVideo, "cell 0 25,growx,alignx left");
 		btnRecVideo.setForeground(Color.black);
 		btnRecVideo.setBackground(Color.red);
 		//btnRecVideo.setBorderPainted(false);
-		btnRecVideo.setPreferredSize(new Dimension(30, 20));
+		btnRecVideo.setPreferredSize(new Dimension(25, 20));
 		btnRecVideo.setBorder(BorderFactory.createEmptyBorder());
 		
-		btnRecData = new JButton("D");
+		btnRecData = new JButton("STATS");
 		panelMainSettings.add(btnRecData, "cell 0 25,growx,alignx left");
 		btnRecData.setForeground(Color.black);
 		btnRecData.setBackground(Color.red);
 		//btnRecData.setBorderPainted(false);
-		btnRecData.setPreferredSize(new Dimension(30, 20));
+		btnRecData.setPreferredSize(new Dimension(25, 20));
 		btnRecData.setBorder(BorderFactory.createEmptyBorder());
+
+		btnRecSpectrum = new JButton("DATA");
+		panelMainSettings.add(btnRecSpectrum, "cell 0 25,growx,alignx left");
+		btnRecSpectrum.setForeground(Color.black);
+		btnRecSpectrum.setBackground(Color.red);
+		btnRecSpectrum.setPreferredSize(new Dimension(25, 20));
+		btnRecSpectrum.setBorder(BorderFactory.createEmptyBorder());
+
+		btnPlaySpectrum = new JButton("REPLAY");
+		panelMainSettings.add(btnPlaySpectrum, "cell 0 25,growx,alignx left");
+		btnPlaySpectrum.setForeground(Color.black);
+		btnPlaySpectrum.setBackground(Color.cyan);
+		btnPlaySpectrum.setPreferredSize(new Dimension(25, 20));
+		btnPlaySpectrum.setBorder(BorderFactory.createEmptyBorder());
 
 		JTabbedPane tabbedPane	= new JTabbedPane(JTabbedPane.TOP);
 		setLayout(new BorderLayout());
@@ -520,18 +539,18 @@ public class HackRFSweepSettingsUI extends JPanel
 			
 			JLabel lblDisplayFrequencyShift = new JLabel("Shift [MHz] ");
 			lblDisplayFrequencyShift.setForeground(Color.WHITE);
-			tab1.add(lblDisplayFrequencyShift, "cell 0 15,alignx right");
+			tab1.add(lblDisplayFrequencyShift, "cell 0 14,alignx right");
 			
 			spinner_FrequencyShift = new JSpinner();
 			spinner_FrequencyShift.setModel(new SpinnerListModel(new String[] { "0", "-120", "9750", "10600" }));
 			spinner_FrequencyShift.setFont(new Font("Monospaced", Font.BOLD, 14));
 			((ListEditor) spinner_FrequencyShift.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
 			((ListEditor) spinner_FrequencyShift.getEditor()).getTextField().setColumns(5);
-			tab1.add(spinner_FrequencyShift, "cell 0 15,alignx right");
+			tab1.add(spinner_FrequencyShift, "cell 0 14,alignx right");
 			
 			JLabel lblAmplitudeOffset = new JLabel("Ampl Offset");
 			lblAmplitudeOffset.setForeground(Color.WHITE);
-			tab1.add(lblAmplitudeOffset, "cell 0 16");
+			tab1.add(lblAmplitudeOffset, "cell 0 15");
 			
 			slider_AmplitudeOffset = new JSlider(JSlider.HORIZONTAL, 0, 100, 2);
 			slider_AmplitudeOffset.setForeground(Color.WHITE);
@@ -540,17 +559,17 @@ public class HackRFSweepSettingsUI extends JPanel
 			slider_AmplitudeOffset.setMinimum(-20);
 			slider_AmplitudeOffset.setMaximum(20);
 			//slider_AmplitudeOffset.setValue(30);
-			tab1.add(slider_AmplitudeOffset, "cell 0 16,growx");
+			tab1.add(slider_AmplitudeOffset, "cell 0 15,growx");
 			
 			JLabel lblAmplitudeOffset2 = new JLabel();
 			lblAmplitudeOffset2.setForeground(Color.WHITE);
-			tab1.add(lblAmplitudeOffset2, "cell 0 16, alignx right");
+			tab1.add(lblAmplitudeOffset2, "cell 0 15, alignx right");
 			
 			hackRFSettings.getAmplitudeOffset().addListener((amplitude) -> lblAmplitudeOffset2.setText(String.format("%d dB", amplitude)));
 			
 			JLabel lblPowerFluxCal = new JLabel("Power Calbr");
 			lblPowerFluxCal.setForeground(Color.WHITE);
-			tab1.add(lblPowerFluxCal, "cell 0 17");
+			tab1.add(lblPowerFluxCal, "cell 0 16");
 			
 			slider_PowerFluxCal = new JSlider(JSlider.HORIZONTAL, 0, 100, 2);
 			slider_PowerFluxCal.setForeground(Color.WHITE);
@@ -559,11 +578,11 @@ public class HackRFSweepSettingsUI extends JPanel
 			slider_PowerFluxCal.setMinimum(25);
 			slider_PowerFluxCal.setMaximum(65);
 			//slider_AmplitudeOffset.setValue(30);
-			tab1.add(slider_PowerFluxCal, "cell 0 17,growx");
+			tab1.add(slider_PowerFluxCal, "cell 0 16,growx");
 			
 			JLabel lblPowerFluxCal2 = new JLabel();
 			lblPowerFluxCal2.setForeground(Color.WHITE);
-			tab1.add(lblPowerFluxCal2, "cell 0 17, alignx right");
+			tab1.add(lblPowerFluxCal2, "cell 0 16, alignx right");
 			
 			hackRFSettings.getPowerFluxCal().addListener((fluxcal) -> lblPowerFluxCal2.setText(String.format("%d", fluxcal)));
 		}
@@ -609,7 +628,7 @@ public class HackRFSweepSettingsUI extends JPanel
 					hRF.isWaterfallVisible().setValue(true);
 					hRF.isInfoBoxVisible().setValue(true);
 					hRF.isDatestampVisible().setValue(true);
-					hRF.getVideoArea().setValue("SPEC");
+					hRF.getVideoArea().setValue("SPECTR");
 					hRF.getVideoFormat().setValue("GIF");
 					hRF.getVideoResolution().setValue(540);
 					hRF.getVideoFrameRate().setValue(15);
@@ -617,17 +636,7 @@ public class HackRFSweepSettingsUI extends JPanel
 				});
 			});
 			tab2.add(btnReset, "cell 0 0,alignx left");
-			
-			chckbxDatestamp = new JCheckBox(" Datestamp");
-			chckbxDatestamp.setForeground(Color.WHITE);
-			chckbxDatestamp.setBackground(Color.BLACK);
-			tab2.add(chckbxDatestamp, "cell 0 0,alignx right");
-			/*
-			chckbxFilterSpectrum = new JCheckBox("Filter spectrum");
-			chckbxFilterSpectrum.setBackground(Color.BLACK);
-			chckbxFilterSpectrum.setForeground(Color.WHITE);
-			tab2.add(chckbxFilterSpectrum, "flowx,cell 0 0,growx");
-			*/
+
 			JLabel lblSpectrLineThickness = new JLabel("Lines Thickness ");
 			lblSpectrLineThickness.setForeground(Color.WHITE);
 			tab2.add(lblSpectrLineThickness, "cell 0 1,alignx right");
@@ -638,93 +647,76 @@ public class HackRFSweepSettingsUI extends JPanel
 			((ListEditor) spinnerLineThickness.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
 			((ListEditor) spinnerLineThickness.getEditor()).getTextField().setColumns(3);
 			tab2.add(spinnerLineThickness, "cell 0 1,alignx right");
-			/*
-			comboBoxLineThickness = new JComboBox(new BigDecimal[] {
-					new BigDecimal("1"), new BigDecimal("1.5"), new BigDecimal("2"), new BigDecimal("3")
-					});
-			tab2.add(comboBoxLineThickness, "cell 0 1,alignx right");
-			*/
+
 			lblPeakFall = new JLabel("Peak Fallout Time ");
 			lblPeakFall.setForeground(Color.WHITE);
-			tab2.add(lblPeakFall, "cell 0 3,alignx right");
+			tab2.add(lblPeakFall, "cell 0 2,alignx right");
 			
 			spinnerPeakFallSpeed = new JSpinner();
 			spinnerPeakFallSpeed.setModel(new SpinnerListModel(new String[] { "1", "5", "10", "20", "30", "60" }));
 			spinnerPeakFallSpeed.setFont(new Font("Monospaced", Font.BOLD, 14));
 			((ListEditor) spinnerPeakFallSpeed.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
 			((ListEditor) spinnerPeakFallSpeed.getEditor()).getTextField().setColumns(2);
-			tab2.add(spinnerPeakFallSpeed, "cell 0 3,alignx right");
+			tab2.add(spinnerPeakFallSpeed, "cell 0 2,alignx right");
 			
 			lblPeakFallTrs = new JLabel("Peak Fall Threshold ");
 			lblPeakFallTrs.setForeground(Color.WHITE);
-			tab2.add(lblPeakFallTrs, "cell 0 5,alignx right");
+			tab2.add(lblPeakFallTrs, "cell 0 3,alignx right");
 			
 			spinnerPeakFallTrs = new JSpinner();
 			spinnerPeakFallTrs.setModel(new SpinnerListModel(new String[] { "0", "2", "5", "10", "15" }));
 			spinnerPeakFallTrs.setFont(new Font("Monospaced", Font.BOLD, 14));
 			((ListEditor) spinnerPeakFallTrs.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
 			((ListEditor) spinnerPeakFallTrs.getEditor()).getTextField().setColumns(2);
-			tab2.add(spinnerPeakFallTrs, "cell 0 5,alignx right");
+			tab2.add(spinnerPeakFallTrs, "cell 0 3,alignx right");
 			
 			lblPeakHoldTime = new JLabel("Peak Hold Time ");
 			lblPeakHoldTime.setForeground(Color.WHITE);
-			tab2.add(lblPeakHoldTime, "cell 0 7,alignx right");
+			tab2.add(lblPeakHoldTime, "cell 0 4,alignx right");
 			
 			spinnerPeakHoldTime = new JSpinner();
 			spinnerPeakHoldTime.setModel(new SpinnerListModel(new String[] { "0", "1", "2", "5", "10", "30", "60" }));
 			spinnerPeakHoldTime.setFont(new Font("Monospaced", Font.BOLD, 14));
 			((ListEditor) spinnerPeakHoldTime.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
 			((ListEditor) spinnerPeakHoldTime.getEditor()).getTextField().setColumns(2);
-			tab2.add(spinnerPeakHoldTime, "cell 0 7,alignx right");
+			tab2.add(spinnerPeakHoldTime, "cell 0 4,alignx right");
 
 			lblMarkerCount = new JLabel("Marker Count ");
 			lblMarkerCount.setForeground(Color.WHITE);
-			tab2.add(lblMarkerCount, "cell 0 8,alignx right");
+			tab2.add(lblMarkerCount, "cell 0 5,alignx right");
 
 			spinnerMarkerCount = new JSpinner();
 			spinnerMarkerCount.setModel(new SpinnerListModel(new String[] { "1", "2", "3", "4", "5" }));
 			spinnerMarkerCount.setFont(new Font("Monospaced", Font.BOLD, 14));
 			((ListEditor) spinnerMarkerCount.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
 			((ListEditor) spinnerMarkerCount.getEditor()).getTextField().setColumns(1);
-			tab2.add(spinnerMarkerCount, "cell 0 8,alignx right");
+			tab2.add(spinnerMarkerCount, "cell 0 5,alignx right");
 			
 			lblDecayRate = new JLabel("Persistent Decay Rate ");
 			lblDecayRate.setForeground(Color.WHITE);
-			tab2.add(lblDecayRate, "cell 0 10,alignx right");
+			tab2.add(lblDecayRate, "cell 0 6,alignx right");
 			
 			spinnerDecayRate = new JSpinner();
 			spinnerDecayRate.setModel(new SpinnerListModel(new String[] { "1", "5", "10", "30", "60" }));
 			spinnerDecayRate.setFont(new Font("Monospaced", Font.BOLD, 14));
 			((ListEditor) spinnerDecayRate.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
 			((ListEditor) spinnerDecayRate.getEditor()).getTextField().setColumns(2);
-			tab2.add(spinnerDecayRate, "cell 0 10,alignx right");
-			/*
-			spinnerDecayRate = new JSpinner();
-			spinnerDecayRate.setModel(new SpinnerNumberModel(10, 0, 500, 1));
-			spinnerDecayRate.setFont(new Font("Monospaced", Font.BOLD, 14));
-			tab2.add(spinnerDecayRate, "cell 0 9,alignx right");
-			*/
-			/*
-			comboBoxDecayRate = new JComboBox(
-					new Vector<>(IntStream.rangeClosed(hRF.getPersistentDisplayDecayRate().getMin(), hRF.getPersistentDisplayDecayRate().getMax()).
-							boxed().collect(Collectors.toList())));
-			tab2.add(comboBoxDecayRate, "cell 0 5,alignx right");
-			*/
+			tab2.add(spinnerDecayRate, "cell 0 6,alignx right");
 			
 			lblAvgIterations = new JLabel("Average Iterations ");
 			lblAvgIterations.setForeground(Color.WHITE);
-			tab2.add(lblAvgIterations, "cell 0 11,alignx right");
+			tab2.add(lblAvgIterations, "cell 0 7,alignx right");
 			
 			spinnerAvgIterations = new JSpinner();
 			spinnerAvgIterations.setModel(new SpinnerListModel(new String[] { "20", "50", "80" }));
 			spinnerAvgIterations.setFont(new Font("Monospaced", Font.BOLD, 14));
 			((ListEditor) spinnerAvgIterations.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
 			((ListEditor) spinnerAvgIterations.getEditor()).getTextField().setColumns(2);
-			tab2.add(spinnerAvgIterations, "cell 0 11,alignx right");
+			tab2.add(spinnerAvgIterations, "cell 0 7,alignx right");
 			
 			lblAvgOffset = new JLabel("Avg Offset");
 			lblAvgOffset.setForeground(Color.WHITE);
-			tab2.add(lblAvgOffset, "cell 0 12");
+			tab2.add(lblAvgOffset, "cell 0 8");
 			
 			sliderAvgOffset = new JSlider();
 			sliderAvgOffset.setForeground(Color.WHITE);
@@ -733,11 +725,11 @@ public class HackRFSweepSettingsUI extends JPanel
 			sliderAvgOffset.setMinimum(-10);
 			sliderAvgOffset.setMaximum(10);
 			sliderAvgOffset.setValue(0);
-			tab2.add(sliderAvgOffset, "cell 0 12,growx");
+			tab2.add(sliderAvgOffset, "cell 0 8,growx");
 			
 			lblAvgOffset2 = new JLabel();
 			lblAvgOffset2.setForeground(Color.WHITE);
-			tab2.add(lblAvgOffset2, "cell 0 12, alignx right");
+			tab2.add(lblAvgOffset2, "cell 0 8, alignx right");
 			
 			hackRFSettings.getAvgOffset().addListener((avgOff) -> lblAvgOffset2.setText(String.format("%d dB", avgOff)));
 			/*
@@ -755,7 +747,7 @@ public class HackRFSweepSettingsUI extends JPanel
 
 			JLabel lblDisplayFrequencyAllocation = new JLabel("Frequency Allocation Bands");
 			lblDisplayFrequencyAllocation.setForeground(Color.WHITE);
-			tab2.add(lblDisplayFrequencyAllocation, "cell 0 15");
+			tab2.add(lblDisplayFrequencyAllocation, "cell 0 9");
 			
 			FrequencyAllocations frequencyAllocations	= new FrequencyAllocations();
 			Vector<FrequencyAllocationTable> freqAllocValues	= new Vector<>();
@@ -763,28 +755,22 @@ public class HackRFSweepSettingsUI extends JPanel
 			freqAllocValues.add(null);
 			DefaultComboBoxModel<FrequencyAllocationTable> freqAllocModel	= new  DefaultComboBoxModel<>(freqAllocValues);
 			comboBoxFrequencyAllocationBands = new JComboBox<FrequencyAllocationTable>(freqAllocModel);
-			tab2.add(comboBoxFrequencyAllocationBands, "cell 0 16,growx");
+			tab2.add(comboBoxFrequencyAllocationBands, "cell 0 10,growx");
 			
-			
-			/*
-			lblDebugDisplay = new JLabel("Debug display");
-			lblDebugDisplay.setForeground(Color.WHITE);
-			tab2.add(lblDebugDisplay, "flowx,cell 0 22,growx");
-			
-			checkBoxDebugDisplay = new JCheckBox("");
-			checkBoxDebugDisplay.setForeground(Color.WHITE);
-			checkBoxDebugDisplay.setBackground(Color.BLACK);
-			tab2.add(checkBoxDebugDisplay, "cell 0 22,alignx right");
-			*/
 		}
-		//tab3 Waterfall
+		//tab3 Waterfall/REC
 		{
+			chckbxDatestamp = new JCheckBox(" Date");
+			chckbxDatestamp.setForeground(Color.WHITE);
+			chckbxDatestamp.setBackground(Color.BLACK);
+			tab3.add(chckbxDatestamp, "cell 0 0,alignx right");
+
 			checkBoxInfoBoxEnabled = new JCheckBox(" InfoBox");
 			checkBoxInfoBoxEnabled.setForeground(Color.WHITE);
 			checkBoxInfoBoxEnabled.setBackground(Color.BLACK);
 			tab3.add(checkBoxInfoBoxEnabled, "cell 0 0,alignx right");
 			
-			checkBoxWaterfallEnabled = new JCheckBox(" Waterfall");
+			checkBoxWaterfallEnabled = new JCheckBox(" WFall");
 			checkBoxWaterfallEnabled.setForeground(Color.WHITE);
 			checkBoxWaterfallEnabled.setBackground(Color.BLACK);
 			tab3.add(checkBoxWaterfallEnabled, "cell 0 0,alignx right");
@@ -808,24 +794,24 @@ public class HackRFSweepSettingsUI extends JPanel
 	
 			JLabel lblWaterfallPaletteLength = new JLabel("Palette Length");
 			lblWaterfallPaletteLength.setForeground(Color.WHITE);
-			tab3.add(lblWaterfallPaletteLength, "cell 0 5");
+			tab3.add(lblWaterfallPaletteLength, "cell 0 4");
 	
 			slider_waterfallPaletteSize = new JSlider();
 			slider_waterfallPaletteSize.setBackground(Color.BLACK);
 			slider_waterfallPaletteSize.setForeground(Color.WHITE);
 			slider_waterfallPaletteSize.setMinimum(10); //palette offset
 			slider_waterfallPaletteSize.setMaximum(90);
-			tab3.add(slider_waterfallPaletteSize, "cell 0 5,growx");
+			tab3.add(slider_waterfallPaletteSize, "cell 0 4,growx");
 			
 			JLabel lblWaterfallPaletteLength2 = new JLabel();
 			lblWaterfallPaletteLength2.setForeground(Color.WHITE);
-			tab3.add(lblWaterfallPaletteLength2, "cell 0 5, alignx right");
+			tab3.add(lblWaterfallPaletteLength2, "cell 0 4, alignx right");
 			
 			hackRFSettings.getSpectrumPaletteSize().addListener((plen) -> lblWaterfallPaletteLength2.setText(String.format("%d dB", plen)));
 			
 			JLabel lblWaterfallSpeed = new JLabel("Speed");
 			lblWaterfallSpeed.setForeground(Color.WHITE);
-			tab3.add(lblWaterfallSpeed, "cell 0 7");
+			tab3.add(lblWaterfallSpeed, "cell 0 6");
 			
 			slider_WaterfallSpeed = new JSlider();
 			slider_WaterfallSpeed.setForeground(Color.WHITE);
@@ -834,75 +820,93 @@ public class HackRFSweepSettingsUI extends JPanel
 			slider_WaterfallSpeed.setMinimum(1);
 			slider_WaterfallSpeed.setMaximum(10);
 			slider_WaterfallSpeed.setValue(4);
-			tab3.add(slider_WaterfallSpeed, "cell 0 7,growx");	
+			tab3.add(slider_WaterfallSpeed, "cell 0 6,growx");	
 			
 			JLabel lblWaterfallSpeed2 = new JLabel();
 			lblWaterfallSpeed2.setForeground(Color.WHITE);
-			tab3.add(lblWaterfallSpeed2, "cell 0 7, alignx right");
+			tab3.add(lblWaterfallSpeed2, "cell 0 6, alignx right");
 			
 			hackRFSettings.getWaterfallSpeed().addListener((speed) -> lblWaterfallSpeed2.setText(String.format("%d", speed)));
 			
 			JSeparator separator1 = new JSeparator();
-			tab3.add(separator1,"cell 0 9,growx");
+			tab3.add(separator1,"cell 0 7,growx");
+
+			JLabel lblREC = new JLabel("REC");
+			lblREC.setForeground(Color.WHITE);
+			tab3.add(lblREC, "growx,cell 0 8");
 			
-			JLabel lblCALC = new JLabel("REC");
-			lblCALC.setForeground(Color.WHITE);
-			tab3.add(lblCALC, "growx,cell 0 10");
-			
-			JLabel lblLogDetail = new JLabel("Data Log Interval ");
+			JLabel lblLogDetail = new JLabel("CSV Log Interval ");
 			lblLogDetail.setForeground(Color.WHITE);
-			tab3.add(lblLogDetail, "cell 0 10,alignx right");
+			tab3.add(lblLogDetail, "cell 0 8,alignx right");
 			
 			spinnerLogDetail = new JSpinner();
-			spinnerLogDetail.setModel(new SpinnerListModel(new String[] { "FRA", "SEC", "MIN" }));
+			spinnerLogDetail.setModel(new SpinnerListModel(new String[] { "FRAC", "SEC", "MIN" }));
 			spinnerLogDetail.setFont(new Font("Monospaced", Font.BOLD, 14));
 			((ListEditor) spinnerLogDetail.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
-			((ListEditor) spinnerLogDetail.getEditor()).getTextField().setColumns(3);
-			tab3.add(spinnerLogDetail, "cell 0 10,alignx right");
+			((ListEditor) spinnerLogDetail.getEditor()).getTextField().setColumns(4);
+			tab3.add(spinnerLogDetail, "cell 0 8,alignx right");
+
+			JLabel lblSpectrumRecordFrameRate = new JLabel("Spectrum REC FPS ");
+			lblSpectrumRecordFrameRate.setForeground(Color.WHITE);
+			tab3.add(lblSpectrumRecordFrameRate, "cell 0 9,alignx right");
 			
-			JLabel lblVideoArea = new JLabel("Video Area ");
+			spinnerSpectrumRecordFrameRate = new JSpinner();
+			spinnerSpectrumRecordFrameRate.setModel(new SpinnerListModel(new String[] { "FULL", "90", "60", "30", "15" }));
+			spinnerSpectrumRecordFrameRate.setFont(new Font("Monospaced", Font.BOLD, 14));
+			((ListEditor) spinnerSpectrumRecordFrameRate.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
+			((ListEditor) spinnerSpectrumRecordFrameRate.getEditor()).getTextField().setColumns(4);
+			tab3.add(spinnerSpectrumRecordFrameRate, "cell 0 9,alignx right");
+
+			JSeparator separator2 = new JSeparator();
+			tab3.add(separator2,"cell 0 10,growx");
+
+			JLabel lblCALC = new JLabel("VIDEO REC");
+			lblCALC.setForeground(Color.WHITE);
+			tab3.add(lblCALC, "growx,cell 0 11");
+			
+			JLabel lblVideoArea = new JLabel("Area ");
 			lblVideoArea.setForeground(Color.WHITE);
-			tab3.add(lblVideoArea, "cell 0 12,alignx right");
+			tab3.add(lblVideoArea, "cell 0 11,alignx right");
 			
 			spinnerVideoArea = new JSpinner();
-			spinnerVideoArea.setModel(new SpinnerListModel(new String[] { "SPEC", "SP+W", "FULL" }));
+			spinnerVideoArea.setModel(new SpinnerListModel(new String[] { "SPECTR", "SPEC+WF", "FULLSCR" }));
 			spinnerVideoArea.setFont(new Font("Monospaced", Font.BOLD, 14));
 			((ListEditor) spinnerVideoArea.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
-			((ListEditor) spinnerVideoArea.getEditor()).getTextField().setColumns(4);
-			tab3.add(spinnerVideoArea, "cell 0 12,alignx right");
-			
-			JLabel lblVideoFormat = new JLabel("Video Format ");
-			lblVideoFormat.setForeground(Color.WHITE);
-			tab3.add(lblVideoFormat, "cell 0 14,alignx right");
-			
-			spinnerVideoFormat = new JSpinner();
-			spinnerVideoFormat.setModel(new SpinnerListModel(new String[] { "GIF", "MP4" }));
-			spinnerVideoFormat.setFont(new Font("Monospaced", Font.BOLD, 14));
-			((ListEditor) spinnerVideoFormat.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
-			((ListEditor) spinnerVideoFormat.getEditor()).getTextField().setColumns(3);
-			tab3.add(spinnerVideoFormat, "cell 0 14,alignx right");
-			
-			JLabel lblVideoResolution = new JLabel("Video Resolution ");
+			((ListEditor) spinnerVideoArea.getEditor()).getTextField().setColumns(7);
+			tab3.add(spinnerVideoArea, "cell 0 11,alignx right");
+
+			JLabel lblVideoResolution = new JLabel("Resolution ");
 			lblVideoResolution.setForeground(Color.WHITE);
-			tab3.add(lblVideoResolution, "cell 0 16,alignx right");
+			tab3.add(lblVideoResolution, "cell 0 12,alignx right");
 			
 			spinnerVideoResolution = new JSpinner();
 			spinnerVideoResolution.setModel(new SpinnerListModel(new String[] { "360", "540", "720", "1080" }));
 			spinnerVideoResolution.setFont(new Font("Monospaced", Font.BOLD, 14));
 			((ListEditor) spinnerVideoResolution.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
 			((ListEditor) spinnerVideoResolution.getEditor()).getTextField().setColumns(4);
-			tab3.add(spinnerVideoResolution, "cell 0 16,alignx right");
-			
-			JLabel lblVideoFrameRate = new JLabel("Video Framerate ");
+			tab3.add(spinnerVideoResolution, "cell 0 12,alignx right");
+
+			JLabel lblVideoFrameRate = new JLabel("FPS ");
 			lblVideoFrameRate.setForeground(Color.WHITE);
-			tab3.add(lblVideoFrameRate, "cell 0 18,alignx right");
+			tab3.add(lblVideoFrameRate, "cell 0 13, split 4, alignx left");
 			
 			spinnerVideoFrameRate = new JSpinner();
 			spinnerVideoFrameRate.setModel(new SpinnerListModel(new String[] { "1", "2", "5", "10", "15", "25", "30", "60" }));
 			spinnerVideoFrameRate.setFont(new Font("Monospaced", Font.BOLD, 14));
 			((ListEditor) spinnerVideoFrameRate.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
 			((ListEditor) spinnerVideoFrameRate.getEditor()).getTextField().setColumns(2);
-			tab3.add(spinnerVideoFrameRate, "cell 0 18,alignx right");
+			tab3.add(spinnerVideoFrameRate, "cell 0 13");
+			
+			JLabel lblVideoFormat = new JLabel("Format ");
+			lblVideoFormat.setForeground(Color.WHITE);
+			tab3.add(lblVideoFormat, "cell 0 13, gapleft push");
+			
+			spinnerVideoFormat = new JSpinner();
+			spinnerVideoFormat.setModel(new SpinnerListModel(new String[] { "GIF", "MP4" }));
+			spinnerVideoFormat.setFont(new Font("Monospaced", Font.BOLD, 14));
+			((ListEditor) spinnerVideoFormat.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
+			((ListEditor) spinnerVideoFormat.getEditor()).getTextField().setColumns(3);
+			tab3.add(spinnerVideoFormat, "cell 0 13, alignx right");
 		}
 		bindViewToModel();
 	}
@@ -928,6 +932,7 @@ public class HackRFSweepSettingsUI extends JPanel
 		new MVCController(slider_waterfallPaletteSize, hRF.getSpectrumPaletteSize());
 		new MVCController(slider_AmplitudeOffset, hRF.getAmplitudeOffset());
 		new MVCController(textFieldFreqRange, hRF.getparamFreqRange());
+		hRF.getDisplayFreqRange().addListener((ranges) -> SwingUtilities.invokeLater(() -> textFieldFreqRange.setText(ranges)));
 		new MVCController(slider_WaterfallSpeed, hRF.getWaterfallSpeed());
 		new MVCController(	(Consumer<FrequencyRange> valueChangedCall) ->  
 								frequencyRangeSelector.addPropertyChangeListener((PropertyChangeEvent evt) -> valueChangedCall.accept(frequencyRangeSelector.getFrequencyRange()) ) ,
@@ -954,12 +959,20 @@ public class HackRFSweepSettingsUI extends JPanel
 				hRF.isCapturingPaused());
 		
 		new MVCController((valueChangedCall) -> btnRecVideo.addActionListener((event) -> valueChangedCall.accept(!hRF.isRecordedVideo().getValue())), 
-				isRec -> btnRecVideo.setText(!isRec ? "REC VIDEO"  : "■ VIDEO"), 
+				isRec -> btnRecVideo.setText(!isRec ? "VIDEO"  : "■"), 
 				hRF.isRecordedVideo());
 		
 		new MVCController((valueChangedCall) -> btnRecData.addActionListener((event) -> valueChangedCall.accept(!hRF.isRecordedData().getValue())), 
-				isRecData -> btnRecData.setText(!isRecData ? "REC DATA"  : "■ DATA"), 
+				isRecData -> btnRecData.setText(!isRecData ? "CSV"  : "■"), 
 				hRF.isRecordedData());
+
+		new MVCController((valueChangedCall) -> btnRecSpectrum.addActionListener((event) -> valueChangedCall.accept(!hRF.isRecordedSpectrum().getValue())),
+				isRecSpectrum -> btnRecSpectrum.setText(!isRecSpectrum ? "SPEC" : "■"),
+				hRF.isRecordedSpectrum());
+
+		new MVCController((valueChangedCall) -> btnPlaySpectrum.addActionListener((event) -> valueChangedCall.accept(!hRF.isPlayingSpectrum().getValue())),
+				isPlayingSpectrum -> btnPlaySpectrum.setText(!isPlayingSpectrum ? "REPLAY" : "■"),
+				hRF.isPlayingSpectrum());
 	
 		new MVCController(spinnerPeakFallSpeed, hRF.getPeakFallRate(), val -> Integer.parseInt(val.toString()), val -> val.toString());
 		new MVCController(spinnerPeakFallTrs, hRF.getPeakFallTrs(), val -> Integer.parseInt(val.toString()), val -> val.toString());
@@ -1024,6 +1037,7 @@ public class HackRFSweepSettingsUI extends JPanel
 		new MVCController(spinnerVideoFormat, hRF.getVideoFormat(), val -> new String (val.toString()), val -> val.toString());
 		new MVCController(spinnerVideoResolution, hRF.getVideoResolution(), val -> Integer.parseInt(val.toString()), val -> val.toString());
 		new MVCController(spinnerVideoFrameRate, hRF.getVideoFrameRate(), val -> Integer.parseInt(val.toString()), val -> val.toString());
+		new MVCController(spinnerSpectrumRecordFrameRate, hRF.getSpectrumRecordFrameRate(), val -> new String (val.toString()), val -> val.toString());
 		
 		
 		new MVCController(chckbxDatestamp, hRF.isDatestampVisible());
@@ -1065,7 +1079,59 @@ public class HackRFSweepSettingsUI extends JPanel
 				txtHackrfConnected.setText("HW "+(hardwareSendingData ? "connected":"disconnected"));
 			}
 		});;
+
+		hRF.isPlayingSpectrum().addListener((playing) -> SwingUtilities.invokeLater(this::updateReplayControlState));
+		hRF.isRecordedSpectrum().addListener((recording) -> SwingUtilities.invokeLater(this::updateReplayControlState));
+		updateReplayControlState();
 		
+	}
+
+	private void updateReplayControlState() {
+		boolean playingSpectrum = hRF.isPlayingSpectrum().getValue();
+		setLiveControlsEnabled(!playingSpectrum);
+		btnPlaySpectrum.setEnabled(playingSpectrum || !hRF.isRecordedSpectrum().getValue());
+	}
+
+	private void setLiveControlsEnabled(boolean enabled) {
+		Component[] liveOnlyControls = {
+				frequencySelectorStart,
+				frequencySelectorEnd,
+				button_minus,
+				button_plus,
+				textFieldFreqRange,
+				comboBoxFrequencyPresets,
+				btnSavePreset,
+				btnReset,
+				spinnerFFTBinHz,
+				spinner_FrequencyShift,
+				sliderGain,
+				sliderGainLNA,
+				sliderGainVGA,
+				chckbxAntennaLNA,
+				chckbxAntennaPower,
+				chckbxRemoveSpurs,
+				slider_AmplitudeOffset,
+				slider_PowerFluxCal,
+				spinnerAvgIterations,
+				spinnerLogDetail,
+				spinnerSpectrumRecordFrameRate,
+				btnRecSpectrum
+		};
+		for (Component component : liveOnlyControls) {
+			setComponentTreeEnabled(component, enabled);
+		}
+	}
+
+	private void setComponentTreeEnabled(Component component, boolean enabled) {
+		if (component == null)
+			return;
+		component.setEnabled(enabled);
+		if (component instanceof Container) {
+			Component[] children = ((Container) component).getComponents();
+			for (Component child : children) {
+				setComponentTreeEnabled(child, enabled);
+			}
+		}
 	}
 
 	private void updateMarkerCountVisibility() {

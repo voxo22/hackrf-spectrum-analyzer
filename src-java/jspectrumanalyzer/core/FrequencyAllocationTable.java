@@ -12,6 +12,7 @@ import java.awt.geom.Rectangle2D.Float;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Objects;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
@@ -37,6 +38,21 @@ public class FrequencyAllocationTable {
 	@Override
 	public String toString() {
 		return area;
+	}
+
+	@Override
+	public boolean equals(Object obj) {
+		if (this == obj)
+			return true;
+		if (!(obj instanceof FrequencyAllocationTable))
+			return false;
+		FrequencyAllocationTable other = (FrequencyAllocationTable) obj;
+		return Objects.equals(area, other.area);
+	}
+
+	@Override
+	public int hashCode() {
+		return Objects.hash(area);
 	}
 	
 	public ArrayList<FrequencyBand> getFrequencyBands(long startHz, long endHz){

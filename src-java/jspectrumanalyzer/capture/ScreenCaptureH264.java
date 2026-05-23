@@ -38,7 +38,7 @@ public class ScreenCaptureH264 {
 
 		this.startCaptureNano	= System.nanoTime();
 		frameIIntervalMS = (long) (1000/fps);
-		if(area.equals("SPEC")) //record video of spectrum
+		if(area.equals("SPECTR")) //record video of spectrum
 		{
 			switch(height) {
 			case 360: fheight = 570; break;
@@ -47,7 +47,7 @@ public class ScreenCaptureH264 {
 			}
 			frame.setMinimumSize(new Dimension(width + 230, fheight));			
 		}
-		else if(area.equals("SP+W")) //record video of spectrum & waterfall
+		else if(area.equals("SPEC+WF")) //record video of spectrum & waterfall
 		{
 			frame.setMinimumSize(new Dimension(width + 230, height));
 		}

@@ -10,4 +10,5 @@
 /res
 /lib/hackrf-sweep-jna.jar
 **.jrf
+**.hsr
 hackrf-sweep.ini

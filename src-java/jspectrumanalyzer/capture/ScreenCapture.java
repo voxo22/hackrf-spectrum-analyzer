@@ -42,7 +42,7 @@ public class ScreenCapture {
 
 		this.startCaptureTS	= System.currentTimeMillis()+initSecs*1000L;
 		frameIIntervalMS = 1000/fps;
-		if(area.equals("SPEC")) //record video of spectrum
+		if(area.equals("SPECTR")) //record video of spectrum
 		{
 			switch(height) {
 			case 360: fheight = 570; break;
@@ -51,7 +51,7 @@ public class ScreenCapture {
 			}
 			frame.setMinimumSize(new Dimension(width + 230, fheight));			
 		}
-		else if(area.equals("SP+W")) //record video of spectrum & waterfall
+		else if(area.equals("SPEC+WF")) //record video of spectrum & waterfall
 		{
 			frame.setMinimumSize(new Dimension(width + 230, height));
 		}

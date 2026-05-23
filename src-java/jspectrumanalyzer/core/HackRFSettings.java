@@ -83,10 +83,14 @@ public interface HackRFSettings {
 	public ModelValue<String> getVideoFormat();
 	
 	public ModelValue<String> getparamFreqRange();
+
+	public ModelValue<String> getDisplayFreqRange();
 	
 	public ModelValueInt getVideoResolution();
 	
 	public ModelValueInt getVideoFrameRate();
+
+	public ModelValue<String> getSpectrumRecordFrameRate();
 	
 	public ModelValueInt getGainVGA();
 
@@ -95,6 +99,10 @@ public interface HackRFSettings {
 	public ModelValueBoolean isRecordedVideo();
 	
 	public ModelValueBoolean isRecordedData();
+
+	public ModelValueBoolean isRecordedSpectrum();
+
+	public ModelValueBoolean isPlayingSpectrum();
 	
 	public ModelValueBoolean isChartsRealtimeVisible();
 	

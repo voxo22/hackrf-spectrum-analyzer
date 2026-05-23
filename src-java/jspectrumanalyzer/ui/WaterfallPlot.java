@@ -14,6 +14,7 @@ import java.awt.event.MouseMotionAdapter;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.util.Arrays;
+import java.util.function.Consumer;
 
 import javax.swing.JPanel;
 
@@ -52,6 +53,10 @@ public class WaterfallPlot extends JPanel {
 	private int[]			rangePairs				= null;
 	private double			compressedTotalLength	= 0;
 	private int				wfFreqShift			= 0;
+	private boolean			playbackVisible			= false;
+	private long			playbackPositionMillis	= 0;
+	private long			playbackDurationMillis	= 0;
+	private Consumer<Double>	playbackSeekListener	= null;
 
 	public WaterfallPlot(ChartPanel chartPanel, int maxHeight) {
 		setPreferredSize(new Dimension(100, 200));
@@ -91,6 +96,18 @@ public class WaterfallPlot extends JPanel {
 			}
 		});
 		addMouseListener(new MouseAdapter() {
+			@Override
+			public void mouseClicked(MouseEvent e) {
+				if (!playbackVisible || playbackSeekListener == null)
+					return;
+				if (e.getX() < chartXOffset || e.getX() > chartXOffset + chartWidth)
+					return;
+				if (e.getY() < 0 || e.getY() > 32)
+					return;
+				double fraction = (e.getX() - chartXOffset) / (double) chartWidth;
+				playbackSeekListener.accept(Math.min(1d, Math.max(0d, fraction)));
+			}
+
 			@Override
 			public void mouseExited(MouseEvent e) {
 				displayMarker = false;
@@ -294,6 +311,17 @@ public class WaterfallPlot extends JPanel {
 	    repaint();
 	}
 
+	public void setPlaybackStatus(boolean visible, long positionMillis, long durationMillis) {
+		this.playbackVisible = visible;
+		this.playbackPositionMillis = positionMillis;
+		this.playbackDurationMillis = durationMillis;
+		repaint();
+	}
+
+	public void setPlaybackSeekListener(Consumer<Double> playbackSeekListener) {
+		this.playbackSeekListener = playbackSeekListener;
+	}
+
 
 	public synchronized void setHistorySize(int historyInPixels) {
 		BufferedImage bufferedImages[] = new BufferedImage[2];
@@ -409,6 +437,10 @@ public class WaterfallPlot extends JPanel {
 			g.drawLine(displayMarkerX, 0, displayMarkerX, h);
 			g.drawString(String.format("%.1f MHz", displayMarkerFrequency / 1000000.0), displayMarkerX + 5, h / 2);
 		} //finish marker 
+
+		if (playbackVisible) {
+			drawPlaybackStatus(g);
+		}
 /*
 		g.setColor(Color.white);
 		if (stringBounds == null)
@@ -475,6 +507,36 @@ public class WaterfallPlot extends JPanel {
 		long drawingTime	= System.nanoTime()-drawStart;
 		drawingTimeSum	+= drawingTime;
 		drawingCounter++;
+	}
+
+	private void drawPlaybackStatus(Graphics2D g) {
+		int x = chartXOffset;
+		int y = 5;
+		int w = chartWidth;
+		int h = 8;
+		long duration = playbackDurationMillis;
+		long position = playbackPositionMillis;
+		double progress = duration <= 0 ? 0 : Math.min(1d, Math.max(0d, position / (double) duration));
+		g.setColor(new Color(0, 0, 0, 150));
+		g.fillRect(x - 1, y - 1, w + 2, h + 2);
+		g.setColor(new Color(70, 70, 70, 210));
+		g.fillRect(x, y, w, h);
+		g.setColor(new Color(0x4FAF4F));
+		g.fillRect(x, y, (int) Math.round(w * progress), h);
+		g.setColor(Color.WHITE);
+		g.drawString("PLAY " + formatMillis(position) + " / " + formatMillis(duration), x, y + h + 14);
+	}
+
+	private String formatMillis(long millis) {
+		if (millis < 0)
+			millis = 0;
+		long totalSeconds = millis / 1000;
+		long seconds = totalSeconds % 60;
+		long minutes = (totalSeconds / 60) % 60;
+		long hours = totalSeconds / 3600;
+		if (hours > 0)
+			return String.format("%d:%02d:%02d", hours, minutes, seconds);
+		return String.format("%02d:%02d", minutes, seconds);
 	}
 	private volatile long drawingTimeSum	= 0;
 	private volatile int drawingCounter	= 0;
