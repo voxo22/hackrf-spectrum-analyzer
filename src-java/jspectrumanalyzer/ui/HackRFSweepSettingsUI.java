@@ -97,6 +97,7 @@ public class HackRFSweepSettingsUI extends JPanel
 	private JCheckBox chckbxAntennaLNA;
 	//private JComboBox<BigDecimal> comboBoxLineThickness;
 	private JSpinner spinnerLineThickness;
+	private JCheckBox checkBoxSpectrumSpline;
 	private JCheckBox checkBoxPersistentDisplay;
 	private JCheckBox checkBoxWaterfallEnabled;
 	private JCheckBox checkBoxInfoBoxEnabled;
@@ -617,6 +618,7 @@ public class HackRFSweepSettingsUI extends JPanel
 					hRF.getMarkerCount().setValue(1);
 					hRF.isSpurRemoval().setValue(false);
 					hRF.getSpectrumLineThickness().setValue(new BigDecimal("1"));
+					hRF.isSpectrumSpline().setValue(false);
 					// default waterfall palette: start -110 dB, size 65 dB
 					hRF.getSpectrumPaletteSize().setValue(65);
 					hRF.getSpectrumPaletteStart().setValue(-110);
@@ -636,6 +638,12 @@ public class HackRFSweepSettingsUI extends JPanel
 				});
 			});
 			tab2.add(btnReset, "cell 0 0,alignx left");
+
+			checkBoxSpectrumSpline = new JCheckBox("Spline ");
+			checkBoxSpectrumSpline.setHorizontalTextPosition(SwingConstants.TRAILING);
+			checkBoxSpectrumSpline.setForeground(Color.WHITE);
+			checkBoxSpectrumSpline.setBackground(Color.BLACK);
+			tab2.add(checkBoxSpectrumSpline, "cell 0 1,alignx left");
 
 			JLabel lblSpectrLineThickness = new JLabel("Lines Thickness ");
 			lblSpectrLineThickness.setForeground(Color.WHITE);
@@ -1029,6 +1037,7 @@ public class HackRFSweepSettingsUI extends JPanel
 
 		//new MVCController(comboBoxLineThickness, hRF.getSpectrumLineThickness());
 		new MVCController(spinnerLineThickness, hRF.getSpectrumLineThickness(), val -> new BigDecimal (val.toString()), val -> val.toString());
+		new MVCController(checkBoxSpectrumSpline, hRF.isSpectrumSpline());
 		
 		new MVCController(checkBoxPersistentDisplay, hRF.isPersistentDisplayVisible());
 		
@@ -1109,7 +1118,6 @@ public class HackRFSweepSettingsUI extends JPanel
 				sliderGainVGA,
 				chckbxAntennaLNA,
 				chckbxAntennaPower,
-				chckbxRemoveSpurs,
 				slider_AmplitudeOffset,
 				slider_PowerFluxCal,
 				spinnerAvgIterations,

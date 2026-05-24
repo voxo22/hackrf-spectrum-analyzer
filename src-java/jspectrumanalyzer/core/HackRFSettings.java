@@ -75,6 +75,8 @@ public interface HackRFSettings {
 	public ModelValue<FrequencyAllocationTable> getFrequencyAllocationTable();
 
 	public ModelValue<BigDecimal> getSpectrumLineThickness();
+
+	public ModelValueBoolean isSpectrumSpline();
 	
 	public ModelValue<String> getLogDetail();
 	

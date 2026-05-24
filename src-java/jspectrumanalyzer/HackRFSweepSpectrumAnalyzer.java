@@ -67,7 +67,7 @@ import org.jfree.chart.plot.PlotOrientation;
 import org.jfree.chart.plot.ValueMarker;
 import org.jfree.chart.plot.XYPlot;
 import org.jfree.chart.renderer.xy.XYLineAndShapeRenderer;
-//import org.jfree.chart.renderer.xy.XYSplineRenderer;
+import org.jfree.chart.renderer.xy.XYSplineRenderer;
 import org.jfree.chart.title.TextTitle;
 import org.jfree.data.Range;
 import org.jfree.data.xy.XYSeries;
@@ -295,6 +295,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private ModelValueInt							parameterMarkerCount				= new ModelValueInt("Marker Count", 1, 1, 1, 5);
 	private ModelValueBoolean 						parameterDebugDisplay				= new ModelValueBoolean("Debug", false);
 	private ModelValue<BigDecimal>					parameterSpectrumLineThickness		= new ModelValue<>("Spectrum Line Thickness", new BigDecimal("1"));
+	private ModelValueBoolean						parameterSpectrumSpline				= new ModelValueBoolean("Spectrum Spline", false);
 	private ModelValueInt							parameterSpectrumPaletteSize		= new ModelValueInt("Palette Size", 0);
 	private ModelValueInt							parameterSpectrumPaletteStart		= new ModelValueInt("Palette Start", 0);
 	private ModelValueInt							parameterAmplitudeOffset			= new ModelValueInt("Amplitude Offset", 0);
@@ -575,6 +576,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			if (p.getProperty("MarkerCount") != null) parameterMarkerCount.setValue(clampMarkerCount(Integer.parseInt(p.getProperty("MarkerCount"))));
 			if (p.getProperty("SpurRemoval") != null) parameterSpurRemoval.setValue(Boolean.parseBoolean(p.getProperty("SpurRemoval")));
 			if (p.getProperty("SpectrumLineThickness") != null) parameterSpectrumLineThickness.setValue(new java.math.BigDecimal(p.getProperty("SpectrumLineThickness")));
+			if (p.getProperty("SpectrumSpline") != null) parameterSpectrumSpline.setValue(Boolean.parseBoolean(p.getProperty("SpectrumSpline")));
 			if (p.getProperty("SpectrumPaletteSize") != null) parameterSpectrumPaletteSize.setValue(Integer.parseInt(p.getProperty("SpectrumPaletteSize")));
 			if (p.getProperty("SpectrumPaletteStart") != null) parameterSpectrumPaletteStart.setValue(Integer.parseInt(p.getProperty("SpectrumPaletteStart")));
 			if (p.getProperty("AmplitudeOffset") != null) parameterAmplitudeOffset.setValue(Integer.parseInt(p.getProperty("AmplitudeOffset")));
@@ -632,6 +634,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			p.setProperty("MarkerCount", Integer.toString(parameterMarkerCount.getValue()));
 			p.setProperty("SpurRemoval", Boolean.toString(parameterSpurRemoval.getValue()));
 			p.setProperty("SpectrumLineThickness", parameterSpectrumLineThickness.getValue().toString());
+			p.setProperty("SpectrumSpline", Boolean.toString(parameterSpectrumSpline.getValue()));
 			p.setProperty("SpectrumPaletteSize", Integer.toString(parameterSpectrumPaletteSize.getValue()));
 			p.setProperty("SpectrumPaletteStart", Integer.toString(parameterSpectrumPaletteStart.getValue()));
 			p.setProperty("AmplitudeOffset", Integer.toString(parameterAmplitudeOffset.getValue()));
@@ -756,6 +759,11 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	@Override
 	public ModelValue<BigDecimal> getSpectrumLineThickness() {
 		return parameterSpectrumLineThickness;
+	}
+
+	@Override
+	public ModelValueBoolean isSpectrumSpline() {
+		return parameterSpectrumSpline;
 	}
 	
 	@Override
@@ -1449,7 +1457,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						/**
 						 * filter first
 						 */
-						if (parameterSpurRemoval.getValue() && activePlaybackHeader == null) {
+						if (parameterSpurRemoval.getValue()) {
 							long start	= System.nanoTime();
 							spurFilter.filterDataset();
 							synchronized (perfWatch) {
@@ -1759,6 +1767,32 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		threadHackrfSweep.start();
 	}
 
+	private XYLineAndShapeRenderer createSpectrumRenderer(boolean spline) {
+		XYLineAndShapeRenderer renderer = spline ? new XYSplineRenderer() : new XYLineAndShapeRenderer();
+		configureSpectrumRenderer(renderer);
+		return renderer;
+	}
+
+	private void configureSpectrumRenderer(XYLineAndShapeRenderer renderer) {
+		renderer.setBaseShapesVisible(false);
+		renderer.setBaseStroke(new BasicStroke(parameterSpectrumLineThickness.getValue().floatValue()));
+		renderer.setAutoPopulateSeriesStroke(false);
+		renderer.setAutoPopulateSeriesPaint(false);
+		renderer.setSeriesPaint(0, colors.cgreen);  //peak
+		renderer.setSeriesPaint(1, colors.cyellow);  //avg
+		renderer.setSeriesPaint(2, colors.cred);  //maxhold
+		renderer.setSeriesPaint(3, colors.blue);  //minhold
+		renderer.setSeriesPaint(4, colors.cwhite);  //realtime
+		renderer.setBasePaint(Color.white);
+	}
+
+	private void setSpectrumSplineRenderer(boolean spline) {
+		SwingUtilities.invokeLater(() -> {
+			chartLineRenderer = createSpectrumRenderer(spline);
+			chart.getXYPlot().setRenderer(chartLineRenderer);
+		});
+	}
+
 	private void setupChart() {
 		int axisWidthLeft = 60;
 		int axisWidthRight = 40;
@@ -1770,28 +1804,14 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		XYPlot plot = chart.getXYPlot();
 		NumberAxis domainAxis = ((NumberAxis) plot.getDomainAxis());
 		NumberAxis rangeAxis = ((NumberAxis) plot.getRangeAxis());
-		//chartLineRenderer = new XYSplineRenderer();
-		chartLineRenderer = new XYLineAndShapeRenderer();
-		//chartLineRenderer = new XYSplineRenderer(); //spline
-		chartLineRenderer.setBaseShapesVisible(false);
-		//chartLineRenderer.setBaseLinesVisible(true);
-		//chartLineRenderer.setSeriesShapesFilled(0,false);
-		//chartLineRenderer.setUseOutlinePaint(false);
-		chartLineRenderer.setBaseStroke(new BasicStroke(parameterSpectrumLineThickness.getValue().floatValue()));
+
+		chartLineRenderer = createSpectrumRenderer(parameterSpectrumSpline.getValue());
 
 		rangeAxis.setAutoRange(false);
 		rangeAxis.setRange(-100, -10); //amplitude range
 		rangeAxis.setTickUnit(new NumberTickUnit(10, new DecimalFormat("###")));
 
 		domainAxis.setNumberFormatOverride(new DecimalFormat(" #.### "));
-
-		chartLineRenderer.setAutoPopulateSeriesStroke(false);
-		chartLineRenderer.setAutoPopulateSeriesPaint(false);
-		chartLineRenderer.setSeriesPaint(0, colors.cgreen);  //peak
-		chartLineRenderer.setSeriesPaint(1, colors.cyellow);  //avg
-		chartLineRenderer.setSeriesPaint(2, colors.cred);  //maxhold
-		chartLineRenderer.setSeriesPaint(3, colors.blue);  //minhold
-		chartLineRenderer.setSeriesPaint(4, colors.cwhite);  //realtime
 
 		plot.setDomainGridlinesVisible(true);
 		plot.setRenderer(chartLineRenderer);
@@ -1821,7 +1841,6 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		domainAxis.setTickLabelFont(labelFont);
 		domainAxis.setLabelPaint(colors.cwhite);
 		domainAxis.setTickLabelPaint(colors.cwhite);
-		chartLineRenderer.setBasePaint(Color.white);
 		plot.setBackgroundPaint(colors.palette4);
 		chart.setBackgroundPaint(colors.palette4);
 		//plot.setDomainPannable(true); //pan with CTRL key
@@ -2592,6 +2611,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		parameterSpectrumLineThickness.addListener((thickness) -> {
 			SwingUtilities.invokeLater(() -> chartLineRenderer.setBaseStroke(new BasicStroke(thickness.floatValue())));
 		});
+		parameterSpectrumSpline.addListener((Boolean spline) -> setSpectrumSplineRenderer(spline));
 		
 		parameterPersistentDisplayPersTime.addListener((time) -> {
 			persistentDisplay.setPersistenceTime(time);
