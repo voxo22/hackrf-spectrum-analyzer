@@ -2,3 +2,13 @@
 /*.webm
 /*.cmd
 /*.exe
+/.externalToolBuilders
+/.settings
+/bin
+/build
+/obj
+/res
+/lib/hackrf-sweep-jna.jar
+**.jrf
+**.hsr
+hackrf-sweep.ini
