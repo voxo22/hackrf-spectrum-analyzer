@@ -43,10 +43,12 @@ import java.util.concurrent.locks.ReentrantLock;
 import javax.swing.ImageIcon;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JSplitPane;
 import javax.swing.SwingUtilities;
+import javax.swing.KeyStroke;
 import javax.swing.UIManager;
 
 import org.jfree.chart.ChartFactory;
@@ -460,6 +462,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		uiFrame.add(splitPanePanel, BorderLayout.CENTER);
 		uiFrame.setMinimumSize(new Dimension(pSizeX, pSizeY));
 		uiFrame.add(settingsPanel, BorderLayout.EAST);
+		setupRecordingEscapeShortcut();
 		try {
 			uiFrame.setIconImage(new ImageIcon("program.png").getImage());
 		} catch (Exception e) {
@@ -946,6 +949,34 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		});
 	}
 
+	private void setupRecordingEscapeShortcut() {
+		uiFrame.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+				.put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "stopActiveRecordingsAndPlayback");
+		uiFrame.getRootPane().getActionMap().put("stopActiveRecordingsAndPlayback", new javax.swing.AbstractAction() {
+			private static final long serialVersionUID = -4196689206235301109L;
+
+			@Override
+			public void actionPerformed(java.awt.event.ActionEvent e) {
+				stopActiveRecordingsAndPlayback();
+			}
+		});
+	}
+
+	private void stopActiveRecordingsAndPlayback() {
+		if (parameterIsRecordedVideo.getValue()) {
+			parameterIsRecordedVideo.setValue(false);
+		}
+		if (parameterIsRecordedData.getValue()) {
+			parameterIsRecordedData.setValue(false);
+		}
+		if (parameterIsRecordedSpectrum.getValue()) {
+			parameterIsRecordedSpectrum.setValue(false);
+		}
+		if (parameterIsPlayingSpectrum.getValue()) {
+			parameterIsPlayingSpectrum.setValue(false);
+		}
+	}
+
 	private void fireHardwareStateChanged(boolean sendingData) {
 		if (this.flagIsHWSendingData != sendingData) {
 			this.flagIsHWSendingData = sendingData;
@@ -984,24 +1015,22 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			}
 			if(parameterVideoResolution.getValue() == 1080 && !parameterVideoArea.getValue().equals("FULLSCR"))
 			{
-				videoWidth = 1280; videoHeight = 720;
+				//videoWidth = 1280; videoHeight = 720;
 			}
 
 			if(parameterVideoFormat.getValue().equals("GIF"))
 			{
 				gifCap = new ScreenCapture(uiFrame, 1, 0, parameterVideoFrameRate.getValue(), videoWidth, videoHeight,
-					parameterVideoArea.getValue(), new File("# "+parameterVideoArea.getValue() + " "
-							+ (getFreq().getStartMHz()+parameterFreqShift.getValue()) + "-"
-							+ (getFreq().getEndMHz()+parameterFreqShift.getValue()) + " MHz "
+					parameterVideoArea.getValue(), new File("# VIDEO "
+							+ formatRecordingRangeName() + " MHz "
 							+ dateStamp.format(dStampFormat) + ".gif")
 					);
 			}
 			else
 			{
 				h264Cap = new ScreenCaptureH264(uiFrame, 1, 0, parameterVideoFrameRate.getValue(), videoWidth, videoHeight,
-					parameterVideoArea.getValue(), new String("# " + parameterVideoArea.getValue() + " "
-							+ (getFreq().getStartMHz()+parameterFreqShift.getValue()) + "-"
-							+ (getFreq().getEndMHz()+parameterFreqShift.getValue()) + " MHz "
+					parameterVideoArea.getValue(), new String("# VIDEO "
+							+ formatRecordingRangeName() + " MHz "
 							+ dateStamp.format(dStampFormat) + ".mp4")
 					);
 			}
@@ -1024,15 +1053,27 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			DateTimeFormatter dStampFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm");
 			LocalDateTime dateStamp = LocalDateTime.now();
 			//System.out.println(frequencyStart+" "+fftBinWidthHz+" "+signalPowerdBm);
-			dataCap = new FileWriter("# DATA " + (getFreq().getStartMHz() + parameterFreqShift.getValue()) + "-" +
-					(getFreq().getEndMHz() + parameterFreqShift.getValue()) + " MHz "+dateStamp.format(dStampFormat) + ".csv");
+			dataCap = new FileWriter("# STATS " + formatRecordingRangeName() + " MHz "
+					+ dateStamp.format(dStampFormat) + ".csv");
 			dataCap.write("Timestamp,Total Spectrum Power [dBm],Power Flux Density [µW/m²],Max Amplitude [dBm],Frequency [MHz]\r\n");
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
 		else
 		{
+			closeDataCapture();
+		}
+	}
 
+	private void closeDataCapture() {
+		FileWriter cap = dataCap;
+		dataCap = null;
+		if (cap != null) {
+			try {
+				cap.close();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
 		}
 	}
 
@@ -1066,7 +1107,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			if (spectrumCap == null) {
 				DateTimeFormatter dStampFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss");
 				LocalDateTime dateStamp = LocalDateTime.now();
-				File file = new File("# SPECTRUM " + formatSpectrumRecordingRangeName(spectrum) + " MHz "
+				File file = new File("# SPECTRUM " + formatRecordingRangeName(spectrum) + " MHz "
 						+ dateStamp.format(dStampFormat) + ".hsr");
 				spectrumCap = new SpectrumRecording(file, spectrum, parameterFreqRange.getValue());
 			}
@@ -1133,6 +1174,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 	private void playSpectrumRecording(File file) {
 		boolean restartLive = true;
+		FrequencyRange liveFrequencyRangeBeforePlayback = getFreq();
 		try {
 			stopHackrfSweep();
 			setChartLiveGesturesEnabled(false);
@@ -1149,6 +1191,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		} catch (Exception e) {
 			e.printStackTrace();
 		} finally {
+			parameterFrequency.setValue(liveFrequencyRangeBeforePlayback);
 			playbackHeader = null;
 			parameterDisplayFreqRange.setValue(parameterFreqRange.getValue());
 			redrawFrequencySpectrumTable();
@@ -1180,6 +1223,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		try (SpectrumRecording.Reader reader = new SpectrumRecording.Reader(file)) {
 			playbackHeader = reader.getHeader();
 			parameterDisplayFreqRange.setValue(getActiveRangesForDisplay());
+			updateFrequencySelectorForPlayback(playbackHeader);
 			playbackCurrentEpochMillis = playbackHeader.startEpochMillis <= 0 ? 0 : playbackHeader.startEpochMillis + startOffsetMillis;
 			redrawFrequencySpectrumTable();
 			fireHardwareStateChanged(true);
@@ -1301,6 +1345,28 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		if (header.ranges == null || header.ranges.trim().isEmpty())
 			return header.freqStartMHz + "-" + header.freqStopMHz;
 		return header.ranges;
+	}
+
+	private void updateFrequencySelectorForPlayback(SpectrumRecording.Header header) {
+		if (header == null)
+			return;
+		FrequencyRange playbackRange = getFrequencyBoundsForDisplayRange(header.ranges, header.freqStartMHz,
+				header.freqStopMHz);
+		parameterFrequency.setValue(playbackRange);
+	}
+
+	private FrequencyRange getFrequencyBoundsForDisplayRange(String ranges, int fallbackStartMHz, int fallbackStopMHz) {
+		int[] pairs = parseRangePairs(ranges);
+		if (pairs == null || pairs.length < 2)
+			return new FrequencyRange(fallbackStartMHz, fallbackStopMHz);
+
+		int minMHz = Integer.MAX_VALUE;
+		int maxMHz = Integer.MIN_VALUE;
+		for (int i = 0; i < pairs.length; i += 2) {
+			minMHz = Math.min(minMHz, Math.min(pairs[i], pairs[i + 1]));
+			maxMHz = Math.max(maxMHz, Math.max(pairs[i], pairs[i + 1]));
+		}
+		return new FrequencyRange(minMHz, maxMHz);
 	}
 
 	private int getActiveFreqShiftForDisplay() {
@@ -1488,7 +1554,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 							markerAmplitudePeak = spp[1];
 							markersPeak = datasetSpectrum.calculatePeakMarkers(parameterMarkerCount.getValue());
 					        
-							if(parameterIsRecordedData.getValue()) {
+							if(parameterIsRecordedData.getValue() && dataCap != null) {
 								dcap = true;
 								if(!dt1.equals(dt2)) {
 												dataCap.write(dt1 + ","
@@ -1505,7 +1571,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 								if(dcap == true)
 								{
 									dcap = false;
-									dataCap.close();
+									closeDataCapture();
 								}
 							}
 						}
@@ -1717,9 +1783,16 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		}
 	}
 
-	private String formatSpectrumRecordingRangeName(DatasetSpectrumPeak spectrum) {
+	private String formatRecordingRangeName() {
+		return formatRecordingRangeName(getFreq().getStartMHz(), getFreq().getEndMHz(), parameterFreqShift.getValue());
+	}
+
+	private String formatRecordingRangeName(DatasetSpectrumPeak spectrum) {
+		return formatRecordingRangeName(spectrum.getFreqStartMHz(), spectrum.getFreqStopMHz(), spectrum.getFreqShift());
+	}
+
+	private String formatRecordingRangeName(int fallbackStartMHz, int fallbackStopMHz, int shift) {
 		String ranges = parameterFreqRange.getValue();
-		int shift = spectrum.getFreqShift();
 		int[] pairs = parseRangePairs(ranges);
 		if (pairs != null && pairs.length > 2) {
 			StringBuilder b = new StringBuilder();
@@ -1730,8 +1803,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			}
 			return b.toString();
 		}
-		return (spectrum.getFreqStartMHz() + spectrum.getFreqShift()) + "-"
-				+ (spectrum.getFreqStopMHz() + spectrum.getFreqShift());
+		return (fallbackStartMHz + shift) + "-" + (fallbackStopMHz + shift);
 	}
 
 	private boolean isReplayActive() {
