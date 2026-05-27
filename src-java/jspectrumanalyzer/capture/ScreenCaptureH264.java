@@ -12,6 +12,8 @@ import java.util.concurrent.TimeUnit;
 import com.xuggle.mediatool.IMediaWriter;
 import com.xuggle.mediatool.ToolFactory;
 import com.xuggle.xuggler.ICodec;
+import com.xuggle.xuggler.IPixelFormat;
+import com.xuggle.xuggler.IStreamCoder;
 
 /**
  * Class to capture a video of the whole JFrame into the H264 video, while capturing only when the view updates with the new data
@@ -47,6 +49,8 @@ public class ScreenCaptureH264 {
 		
 	    writer = ToolFactory.makeWriter(outputFile);
 	    writer.addVideoStream(0, 0, ICodec.ID.CODEC_ID_H264, width, height);
+	    IStreamCoder coder = writer.getContainer().getStream(0).getStreamCoder();
+	    coder.setPixelType(IPixelFormat.Type.YUV444P);
 	}
 
 	public void captureFrame(boolean rec) {
