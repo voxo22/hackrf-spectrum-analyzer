@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Font;
@@ -83,6 +84,9 @@ import org.jfree.ui.TextAnchor;
 
 import jspectrumanalyzer.capture.ScreenCapture;
 import jspectrumanalyzer.capture.ScreenCaptureH264;
+import jspectrumanalyzer.capture.SpectrumVideoRenderer;
+import jspectrumanalyzer.capture.SpectrumWaterfallVideoRenderer;
+import jspectrumanalyzer.capture.VideoFrameSource;
 import jspectrumanalyzer.core.DatasetSpectrumPeak;
 import jspectrumanalyzer.core.FFTBins;
 import jspectrumanalyzer.core.FrequencyAllocationTable;
@@ -326,6 +330,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private TextTitle								titleFreqBand						= new TextTitle("",	new Font("Dialog", Font.PLAIN, 11));
 	private RuntimePerformanceWatch					perfWatch							= new RuntimePerformanceWatch();
 	private JFrame									uiFrame;
+	private JPanel									spectrumWaterfallPanel;
 	private ValueMarker								waterfallPaletteEndMarker;
 	private ValueMarker								waterfallPaletteStartMarker;
 	private double									markerFrequencyPeak;
@@ -348,6 +353,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private volatile long							playbackDurationMillis				= 0;
 	private volatile long							playbackCurrentEpochMillis			= 0;
 	private volatile long							playbackSeekRequestMillis			= -1;
+	private volatile boolean						videoMouseCrossVisible				= false;
+	private volatile double							videoMouseCrossDomainMHz			= 0;
+	private volatile double							videoMouseCrossDisplayMHz			= 0;
+	private volatile double							videoMouseCrossDbm					= 0;
 	private float									fSlope;
     private float									fShift;
     private int										lastX;
@@ -449,17 +458,17 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		});
 		parameterDebugDisplay.callObservers();
 		
-		JPanel splitPanePanel	= new JPanel(new BorderLayout());
-		splitPanePanel.setBackground(Color.black);
-		splitPanePanel.add(splitPane, BorderLayout.CENTER);
-		splitPanePanel.add(labelMessages, BorderLayout.SOUTH);
+		spectrumWaterfallPanel	= new JPanel(new BorderLayout());
+		spectrumWaterfallPanel.setBackground(Color.black);
+		spectrumWaterfallPanel.add(splitPane, BorderLayout.CENTER);
+		spectrumWaterfallPanel.add(labelMessages, BorderLayout.SOUTH);
 
 		uiFrame = new JFrame();
 		uiFrame.setExtendedState(uiFrame.getExtendedState() | Frame.MAXIMIZED_BOTH);
 		uiFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 		uiFrame.setLayout(new BorderLayout());
 		uiFrame.setTitle("HackRF Spectrum Analyzer");
-		uiFrame.add(splitPanePanel, BorderLayout.CENTER);
+		uiFrame.add(spectrumWaterfallPanel, BorderLayout.CENTER);
 		uiFrame.setMinimumSize(new Dimension(pSizeX, pSizeY));
 		uiFrame.add(settingsPanel, BorderLayout.EAST);
 		setupRecordingEscapeShortcut();
@@ -999,11 +1008,6 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		int videoHeight = 0;
 		if(parameterIsRecordedVideo.getValue())
 		try {
-			uiFrame.dispose();
-			uiFrame.setVisible(false);
-			uiFrame.setUndecorated(true);
-			uiFrame.setVisible(true);
-			uiFrame.pack();
 			DateTimeFormatter dStampFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm");
 			LocalDateTime dateStamp = LocalDateTime.now();
 			switch (parameterVideoResolution.getValue())
@@ -1017,34 +1021,112 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			{
 				//videoWidth = 1280; videoHeight = 720;
 			}
+			VideoFrameSource videoFrameSource = getVideoFrameSource(parameterVideoArea.getValue());
+			Component videoSource = videoFrameSource == null ? getVideoCaptureSource(parameterVideoArea.getValue()) : null;
 
 			if(parameterVideoFormat.getValue().equals("GIF"))
 			{
-				gifCap = new ScreenCapture(uiFrame, 1, 0, parameterVideoFrameRate.getValue(), videoWidth, videoHeight,
-					parameterVideoArea.getValue(), new File("# VIDEO "
-							+ formatRecordingRangeName() + " MHz "
-							+ dateStamp.format(dStampFormat) + ".gif")
-					);
+				File outputFile = new File("# VIDEO "
+						+ formatRecordingRangeName() + " MHz "
+						+ dateStamp.format(dStampFormat) + ".gif");
+				if (videoFrameSource != null) {
+					gifCap = new ScreenCapture(videoFrameSource, 1, 0, parameterVideoFrameRate.getValue(), videoWidth,
+							videoHeight, parameterVideoArea.getValue(), outputFile);
+				} else {
+					gifCap = new ScreenCapture(videoSource, 1, 0, parameterVideoFrameRate.getValue(), videoWidth,
+							videoHeight, parameterVideoArea.getValue(), outputFile);
+				}
 			}
 			else
 			{
-				h264Cap = new ScreenCaptureH264(uiFrame, 1, 0, parameterVideoFrameRate.getValue(), videoWidth, videoHeight,
-					parameterVideoArea.getValue(), new String("# VIDEO "
-							+ formatRecordingRangeName() + " MHz "
-							+ dateStamp.format(dStampFormat) + ".mp4")
-					);
+				String outputFile = new String("# VIDEO "
+						+ formatRecordingRangeName() + " MHz "
+						+ dateStamp.format(dStampFormat) + ".mp4");
+				if (videoFrameSource != null) {
+					h264Cap = new ScreenCaptureH264(videoFrameSource, 1, 0, parameterVideoFrameRate.getValue(),
+							videoWidth, videoHeight, parameterVideoArea.getValue(), outputFile);
+				} else {
+					h264Cap = new ScreenCaptureH264(videoSource, 1, 0, parameterVideoFrameRate.getValue(), videoWidth,
+							videoHeight, parameterVideoArea.getValue(), outputFile);
+				}
 			}
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
-		else
-		{
-			uiFrame.dispose();
-			uiFrame.setVisible(false);
-			uiFrame.setUndecorated(false);
-			uiFrame.setVisible(true);
-			uiFrame.pack();
+	}
+
+	private VideoFrameSource getVideoFrameSource(String area) {
+		if ("SPECTR".equals(area)) {
+			return createSpectrumVideoRenderer();
 		}
+		if ("SPEC+WF".equals(area)) {
+			return new SpectrumWaterfallVideoRenderer(createSpectrumVideoRenderer(), waterfallPlot);
+		}
+		return null;
+	}
+
+	private SpectrumVideoRenderer createSpectrumVideoRenderer() {
+		return new SpectrumVideoRenderer(
+				() -> datasetSpectrum,
+				() -> parameterShowPeaks.getValue(),
+				() -> parameterShowAverage.getValue(),
+				() -> parameterShowMaxHold.getValue(),
+				() -> parameterShowHoldMarker.getValue(),
+				() -> parameterShowRealtime.getValue(),
+				() -> parameterSpectrumLineThickness.getValue().floatValue(),
+				() -> parameterDatestamp.getValue(),
+				() -> playbackHeader != null,
+				() -> playbackHeader == null && !parameterIsCapturingPaused.getValue()
+						&& parameterIsRecordedSpectrum.getValue(),
+				() -> videoMouseCrossVisible,
+				() -> formatVideoDatestamp(),
+				() -> getVideoStatusText(),
+				() -> String.format(new Locale("sk","SK"), "%.2f MHz", videoMouseCrossDisplayMHz),
+				() -> String.format(new Locale("sk","SK"), "%.1f dB", videoMouseCrossDbm),
+				() -> videoMouseCrossDomainMHz,
+				() -> videoMouseCrossDbm,
+				() -> markersPeak,
+				() -> markersMaxHold,
+				() -> imageFrequencyAllocationTableBands,
+				() -> parseRangePairs(getActiveRangesForDisplay()),
+				() -> waterfallPlot.getSpectrumPaletteStart(),
+				() -> waterfallPlot.getSpectrumPaletteSize(),
+				() -> "SPEC+WF".equals(parameterVideoArea.getValue()),
+				colors.cgreen,
+				colors.cyellow,
+				colors.cred,
+				colors.blue,
+				colors.clime,
+				colors.cpink,
+				colors.cwhite,
+				colors.cwhite,
+				colors.palette4,
+				Color.black);
+	}
+
+	private String formatVideoDatestamp() {
+		DateTimeFormatter dtFormat = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss");
+		long playbackTime = playbackCurrentEpochMillis;
+		if (playbackHeader != null && playbackTime > 0) {
+			return LocalDateTime.ofInstant(Instant.ofEpochMilli(playbackTime), ZoneId.systemDefault()).format(dtFormat);
+		}
+		return LocalDateTime.now().format(dtFormat);
+	}
+
+	private String getVideoStatusText() {
+		boolean paused = parameterIsCapturingPaused.getValue();
+		boolean replay = playbackHeader != null;
+		return replay ? (paused ? "REPLAY PAUSED" : "REPLAY") : (paused ? "LIVE PAUSED" : "LIVE");
+	}
+
+	private Component getVideoCaptureSource(String area) {
+		if ("SPECTR".equals(area)) {
+			return chartPanel;
+		}
+		if ("SPEC+WF".equals(area)) {
+			return spectrumWaterfallPanel;
+		}
+		return uiFrame.getContentPane();
 	}
 
 	private void startCaptureData() {
@@ -1594,6 +1676,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 								waterfallPlot.setStatusMessage(String.format("Total MinHold Power: %.1f dBm (≈ %s µW/m²)", mh[4], mh[5]).replace(',', '.'),2);
 							}
 						}
+						updateSpectrumMarkerData();
 						
 						/**
 						 * Update performance counters
@@ -1720,13 +1803,15 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 								
 								if(parameterShowPeaks.getValue() && parameterShowPeakMarker.getValue()) {
 									for (DatasetSpectrumPeak.SpectrumMarker marker : markersPeak) {
-										addSpectrumMarkerAnnotation(marker, colors.clime, markerLabelPlacements);
+										addSpectrumMarkerAnnotation(marker, colors.clime, markerLabelPlacements, pairsAdd,
+												activeFreqShift);
 									}
 								}
 
 								if(parameterShowMaxHold.getValue() && parameterShowHoldMarker.getValue()) {
 									for (DatasetSpectrumPeak.SpectrumMarker marker : markersMaxHold) {
-										addSpectrumMarkerAnnotation(marker, colors.cpink, markerLabelPlacements);
+										addSpectrumMarkerAnnotation(marker, colors.cpink, markerLabelPlacements, pairsAdd,
+												activeFreqShift);
 									}
 								}
 
@@ -1768,6 +1853,55 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		this.parameterGainLNA.setValue(lnaGain);
 		this.parameterGainVGA.setValue(vgaGain);
 		this.parameterGainTotal.setValue(lnaGain + vgaGain);
+	}
+
+	private void updateSpectrumMarkerData() {
+		if (datasetSpectrum == null)
+			return;
+		if (parameterShowPeaks.getValue() && parameterShowPeakMarker.getValue()) {
+			markersPeak = datasetSpectrum.calculatePeakMarkers(parameterMarkerCount.getValue());
+		} else {
+			markersPeak = new DatasetSpectrumPeak.SpectrumMarker[0];
+		}
+		if (parameterShowMaxHold.getValue() && parameterShowHoldMarker.getValue()) {
+			markersMaxHold = datasetSpectrum.calculateMaxHoldMarkers(parameterMarkerCount.getValue());
+		} else {
+			markersMaxHold = new DatasetSpectrumPeak.SpectrumMarker[0];
+		}
+	}
+
+	private void refreshSpectrumMarkerAnnotations() {
+		DatasetSpectrumPeak spectrum = datasetSpectrum;
+		if (spectrum == null)
+			return;
+		if (parameterShowPeaks.getValue()) {
+			spectrum.refreshPeakSpectrum();
+		}
+		if (parameterShowMaxHold.getValue()) {
+			spectrum.refreshMaxHoldSpectrum();
+			if (parameterShowHoldMarker.getValue()) {
+				spectrum.refreshMinHoldSpectrum();
+			}
+		}
+		updateSpectrumMarkerData();
+		final DatasetSpectrumPeak.SpectrumMarker[] peakMarkers = markersPeak;
+		final DatasetSpectrumPeak.SpectrumMarker[] maxHoldMarkers = markersMaxHold;
+		final int[] activePairs = parseRangePairs(getActiveRangesForDisplay());
+		final int activeShift = getActiveFreqShiftForDisplay();
+		SwingUtilities.invokeLater(() -> {
+			chart.getXYPlot().clearAnnotations();
+			ArrayList<MarkerLabelPlacement> markerLabelPlacements = new ArrayList<>();
+			if (parameterShowPeaks.getValue() && parameterShowPeakMarker.getValue()) {
+				for (DatasetSpectrumPeak.SpectrumMarker marker : peakMarkers) {
+					addSpectrumMarkerAnnotation(marker, colors.clime, markerLabelPlacements, activePairs, activeShift);
+				}
+			}
+			if (parameterShowMaxHold.getValue() && parameterShowHoldMarker.getValue()) {
+				for (DatasetSpectrumPeak.SpectrumMarker marker : maxHoldMarkers) {
+					addSpectrumMarkerAnnotation(marker, colors.cpink, markerLabelPlacements, activePairs, activeShift);
+				}
+			}
+		});
 	}
 
 	/**
@@ -2147,6 +2281,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				}
 				freqMarker.setValue(crosshairDomain);
 				freqMarker.setLabel(String.format(new Locale("sk","SK"), "%.2f MHz", displayFreqMHz));
+				videoMouseCrossVisible = subplotArea.contains(x, y);
+				videoMouseCrossDomainMHz = displayFreqMHz;
+				videoMouseCrossDisplayMHz = displayFreqMHz;
+				videoMouseCrossDbm = crosshairRange;
 				// determine label side based on mouse position within plot area (works with freqShift and compressed axis)
 				double relPos = 0.5;
 				try {
@@ -2192,6 +2330,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				chart.getXYPlot().clearDomainMarkers();
 				chart.getXYPlot().clearRangeMarkers();
 				titleFreqBand.setText("");
+				videoMouseCrossVisible = false;
 			}
 			
             @Override
@@ -2458,11 +2597,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					}
 
 	private void addSpectrumMarkerAnnotation(DatasetSpectrumPeak.SpectrumMarker marker, Color color,
-			ArrayList<MarkerLabelPlacement> placements) {
-		int[] pairsForAnnot = parseRangePairs(parameterFreqRange.getValue());
+			ArrayList<MarkerLabelPlacement> placements, int[] pairsForAnnot, int freqShift) {
 		double pointerX = marker.frequencyMHz;
 		if (pairsForAnnot != null && pairsForAnnot.length > 2) {
-			double origNoShift = marker.frequencyMHz - parameterFreqShift.getValue();
+			double origNoShift = marker.frequencyMHz - freqShift;
 			pointerX = mapRealToCompressed(origNoShift, pairsForAnnot);
 		}
 
@@ -2604,6 +2742,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			if (p != null) {
 				p.resetPeaks();
 			}
+			refreshSpectrumMarkerAnnotations();
 		});
 		parameterShowAverage.addListener(() -> {
 			DatasetSpectrumPeak p = datasetSpectrum;
@@ -2616,6 +2755,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			if (p != null) {
 				p.resetMaxHold();
 			}
+			refreshSpectrumMarkerAnnotations();
 		});
 		
 		parameterShowHoldMarker.addListener(() -> {
@@ -2623,7 +2763,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			if (p != null) {
 				p.resetMinHold();
 			}
+			refreshSpectrumMarkerAnnotations();
 		});
+		parameterShowPeakMarker.addListener(this::refreshSpectrumMarkerAnnotations);
+		parameterMarkerCount.addListener(this::refreshSpectrumMarkerAnnotations);
 		
 		parameterInfoBoxVisible.setValue((boolean) waterfallPlot.isInfoBoxVisible());
 		parameterInfoBoxVisible.addListener(e -> {

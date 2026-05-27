@@ -1,14 +1,11 @@
 package jspectrumanalyzer.capture;
 
-import java.awt.Dimension;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
+import java.awt.Component;
 import java.awt.image.BufferedImage;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import javax.swing.JFrame;
 import javax.swing.SwingUtilities;
 import java.util.concurrent.TimeUnit;
 
@@ -20,42 +17,33 @@ import com.xuggle.xuggler.ICodec;
  * Class to capture a video of the whole JFrame into the H264 video, while capturing only when the view updates with the new data
  */
 public class ScreenCaptureH264 {
-	private final JFrame frame;
+	private final Component source;
+	private final VideoFrameSource frameSource;
 	private final int width, height;
 	private long startCaptureNano = 0;
 	private long startCaptureTS	= 0;
 	private long lastFrameTS	= 0;
 	private int framesCaptured	= 0;
-	private int fheight = 0;
 	private ExecutorService saveThread	= Executors.newSingleThreadExecutor();
 	private long frameIIntervalMS;
 	private IMediaWriter writer;
 	
-	public ScreenCaptureH264(JFrame frame, int initSecs, int captureSecs, float fps, int width, int height, String area, String outputFile) throws FileNotFoundException, IOException {
-		this.frame	= frame;
+	public ScreenCaptureH264(Component source, int initSecs, int captureSecs, float fps, int width, int height, String area, String outputFile) throws FileNotFoundException, IOException {
+		this(source, null, initSecs, captureSecs, fps, width, height, area, outputFile);
+	}
+
+	public ScreenCaptureH264(VideoFrameSource frameSource, int initSecs, int captureSecs, float fps, int width, int height, String area, String outputFile) throws FileNotFoundException, IOException {
+		this(null, frameSource, initSecs, captureSecs, fps, width, height, area, outputFile);
+	}
+
+	private ScreenCaptureH264(Component source, VideoFrameSource frameSource, int initSecs, int captureSecs, float fps, int width, int height, String area, String outputFile) throws FileNotFoundException, IOException {
+		this.source	= source;
+		this.frameSource = frameSource;
 		this.width	= width;
 		this.height	= height;
 
 		this.startCaptureNano	= System.nanoTime();
 		frameIIntervalMS = (long) (1000/fps);
-		if(area.equals("SPECTR")) //record video of spectrum
-		{
-			switch(height) {
-			case 360: fheight = 570; break;
-			case 540: fheight = 780; break;
-			case 720: fheight = 1010; break;
-			}
-			frame.setMinimumSize(new Dimension(width + 230, fheight));			
-		}
-		else if(area.equals("SPEC+WF")) //record video of spectrum & waterfall
-		{
-			frame.setMinimumSize(new Dimension(width + 230, height));
-		}
-		else //record full spectrum analyzer screen
-		{
-			frame.setMinimumSize(new Dimension(width, height));
-		}
-		frame.setSize(width, height);
 		
 	    writer = ToolFactory.makeWriter(outputFile);
 	    writer.addVideoStream(0, 0, ICodec.ID.CODEC_ID_H264, width, height);
@@ -94,13 +82,7 @@ public class ScreenCaptureH264 {
 		
 		framesCaptured++;
 
-		BufferedImage capImage = new BufferedImage(width, height, BufferedImage.TYPE_3BYTE_BGR);
-		Graphics2D g	= (Graphics2D) capImage.getGraphics();
-		g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-		g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);					
-		frame.paint(g);
-		g.dispose();
+		BufferedImage capImage = renderFrame();
 
 		/**
 		 * convert to video in a separate thread to not slow down swing's event thread
@@ -115,5 +97,12 @@ public class ScreenCaptureH264 {
 		});
 		
 		//System.out.println("Frame: "+framesCaptured);
+	}
+
+	private BufferedImage renderFrame() {
+		if (frameSource != null) {
+			return frameSource.renderFrame(width, height);
+		}
+		return CaptureRenderer.renderFrame(source, width, height);
 	}
 }

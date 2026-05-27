@@ -2,6 +2,8 @@ package jspectrumanalyzer.ui;
 
 import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
@@ -267,6 +269,96 @@ public class WaterfallPlot extends JPanel {
 		g.dispose();
 	}
 
+	public synchronized BufferedImage renderVideoFrame(int width, int height, int videoChartXOffset, int videoChartWidth) {
+		BufferedImage image = GraphicsToolkit.createAcceleratedImageOpaque(width, height);
+		Graphics2D g = image.createGraphics();
+		try {
+			g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+			g.setColor(Color.black);
+			g.fillRect(0, 0, width, height);
+			g.drawImage(bufferedImages[drawIndex], videoChartXOffset, 0, videoChartWidth, height, null);
+			drawVideoCompressedRangeSeparators(g, videoChartXOffset, videoChartWidth, height);
+			drawVideoMarker(g, videoChartXOffset, videoChartWidth, height);
+			if (playbackVisible) {
+				drawPlaybackStatus(g, videoChartXOffset, videoChartWidth);
+			}
+			drawVideoInfoBox(g, videoChartXOffset, videoChartWidth, height);
+		} finally {
+			g.dispose();
+		}
+		return image;
+	}
+
+	private void drawVideoMarker(Graphics2D g, int xOffset, int width, int height) {
+		if (!displayMarker || chartWidth <= 0)
+			return;
+		double rel = (displayMarkerX - chartXOffset) / (double) chartWidth;
+		if (rel < 0 || rel > 1)
+			return;
+		int x = xOffset + (int) Math.round(rel * width);
+		g.setColor(Color.gray);
+		g.drawLine(x, 0, x, height);
+		g.drawString(String.format("%.1f MHz", displayMarkerFrequency / 1000000.0), x + 5, height / 2);
+	}
+
+	private void drawVideoCompressedRangeSeparators(Graphics2D g, int xOffset, int width, int height) {
+		if (rangePairs == null || rangePairs.length <= 2 || compressedTotalLength <= 0)
+			return;
+		double cum = 0;
+		java.awt.Stroke old = g.getStroke();
+		g.setStroke(new java.awt.BasicStroke(1f, java.awt.BasicStroke.CAP_BUTT, java.awt.BasicStroke.JOIN_MITER, 1.0f,
+				new float[] { 4f, 4f }, 0f));
+		g.setColor(new Color(255, 255, 255, 120));
+		for (int i = 0; i < rangePairs.length; i += 2) {
+			double len = rangePairs[i + 1] - rangePairs[i];
+			cum += len;
+			if (i < rangePairs.length - 2) {
+				int sepX = xOffset + (int) Math.round((cum / compressedTotalLength) * width);
+				g.drawLine(sepX, 0, sepX, height);
+			}
+		}
+		g.setStroke(old);
+	}
+
+	private void drawVideoInfoBox(Graphics2D g, int xOffset, int width, int height) {
+		if (!infoBoxVisible)
+			return;
+		java.util.List<String> lines = new java.util.ArrayList<>();
+		lines.add(renderingInfo);
+		for (int i = 0; i < statusMessage.length; i++) {
+			if (statusMessage[i] != null && !statusMessage[i].isEmpty()) {
+				lines.add(statusMessage[i]);
+			}
+		}
+		if (lines.isEmpty())
+			return;
+
+		g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, Math.max(10, height / 18)));
+		FontMetrics metrics = g.getFontMetrics();
+		int fontHeight = metrics.getHeight();
+		int maxTextWidth = 0;
+		for (String line : lines) {
+			maxTextWidth = Math.max(maxTextWidth, metrics.stringWidth(line));
+		}
+		int paddingX = 8;
+		int paddingY = 6;
+		int interlineGap = 2;
+		int boxWidth = maxTextWidth + 2 * paddingX;
+		int boxHeight = lines.size() * fontHeight + (lines.size() - 1) * interlineGap + 2 * paddingY;
+		int xBox = Math.max(xOffset, xOffset + width - 250);
+		if (xBox + boxWidth > xOffset + width)
+			xBox = xOffset + width - boxWidth;
+		int yBox = height - boxHeight - 20;
+
+		g.setColor(new Color(0, 0, 0, 140));
+		g.fillRect(xBox, yBox, boxWidth, boxHeight);
+		g.setColor(Color.white);
+		int baseline = yBox + paddingY + metrics.getAscent();
+		for (int i = 0; i < lines.size(); i++) {
+			g.drawString(lines.get(i), xBox + paddingX, baseline + i * (fontHeight + interlineGap));
+		}
+	}
+
 	public int getHistorySize() {
 		return bufferedImages[0].getHeight();
 	}
@@ -510,9 +602,11 @@ public class WaterfallPlot extends JPanel {
 	}
 
 	private void drawPlaybackStatus(Graphics2D g) {
-		int x = chartXOffset;
+		drawPlaybackStatus(g, chartXOffset, chartWidth);
+	}
+
+	private void drawPlaybackStatus(Graphics2D g, int x, int w) {
 		int y = 5;
-		int w = chartWidth;
 		int h = 8;
 		long duration = playbackDurationMillis;
 		long position = playbackPositionMillis;
