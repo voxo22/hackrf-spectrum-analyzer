@@ -12,6 +12,7 @@ import java.awt.Frame;
 import java.awt.Graphics2D;
 import java.awt.Insets;
 import java.awt.RenderingHints;
+import java.awt.Toolkit;
 //import java.awt.Shape;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
@@ -188,6 +189,73 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		}
 	}
 
+	private static class TriggerSettings {
+		static final String SOURCE_REALTIME = "REALTIME";
+		static final String SOURCE_PEAKS = "PEAKS";
+		static final String OPERATOR_GT = ">";
+		static final String OPERATOR_LT = "<";
+		static final String OPERATOR_GTE = ">=";
+		static final String OPERATOR_LTE = "<=";
+		static final String MATCH_ALL = "ALL";
+		static final String MATCH_ANY = "ANY";
+
+		boolean enabled = false;
+		double startMHz = 0;
+		double stopMHz = 8000;
+		long cooldownMillis = 5000;
+		boolean sound = true;
+		boolean log = true;
+		String source = SOURCE_REALTIME;
+		String matchMode = MATCH_ALL;
+		boolean maxLevelEnabled = true;
+		String maxLevelOperator = OPERATOR_GT;
+		double maxLevelThresholdDbm = -60;
+		boolean totalPowerEnabled = false;
+		String totalPowerOperator = OPERATOR_GT;
+		double totalPowerThresholdDbm = -80;
+	}
+
+	private static class TriggerHit {
+		final boolean matched;
+		final double frequencyMHz;
+		final double amplitudeDbm;
+		final double maxLevelDbm;
+		final double totalPowerDbm;
+
+		TriggerHit(boolean matched, double frequencyMHz, double amplitudeDbm, double maxLevelDbm, double totalPowerDbm) {
+			this.matched = matched;
+			this.frequencyMHz = frequencyMHz;
+			this.amplitudeDbm = amplitudeDbm;
+			this.maxLevelDbm = maxLevelDbm;
+			this.totalPowerDbm = totalPowerDbm;
+		}
+	}
+
+	private static class TriggerEvent {
+		final long epochMillis;
+		final long playbackMillis;
+		final boolean playback;
+		final double frequencyMHz;
+		final double amplitudeDbm;
+		final double maxLevelDbm;
+		final double totalPowerDbm;
+
+		TriggerEvent(long epochMillis, long playbackMillis, boolean playback, double frequencyMHz, double amplitudeDbm) {
+			this(epochMillis, playbackMillis, playback, frequencyMHz, amplitudeDbm, amplitudeDbm, Double.NaN);
+		}
+
+		TriggerEvent(long epochMillis, long playbackMillis, boolean playback, double frequencyMHz, double amplitudeDbm,
+				double maxLevelDbm, double totalPowerDbm) {
+			this.epochMillis = epochMillis;
+			this.playbackMillis = playbackMillis;
+			this.playback = playback;
+			this.frequencyMHz = frequencyMHz;
+			this.amplitudeDbm = amplitudeDbm;
+			this.maxLevelDbm = maxLevelDbm;
+			this.totalPowerDbm = totalPowerDbm;
+		}
+	}
+
 	/**
 	 * Color palette for UI
 	 */
@@ -263,7 +331,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private ScreenCaptureH264						h264Cap								= null;
 	private ModelValueBoolean						parameterIsRecordedVideo			= new ModelValueBoolean("Recording", false);
 	private ModelValueBoolean						parameterIsRecordedData				= new ModelValueBoolean("Recording", false);
-	private ModelValueBoolean						parameterIsRecordedSpectrum			= new ModelValueBoolean("Spectrum Recording", false);
+	private ModelValueBoolean						parameterIsRecordedSpectrum			= new ModelValueBoolean("DATA Recording", false);
 	private ModelValueBoolean						parameterIsPlayingSpectrum			= new ModelValueBoolean("Spectrum Playback", false);
 	private ArrayList<HackRFEventListener>			hRFlisteners						= new ArrayList<>();
 	private ArrayBlockingQueue<FFTBins>				hwProcessingQueue					= new ArrayBlockingQueue<>(1000);
@@ -308,12 +376,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private ModelValueBoolean						parameterSpurRemoval				= new ModelValueBoolean("Spur Removal", false);
 	private ModelValueBoolean						parameterWaterfallVisible			= new ModelValueBoolean("Waterfall Visible", true);
 	private ModelValueBoolean						parameterInfoBoxVisible				= new ModelValueBoolean("InfoBox Visible", true);
-	private ModelValue<String>						parameterLogDetail					= new ModelValue<>("Data Log Interval", new String("SEC"));
+	private ModelValue<String>						parameterLogDetail					= new ModelValue<>("STATS Log Interval", new String("SEC"));
 	private ModelValue<String>						parameterVideoArea					= new ModelValue<>("Video Area", new String("SPECTR"));
 	private ModelValue<String>						parameterVideoFormat				= new ModelValue<>("Video Format", new String("GIF"));
 	private ModelValueInt							parameterVideoResolution			= new ModelValueInt("Video Resolution", 540);
 	private ModelValueInt							parameterVideoFrameRate				= new ModelValueInt("Video Framerate", 15);
-	private ModelValue<String>						parameterSpectrumRecordFrameRate	= new ModelValue<>("Spectrum Record FPS", new String("FULL"));
+	private ModelValue<String>						parameterSpectrumRecordFrameRate	= new ModelValue<>("DATA Record FPS", new String("FULL"));
 	private ModelValue<String>						parameterFreqRange					= new ModelValue<>("FreqRange", new String("920-960"));
 	private ModelValue<String>						parameterDisplayFreqRange			= new ModelValue<>("Display FreqRange", new String("920-960"));
 	private PersistentDisplay						persistentDisplay					= new PersistentDisplay();
@@ -342,17 +410,30 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private long									spectrumRecordStartedMillis			= 0;
 	private long									spectrumRecordFramesWritten			= 0;
 	private Thread									threadSpectrumPlayback;
+	private volatile File							currentSpectrumPlaybackFile;
 	private volatile boolean						stopSpectrumPlayback				= false;
 	private volatile SpectrumRecording.Header		playbackHeader;
 	private volatile long							playbackPositionMillis				= 0;
 	private volatile long							playbackDurationMillis				= 0;
 	private volatile long							playbackCurrentEpochMillis			= 0;
 	private volatile long							playbackSeekRequestMillis			= -1;
+	private volatile boolean						resetTriggerRangeOnPlaybackStart	= false;
 	private float									fSlope;
     private float									fShift;
     private int										lastX;
     private int										lastXX;
     private boolean									dragging;
+	private final TriggerSettings					triggerSettings					= new TriggerSettings();
+	private final ArrayList<TriggerEvent>			triggerEvents					= new ArrayList<>();
+	private long									lastTriggerAlertMillis			= 0;
+	private boolean									lastTriggerMatched				= false;
+	private FileWriter								triggerLogWriter;
+	private javax.swing.JDialog						triggerDialog;
+	private javax.swing.table.DefaultTableModel		triggerTableModel;
+	private javax.swing.JLabel						triggerStatusLabel;
+	private javax.swing.JSpinner					triggerStartSpinner;
+	private javax.swing.JSpinner					triggerStopSpinner;
+	private boolean									updatingTriggerRangeFromCode		= false;
 
 
 
@@ -371,6 +452,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			// non-fatal - continue with defaults
 			System.err.println("Failed to load settings: " + e.getMessage());
 		}
+		resetTriggerRangeToActiveFullRange();
 		//HackRFSweepSettingsUI ui = new HackRFSweepSettingsUI(this);
 		//ui.setVisible(true);
 		//parameterFrequencyAllocationTable.setValue(new FrequencyAllocations().getTable().values().stream().findFirst().get());
@@ -543,6 +625,21 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		return "SPECTR".equals(area) || "SPEC+WF".equals(area) || "FULLSCR".equals(area);
 	}
 
+	private boolean isValidTriggerSource(String source) {
+		return TriggerSettings.SOURCE_REALTIME.equals(source) || TriggerSettings.SOURCE_PEAKS.equals(source);
+	}
+
+	private boolean isValidTriggerOperator(String operator) {
+		return TriggerSettings.OPERATOR_GT.equals(operator)
+				|| TriggerSettings.OPERATOR_LT.equals(operator)
+				|| TriggerSettings.OPERATOR_GTE.equals(operator)
+				|| TriggerSettings.OPERATOR_LTE.equals(operator);
+	}
+
+	private boolean isValidTriggerMatchMode(String matchMode) {
+		return TriggerSettings.MATCH_ALL.equals(matchMode) || TriggerSettings.MATCH_ANY.equals(matchMode);
+	}
+
 	private void loadSettings() {
 		try {
 			File f = getSettingsFile();
@@ -596,6 +693,24 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			if (p.getProperty("VideoFrameRate") != null) parameterVideoFrameRate.setValue(Integer.parseInt(p.getProperty("VideoFrameRate")));
 			if (p.getProperty("SpectrumRecordFrameRate") != null) parameterSpectrumRecordFrameRate.setValue(p.getProperty("SpectrumRecordFrameRate"));
 			if (p.getProperty("LogDetail") != null) parameterLogDetail.setValue(p.getProperty("LogDetail"));
+			if (p.getProperty("TriggerEnabled") != null) triggerSettings.enabled = Boolean.parseBoolean(p.getProperty("TriggerEnabled"));
+			if (p.getProperty("TriggerThresholdDbm") != null) triggerSettings.maxLevelThresholdDbm = Double.parseDouble(p.getProperty("TriggerThresholdDbm"));
+			if (p.getProperty("TriggerCooldownMillis") != null) triggerSettings.cooldownMillis = Long.parseLong(p.getProperty("TriggerCooldownMillis"));
+			if (p.getProperty("TriggerSound") != null) triggerSettings.sound = Boolean.parseBoolean(p.getProperty("TriggerSound"));
+			if (p.getProperty("TriggerLog") != null) triggerSettings.log = Boolean.parseBoolean(p.getProperty("TriggerLog"));
+			if (p.getProperty("TriggerSource") != null && isValidTriggerSource(p.getProperty("TriggerSource"))) {
+				triggerSettings.source = p.getProperty("TriggerSource");
+			}
+			if (p.getProperty("TriggerOperator") != null && isValidTriggerOperator(p.getProperty("TriggerOperator")))
+				triggerSettings.maxLevelOperator = p.getProperty("TriggerOperator");
+			if (p.getProperty("TriggerMatchMode") != null && isValidTriggerMatchMode(p.getProperty("TriggerMatchMode")))
+				triggerSettings.matchMode = p.getProperty("TriggerMatchMode");
+			if (p.getProperty("TriggerMaxLevelEnabled") != null) triggerSettings.maxLevelEnabled = Boolean.parseBoolean(p.getProperty("TriggerMaxLevelEnabled"));
+			if (p.getProperty("TriggerMaxLevelOperator") != null && isValidTriggerOperator(p.getProperty("TriggerMaxLevelOperator"))) triggerSettings.maxLevelOperator = p.getProperty("TriggerMaxLevelOperator");
+			if (p.getProperty("TriggerMaxLevelThresholdDbm") != null) triggerSettings.maxLevelThresholdDbm = Double.parseDouble(p.getProperty("TriggerMaxLevelThresholdDbm"));
+			if (p.getProperty("TriggerTotalPowerEnabled") != null) triggerSettings.totalPowerEnabled = Boolean.parseBoolean(p.getProperty("TriggerTotalPowerEnabled"));
+			if (p.getProperty("TriggerTotalPowerOperator") != null && isValidTriggerOperator(p.getProperty("TriggerTotalPowerOperator"))) triggerSettings.totalPowerOperator = p.getProperty("TriggerTotalPowerOperator");
+			if (p.getProperty("TriggerTotalPowerThresholdDbm") != null) triggerSettings.totalPowerThresholdDbm = Double.parseDouble(p.getProperty("TriggerTotalPowerThresholdDbm"));
 			if (p.getProperty("FrequencyAllocationTable") != null) {
 				String allocationTableName = p.getProperty("FrequencyAllocationTable");
 				if ("NONE".equals(allocationTableName)) {
@@ -654,6 +769,20 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			p.setProperty("VideoFrameRate", Integer.toString(parameterVideoFrameRate.getValue()));
 			p.setProperty("SpectrumRecordFrameRate", parameterSpectrumRecordFrameRate.getValue());
 			p.setProperty("LogDetail", parameterLogDetail.getValue());
+			synchronized (triggerSettings) {
+				p.setProperty("TriggerEnabled", Boolean.toString(triggerSettings.enabled));
+				p.setProperty("TriggerCooldownMillis", Long.toString(triggerSettings.cooldownMillis));
+				p.setProperty("TriggerSound", Boolean.toString(triggerSettings.sound));
+				p.setProperty("TriggerLog", Boolean.toString(triggerSettings.log));
+				p.setProperty("TriggerSource", triggerSettings.source);
+				p.setProperty("TriggerMatchMode", triggerSettings.matchMode);
+				p.setProperty("TriggerMaxLevelEnabled", Boolean.toString(triggerSettings.maxLevelEnabled));
+				p.setProperty("TriggerMaxLevelOperator", triggerSettings.maxLevelOperator);
+				p.setProperty("TriggerMaxLevelThresholdDbm", Double.toString(triggerSettings.maxLevelThresholdDbm));
+				p.setProperty("TriggerTotalPowerEnabled", Boolean.toString(triggerSettings.totalPowerEnabled));
+				p.setProperty("TriggerTotalPowerOperator", triggerSettings.totalPowerOperator);
+				p.setProperty("TriggerTotalPowerThresholdDbm", Double.toString(triggerSettings.totalPowerThresholdDbm));
+			}
 			FrequencyAllocationTable allocationTable = parameterFrequencyAllocationTable.getValue();
 			p.setProperty("FrequencyAllocationTable", allocationTable == null ? "NONE" : allocationTable.toString());
 
@@ -1021,7 +1150,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			if(parameterVideoFormat.getValue().equals("GIF"))
 			{
 				gifCap = new ScreenCapture(uiFrame, 1, 0, parameterVideoFrameRate.getValue(), videoWidth, videoHeight,
-					parameterVideoArea.getValue(), new File("# VIDEO "
+					parameterVideoArea.getValue(), new File(formatVideoRecordingFilePrefix()
 							+ formatRecordingRangeName() + " MHz "
 							+ dateStamp.format(dStampFormat) + ".gif")
 					);
@@ -1029,7 +1158,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			else
 			{
 				h264Cap = new ScreenCaptureH264(uiFrame, 1, 0, parameterVideoFrameRate.getValue(), videoWidth, videoHeight,
-					parameterVideoArea.getValue(), new String("# VIDEO "
+					parameterVideoArea.getValue(), new String(formatVideoRecordingFilePrefix()
 							+ formatRecordingRangeName() + " MHz "
 							+ dateStamp.format(dStampFormat) + ".mp4")
 					);
@@ -1063,6 +1192,28 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		{
 			closeDataCapture();
 		}
+	}
+
+	private String formatStatsLogTimestamp() {
+		String pattern;
+		switch (parameterLogDetail.getValue()) {
+		case "FRAC":
+			pattern = "HH:mm:ss.S";
+			break;
+		case "MIN":
+			pattern = "HH:mm";
+			break;
+		case "SEC":
+		default:
+			pattern = "HH:mm:ss";
+			break;
+		}
+		DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd " + pattern);
+		long replayTime = playbackCurrentEpochMillis;
+		if (playbackHeader != null && replayTime > 0) {
+			return LocalDateTime.ofInstant(Instant.ofEpochMilli(replayTime), ZoneId.systemDefault()).format(formatter);
+		}
+		return LocalDateTime.now().format(formatter);
 	}
 
 	private void closeDataCapture() {
@@ -1107,7 +1258,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			if (spectrumCap == null) {
 				DateTimeFormatter dStampFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss");
 				LocalDateTime dateStamp = LocalDateTime.now();
-				File file = new File("# SPECTRUM " + formatRecordingRangeName(spectrum) + " MHz "
+				File file = new File("# DATA " + formatRecordingRangeName(spectrum) + " MHz "
 						+ dateStamp.format(dStampFormat) + ".hsr");
 				spectrumCap = new SpectrumRecording(file, spectrum, parameterFreqRange.getValue());
 			}
@@ -1148,6 +1299,564 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		return true;
 	}
 
+	@Override
+	public void showTriggerDialog() {
+		SwingUtilities.invokeLater(() -> {
+			if (triggerDialog == null) {
+				resetTriggerRangeToActiveFullRange();
+				createTriggerDialog();
+			}
+			triggerDialog.setLocationRelativeTo(uiFrame);
+			triggerDialog.setVisible(true);
+		});
+	}
+
+	private void resetTriggerRangeToActiveFullRange() {
+		FrequencyRange bounds = getFrequencyBoundsForDisplayRange(getActiveRangesForDisplay(),
+				getActiveFreqStartMHzForDisplay(), getActiveFreqStopMHzForDisplay());
+		int shift = getActiveFreqShiftForDisplay();
+		synchronized (triggerSettings) {
+			triggerSettings.startMHz = bounds.getStartMHz() + shift;
+			triggerSettings.stopMHz = bounds.getEndMHz() + shift;
+		}
+		if (triggerStartSpinner != null && triggerStopSpinner != null) {
+			SwingUtilities.invokeLater(() -> {
+				updatingTriggerRangeFromCode = true;
+				try {
+					triggerStartSpinner.setValue(triggerSettings.startMHz);
+					triggerStopSpinner.setValue(triggerSettings.stopMHz);
+				} finally {
+					updatingTriggerRangeFromCode = false;
+				}
+			});
+		}
+	}
+
+	private void createTriggerDialog() {
+		triggerDialog = new javax.swing.JDialog(uiFrame, "Trigger Alert", false);
+		triggerDialog.setLayout(new BorderLayout(6, 6));
+		triggerDialog.getContentPane().setBackground(Color.black);
+
+		javax.swing.JPanel settingsPanel = new javax.swing.JPanel(
+				new net.miginfocom.swing.MigLayout("", "[][80!][][80!][][90!]", "[][][][][]"));
+		settingsPanel.setBackground(Color.black);
+
+		javax.swing.JCheckBox enabled = new javax.swing.JCheckBox("Enabled", triggerSettings.enabled);
+		enabled.setForeground(Color.white);
+		enabled.setBackground(Color.black);
+		settingsPanel.add(enabled, "cell 0 0");
+
+		javax.swing.JSpinner start = new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(triggerSettings.startMHz, 0d, 8000d, 0.1d));
+		javax.swing.JSpinner stop = new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(triggerSettings.stopMHz, 0d, 8000d, 0.1d));
+		triggerStartSpinner = start;
+		triggerStopSpinner = stop;
+		javax.swing.JSpinner cooldown = new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(triggerSettings.cooldownMillis / 1000d, 0d, 3600d, 1d));
+		javax.swing.JSpinner source = new javax.swing.JSpinner(new javax.swing.SpinnerListModel(
+				new String[] { TriggerSettings.SOURCE_REALTIME, TriggerSettings.SOURCE_PEAKS }));
+		source.setValue(triggerSettings.source);
+		javax.swing.JSpinner matchMode = new javax.swing.JSpinner(new javax.swing.SpinnerListModel(
+				new String[] { TriggerSettings.MATCH_ALL, TriggerSettings.MATCH_ANY }));
+		matchMode.setValue(triggerSettings.matchMode);
+		javax.swing.JCheckBox maxLevelEnabled = new javax.swing.JCheckBox("Max level", triggerSettings.maxLevelEnabled);
+		javax.swing.JSpinner maxLevelOperator = new javax.swing.JSpinner(new javax.swing.SpinnerListModel(
+				new String[] { TriggerSettings.OPERATOR_GT, TriggerSettings.OPERATOR_LT,
+						TriggerSettings.OPERATOR_GTE, TriggerSettings.OPERATOR_LTE }));
+		maxLevelOperator.setValue(triggerSettings.maxLevelOperator);
+		javax.swing.JSpinner maxLevelThreshold = new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(triggerSettings.maxLevelThresholdDbm, -150d, 30d, 1d));
+		javax.swing.JCheckBox totalPowerEnabled = new javax.swing.JCheckBox("Total power", triggerSettings.totalPowerEnabled);
+		javax.swing.JSpinner totalPowerOperator = new javax.swing.JSpinner(new javax.swing.SpinnerListModel(
+				new String[] { TriggerSettings.OPERATOR_GT, TriggerSettings.OPERATOR_LT,
+						TriggerSettings.OPERATOR_GTE, TriggerSettings.OPERATOR_LTE }));
+		totalPowerOperator.setValue(triggerSettings.totalPowerOperator);
+		javax.swing.JSpinner totalPowerThreshold = new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(triggerSettings.totalPowerThresholdDbm, -150d, 30d, 1d));
+		addTriggerDialogCell(settingsPanel, "Start MHz", start, 0, 1);
+		addTriggerDialogCell(settingsPanel, "Stop MHz", stop, 2, 1);
+		addTriggerDialogCell(settingsPanel, "Cooldown s", cooldown, 4, 1);
+		addTriggerDialogCell(settingsPanel, "Source", source, 0, 2);
+		addTriggerDialogCell(settingsPanel, "Match", matchMode, 2, 2);
+
+		styleTriggerCheckBox(maxLevelEnabled);
+		styleTriggerCheckBox(totalPowerEnabled);
+		settingsPanel.add(maxLevelEnabled, "cell 0 3");
+		settingsPanel.add(maxLevelOperator, "cell 1 3,growx");
+		addTriggerDialogCell(settingsPanel, "Threshold dBm", maxLevelThreshold, 2, 3);
+		settingsPanel.add(totalPowerEnabled, "cell 0 4");
+		settingsPanel.add(totalPowerOperator, "cell 1 4,growx");
+		addTriggerDialogCell(settingsPanel, "Threshold dBm", totalPowerThreshold, 2, 4);
+
+		javax.swing.JCheckBox sound = new javax.swing.JCheckBox("Sound", triggerSettings.sound);
+		javax.swing.JCheckBox log = new javax.swing.JCheckBox("Log CSV", triggerSettings.log);
+		sound.setForeground(Color.white);
+		sound.setBackground(Color.black);
+		log.setForeground(Color.white);
+		log.setBackground(Color.black);
+		settingsPanel.add(sound, "cell 4 2");
+		settingsPanel.add(log, "cell 5 2");
+
+		javax.swing.JButton clear = new javax.swing.JButton("CLEAR");
+		javax.swing.JButton find = new javax.swing.JButton("FIND IN REPLAY");
+		javax.swing.JPanel buttonPanel = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 4, 2));
+		buttonPanel.setBackground(Color.black);
+		buttonPanel.add(clear);
+		buttonPanel.add(find);
+
+		triggerStatusLabel = new javax.swing.JLabel(formatTriggerEventCountStatus());
+		triggerStatusLabel.setForeground(Color.white);
+		buttonPanel.add(triggerStatusLabel);
+
+		triggerTableModel = new javax.swing.table.DefaultTableModel(new Object[] { "Time", "Mode", "Offset", "MHz", "dBm" }, 0) {
+			private static final long serialVersionUID = 1L;
+			@Override
+			public boolean isCellEditable(int row, int column) {
+				return false;
+			}
+		};
+		javax.swing.JTable table = new javax.swing.JTable(triggerTableModel);
+		table.setFont(new Font("Arial", Font.PLAIN, 12));
+		table.getTableHeader().setFont(new Font("Arial", Font.BOLD, 12));
+		table.setRowHeight(20);
+		table.setBackground(Color.black);
+		table.setForeground(Color.white);
+		table.setGridColor(Color.darkGray);
+		table.getColumnModel().getColumn(0).setPreferredWidth(150);
+		table.getColumnModel().getColumn(0).setMinWidth(140);
+		table.getColumnModel().getColumn(1).setPreferredWidth(55);
+		table.getColumnModel().getColumn(1).setMaxWidth(65);
+		table.getColumnModel().getColumn(1).setMinWidth(45);
+		table.getColumnModel().getColumn(2).setPreferredWidth(55);
+		table.getColumnModel().getColumn(2).setMaxWidth(70);
+		table.getColumnModel().getColumn(2).setMinWidth(45);
+
+		Runnable updateTriggerSettingsFromUi = () -> updateTriggerSettingsFromUi(enabled, start, stop, cooldown,
+				sound, log, source, matchMode, maxLevelEnabled, maxLevelOperator, maxLevelThreshold,
+				totalPowerEnabled, totalPowerOperator, totalPowerThreshold);
+		enabled.addActionListener(e -> updateTriggerSettingsFromUi.run());
+		sound.addActionListener(e -> updateTriggerSettingsFromUi.run());
+		log.addActionListener(e -> updateTriggerSettingsFromUi.run());
+		maxLevelEnabled.addActionListener(e -> updateTriggerSettingsFromUi.run());
+		totalPowerEnabled.addActionListener(e -> updateTriggerSettingsFromUi.run());
+		start.addChangeListener(e -> updateTriggerSettingsFromUi.run());
+		stop.addChangeListener(e -> updateTriggerSettingsFromUi.run());
+		cooldown.addChangeListener(e -> updateTriggerSettingsFromUi.run());
+		source.addChangeListener(e -> updateTriggerSettingsFromUi.run());
+		matchMode.addChangeListener(e -> updateTriggerSettingsFromUi.run());
+		maxLevelOperator.addChangeListener(e -> updateTriggerSettingsFromUi.run());
+		maxLevelThreshold.addChangeListener(e -> updateTriggerSettingsFromUi.run());
+		totalPowerOperator.addChangeListener(e -> updateTriggerSettingsFromUi.run());
+		totalPowerThreshold.addChangeListener(e -> updateTriggerSettingsFromUi.run());
+		updateTriggerSettingsFromUi.run();
+		clear.addActionListener(e -> clearTriggerEvents());
+		find.addActionListener(e -> startTriggerReplaySearch());
+
+		triggerDialog.add(settingsPanel, BorderLayout.NORTH);
+		triggerDialog.add(new javax.swing.JScrollPane(table), BorderLayout.CENTER);
+		triggerDialog.add(buttonPanel, BorderLayout.SOUTH);
+		triggerDialog.setSize(560, 360);
+		refreshTriggerTable();
+	}
+
+	private void addTriggerDialogCell(javax.swing.JPanel panel, String label, javax.swing.JComponent component, int column, int row) {
+		javax.swing.JLabel l = new javax.swing.JLabel(label);
+		l.setForeground(Color.white);
+		panel.add(l, "cell " + column + " " + row);
+		panel.add(component, "cell " + (column + 1) + " " + row + ",growx");
+	}
+
+	private void styleTriggerCheckBox(javax.swing.JCheckBox checkBox) {
+		checkBox.setForeground(Color.white);
+		checkBox.setBackground(Color.black);
+	}
+
+	private void updateTriggerSettingsFromUi(javax.swing.JCheckBox enabled, javax.swing.JSpinner start,
+			javax.swing.JSpinner stop, javax.swing.JSpinner cooldown, javax.swing.JCheckBox sound,
+			javax.swing.JCheckBox log, javax.swing.JSpinner source, javax.swing.JSpinner matchMode,
+			javax.swing.JCheckBox maxLevelEnabled, javax.swing.JSpinner maxLevelOperator,
+			javax.swing.JSpinner maxLevelThreshold, javax.swing.JCheckBox totalPowerEnabled,
+			javax.swing.JSpinner totalPowerOperator, javax.swing.JSpinner totalPowerThreshold) {
+		if (updatingTriggerRangeFromCode)
+			return;
+		boolean enabledNow;
+		synchronized (triggerSettings) {
+			triggerSettings.enabled = enabled.isSelected();
+			triggerSettings.startMHz = ((Number) start.getValue()).doubleValue();
+			triggerSettings.stopMHz = ((Number) stop.getValue()).doubleValue();
+			if (triggerSettings.stopMHz < triggerSettings.startMHz) {
+				double tmp = triggerSettings.startMHz;
+				triggerSettings.startMHz = triggerSettings.stopMHz;
+				triggerSettings.stopMHz = tmp;
+				updatingTriggerRangeFromCode = true;
+				try {
+					triggerStartSpinner.setValue(triggerSettings.startMHz);
+					triggerStopSpinner.setValue(triggerSettings.stopMHz);
+				} finally {
+					updatingTriggerRangeFromCode = false;
+				}
+			}
+			triggerSettings.cooldownMillis = Math.round(((Number) cooldown.getValue()).doubleValue() * 1000d);
+			triggerSettings.sound = sound.isSelected();
+			triggerSettings.log = log.isSelected();
+			triggerSettings.source = source.getValue().toString();
+			triggerSettings.matchMode = matchMode.getValue().toString();
+			triggerSettings.maxLevelEnabled = maxLevelEnabled.isSelected();
+			triggerSettings.maxLevelOperator = maxLevelOperator.getValue().toString();
+			triggerSettings.maxLevelThresholdDbm = ((Number) maxLevelThreshold.getValue()).doubleValue();
+			triggerSettings.totalPowerEnabled = totalPowerEnabled.isSelected();
+			triggerSettings.totalPowerOperator = totalPowerOperator.getValue().toString();
+			triggerSettings.totalPowerThresholdDbm = ((Number) totalPowerThreshold.getValue()).doubleValue();
+			enabledNow = triggerSettings.enabled;
+		}
+		updateTriggerStatus("Trigger " + (enabledNow ? "enabled" : "disabled"));
+	}
+
+	private void clearTriggerEvents() {
+		synchronized (triggerEvents) {
+			triggerEvents.clear();
+		}
+		lastTriggerMatched = false;
+		lastTriggerAlertMillis = 0;
+		waterfallPlot.setPlaybackEventMarkers(new long[0]);
+		refreshTriggerTable();
+		updateTriggerStatus(formatTriggerEventCountStatus());
+	}
+
+	private void clearPlaybackTriggerEvents() {
+		synchronized (triggerEvents) {
+			triggerEvents.removeIf(event -> event.playback);
+		}
+		waterfallPlot.setPlaybackEventMarkers(new long[0]);
+		SwingUtilities.invokeLater(this::refreshTriggerTable);
+	}
+
+	private void startTriggerReplaySearch() {
+		File file = currentSpectrumPlaybackFile;
+		if (file == null || !file.isFile()) {
+			updateTriggerStatus("Start replay first, then FIND");
+			return;
+		}
+		updateTriggerStatus("Searching replay...");
+		Thread searchThread = new Thread(() -> searchTriggerEventsInReplay(file));
+		searchThread.setName("trigger replay search");
+		searchThread.start();
+	}
+
+	private void searchTriggerEventsInReplay(File file) {
+		ArrayList<TriggerEvent> found = new ArrayList<>();
+		try (SpectrumRecording.Reader reader = new SpectrumRecording.Reader(file)) {
+			TriggerSettings settings = snapshotTriggerSettings();
+			SpectrumRecording.Header header = reader.getHeader();
+			SpectrumRecording.Frame frame;
+			boolean previousMatched = false;
+			float[] searchPeak = null;
+			float[] searchPeakHold = null;
+			long[] searchPeakHoldTime = null;
+			long previousOffsetMillis = 0;
+			while ((frame = reader.readFrame()) != null) {
+				float[] triggerValues = frame.spectrum;
+				if (TriggerSettings.SOURCE_PEAKS.equals(settings.source)) {
+					if (searchPeak == null) {
+						searchPeak = frame.spectrum.clone();
+						searchPeakHold = frame.spectrum.clone();
+						searchPeakHoldTime = new long[frame.spectrum.length];
+						java.util.Arrays.fill(searchPeakHoldTime, frame.timeOffsetMillis);
+					} else {
+						updateTriggerSearchPeaks(frame.spectrum, searchPeak, searchPeakHold, searchPeakHoldTime,
+								Math.max(1, frame.timeOffsetMillis - previousOffsetMillis), frame.timeOffsetMillis);
+					}
+					triggerValues = searchPeakHold;
+				}
+				TriggerHit hit = evaluateTriggerFrame(triggerValues, header.freqStartMHz, header.fftBinHz,
+						header.freqShift, settings);
+				if (hit.matched && !previousMatched) {
+					long epoch = header.startEpochMillis <= 0 ? 0 : header.startEpochMillis + frame.timeOffsetMillis;
+					found.add(new TriggerEvent(epoch, frame.timeOffsetMillis, true, hit.frequencyMHz, hit.amplitudeDbm,
+							hit.maxLevelDbm, hit.totalPowerDbm));
+				}
+				previousMatched = hit.matched;
+				previousOffsetMillis = frame.timeOffsetMillis;
+			}
+		} catch (IOException e) {
+			e.printStackTrace();
+			SwingUtilities.invokeLater(() -> updateTriggerStatus("Replay search failed: " + e.getMessage()));
+			return;
+		}
+		synchronized (triggerEvents) {
+			triggerEvents.removeIf(event -> event.playback);
+			triggerEvents.addAll(found);
+		}
+		SwingUtilities.invokeLater(() -> {
+			refreshTriggerTable();
+			waterfallPlot.setPlaybackEventMarkers(buildPlaybackEventMarkers());
+			updateTriggerStatus("Found " + found.size() + " replay events / " + formatTriggerEventCountStatus());
+		});
+	}
+
+	private void updateTriggerSearchPeaks(float[] realtime, float[] peak, float[] peakHold, long[] peakHoldTime,
+			long timeDiffMillis, long offsetMillis) {
+		long peakFalloutMillis = parameterPeakFallRateSecs.getValue() * 1000l;
+		long peakHoldMillis = parameterPeakHoldTime.getValue() * 1000l;
+		float peakFallThreshold = parameterPeakFallThreshold.getValue();
+		for (int i = 0; i < realtime.length; i++) {
+			if (realtime[i] > peakHold[i]) {
+				peakHold[i] = peak[i] = realtime[i];
+				peakHoldTime[i] = offsetMillis;
+			}
+			peak[i] = (float) jspectrumanalyzer.core.EMA.calculateTimeDependent(realtime[i], peak[i],
+					timeDiffMillis, peakFalloutMillis);
+			if (peakHold[i] - peak[i] > peakFallThreshold && offsetMillis - peakHoldTime[i] > peakHoldMillis) {
+				peakHold[i] = peak[i];
+			}
+		}
+	}
+
+	private TriggerSettings snapshotTriggerSettings() {
+		TriggerSettings copy = new TriggerSettings();
+		synchronized (triggerSettings) {
+			copy.enabled = triggerSettings.enabled;
+			copy.startMHz = triggerSettings.startMHz;
+			copy.stopMHz = triggerSettings.stopMHz;
+			copy.cooldownMillis = triggerSettings.cooldownMillis;
+			copy.sound = triggerSettings.sound;
+			copy.log = triggerSettings.log;
+			copy.source = triggerSettings.source;
+			copy.matchMode = triggerSettings.matchMode;
+			copy.maxLevelEnabled = triggerSettings.maxLevelEnabled;
+			copy.maxLevelOperator = triggerSettings.maxLevelOperator;
+			copy.maxLevelThresholdDbm = triggerSettings.maxLevelThresholdDbm;
+			copy.totalPowerEnabled = triggerSettings.totalPowerEnabled;
+			copy.totalPowerOperator = triggerSettings.totalPowerOperator;
+			copy.totalPowerThresholdDbm = triggerSettings.totalPowerThresholdDbm;
+		}
+		return copy;
+	}
+
+	private void evaluateTrigger(DatasetSpectrumPeak spectrum, boolean playbackMode) {
+		TriggerSettings settings = snapshotTriggerSettings();
+		if (!settings.enabled)
+			return;
+		float[] triggerValues = TriggerSettings.SOURCE_PEAKS.equals(settings.source)
+				? spectrum.getPeakSpectrumArray()
+				: spectrum.getSpectrumArray();
+		TriggerHit hit = evaluateTriggerFrame(triggerValues, spectrum.getFreqStartMHz(),
+				spectrum.getFFTBinSizeHz(), spectrum.getFreqShift(), settings);
+		long now = System.currentTimeMillis();
+		boolean cooldownOk = settings.cooldownMillis <= 0 || now - lastTriggerAlertMillis >= settings.cooldownMillis;
+		if (!hit.matched) {
+			lastTriggerMatched = false;
+			return;
+		}
+
+		long playbackMillis = playbackMode ? playbackPositionMillis : -1;
+		long epochMillis = playbackMode ? playbackCurrentEpochMillis : now;
+		TriggerEvent event = new TriggerEvent(epochMillis, playbackMillis, playbackMode, hit.frequencyMHz,
+				hit.amplitudeDbm, hit.maxLevelDbm, hit.totalPowerDbm);
+
+		if (playbackMode) {
+			if (!lastTriggerMatched) {
+				addTriggerEvent(event, settings, cooldownOk, cooldownOk);
+				if (cooldownOk)
+					lastTriggerAlertMillis = now;
+			}
+		} else if (cooldownOk) {
+			lastTriggerAlertMillis = now;
+			addTriggerEvent(event, settings);
+		}
+		lastTriggerMatched = true;
+	}
+
+	private TriggerHit evaluateTriggerFrame(float[] values, int freqStartMHz, float fftBinHz, int freqShift,
+			TriggerSettings settings) {
+		double bestAmp = -1000;
+		double bestFreq = freqStartMHz + freqShift;
+		double powerMw = 0;
+		double freqStepMHz = fftBinHz / 1000000d;
+		for (int i = 0; i < values.length; i++) {
+			double freqMHz = freqStartMHz + freqStepMHz * i + freqShift;
+			if (freqMHz < settings.startMHz || freqMHz > settings.stopMHz)
+				continue;
+			if (values[i] > -95) {
+				powerMw += Math.pow(10, values[i] / 10d);
+			}
+			if (values[i] > bestAmp) {
+				bestAmp = values[i];
+				bestFreq = freqMHz;
+			}
+		}
+		double totalPowerDbm = powerMw > 0 ? 10d * Math.log10(powerMw) : -1000;
+		boolean hasCondition = settings.maxLevelEnabled || settings.totalPowerEnabled;
+		boolean matched = TriggerSettings.MATCH_ANY.equals(settings.matchMode) ? false : true;
+		if (settings.maxLevelEnabled) {
+			boolean conditionMatched = matchesTriggerOperator(bestAmp, settings.maxLevelThresholdDbm,
+					settings.maxLevelOperator);
+			matched = TriggerSettings.MATCH_ANY.equals(settings.matchMode) ? matched || conditionMatched
+					: matched && conditionMatched;
+		}
+		if (settings.totalPowerEnabled) {
+			boolean conditionMatched = matchesTriggerOperator(totalPowerDbm, settings.totalPowerThresholdDbm,
+					settings.totalPowerOperator);
+			matched = TriggerSettings.MATCH_ANY.equals(settings.matchMode) ? matched || conditionMatched
+					: matched && conditionMatched;
+		}
+		double displayValue = settings.maxLevelEnabled ? bestAmp : totalPowerDbm;
+		return new TriggerHit(hasCondition && matched, roundFrequencyToBinStep(bestFreq, fftBinHz),
+				Math.round(displayValue * 10d) / 10d, Math.round(bestAmp * 10d) / 10d,
+				Math.round(totalPowerDbm * 10d) / 10d);
+	}
+
+	private boolean matchesTriggerOperator(double value, double threshold, String operator) {
+		if (TriggerSettings.OPERATOR_LT.equals(operator))
+			return value < threshold;
+		if (TriggerSettings.OPERATOR_GTE.equals(operator))
+			return value >= threshold;
+		if (TriggerSettings.OPERATOR_LTE.equals(operator))
+			return value <= threshold;
+		return value > threshold;
+	}
+
+	private double roundFrequencyToBinStep(double frequencyMHz, float fftBinHz) {
+		double freqStepMHz = fftBinHz / 1000000d;
+		int freqRound = Math.round(1 / (float) freqStepMHz);
+		if (freqRound < 1)
+			freqRound = 1;
+		return (double) Math.round(freqRound * frequencyMHz) / freqRound;
+	}
+
+	private String formatTriggerFrequencyMHz(double frequencyMHz) {
+		return String.format(new Locale("sk", "SK"), "%.2f", frequencyMHz);
+	}
+
+	private void addTriggerEvent(TriggerEvent event, TriggerSettings settings) {
+		addTriggerEvent(event, settings, true, true);
+	}
+
+	private void addTriggerEvent(TriggerEvent event, TriggerSettings settings, boolean allowSound, boolean allowLog) {
+		synchronized (triggerEvents) {
+			if (event.playback && hasPlaybackTriggerEvent(event.playbackMillis)) {
+				return;
+			}
+			triggerEvents.add(event);
+		}
+		if (settings.sound && allowSound) {
+			Toolkit.getDefaultToolkit().beep();
+		}
+		if (settings.log && allowLog) {
+			writeTriggerLog(event);
+		}
+		SwingUtilities.invokeLater(() -> {
+			refreshTriggerTable();
+			if (event.playback)
+				waterfallPlot.setPlaybackEventMarkers(buildPlaybackEventMarkers());
+			updateTriggerStatus(formatTriggerEventCountStatus());
+		});
+	}
+
+	private boolean hasPlaybackTriggerEvent(long playbackMillis) {
+		for (TriggerEvent event : triggerEvents) {
+			if (event.playback && event.playbackMillis == playbackMillis)
+				return true;
+		}
+		return false;
+	}
+
+	private void writeTriggerLog(TriggerEvent event) {
+		try {
+			if (triggerLogWriter == null) {
+				DateTimeFormatter dStampFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss");
+				triggerLogWriter = new FileWriter("# TRIGGER " + formatRecordingRangeName() + " MHz "
+						+ LocalDateTime.now().format(dStampFormat) + ".csv");
+				triggerLogWriter.write("Mode,Timestamp,Playback Offset,Frequency [MHz],Max Level [dBm],Total Power [dBm]\r\n");
+			}
+			triggerLogWriter.write((event.playback ? "REPLAY" : "LIVE") + ","
+					+ formatTriggerEventTime(event) + ","
+					+ (event.playbackMillis >= 0 ? formatMillis(event.playbackMillis) : "") + ","
+					+ String.format(Locale.US, "%.2f", event.frequencyMHz) + ","
+					+ String.format(Locale.US, "%.1f", event.maxLevelDbm) + ","
+					+ String.format(Locale.US, "%.1f", event.totalPowerDbm) + "\r\n");
+			triggerLogWriter.flush();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+	private void refreshTriggerTable() {
+		if (triggerTableModel == null)
+			return;
+		triggerTableModel.setRowCount(0);
+		synchronized (triggerEvents) {
+			for (int i = triggerEvents.size() - 1; i >= 0; i--) {
+				TriggerEvent event = triggerEvents.get(i);
+				triggerTableModel.addRow(new Object[] {
+						formatTriggerEventTime(event),
+						event.playback ? "REPLAY" : "LIVE",
+						event.playbackMillis >= 0 ? formatMillis(event.playbackMillis) : "",
+						formatTriggerFrequencyMHz(event.frequencyMHz),
+						formatTriggerEventDbm(event)
+				});
+			}
+		}
+	}
+
+	private String formatTriggerEventDbm(TriggerEvent event) {
+		boolean maxEnabled = triggerSettings.maxLevelEnabled;
+		boolean totalEnabled = triggerSettings.totalPowerEnabled;
+		if (maxEnabled && totalEnabled)
+			return String.format(Locale.US, "M %.1f / T %.1f", event.maxLevelDbm, event.totalPowerDbm);
+		if (totalEnabled)
+			return String.format(Locale.US, "T %.1f", event.totalPowerDbm);
+		return String.format(Locale.US, "M %.1f", event.maxLevelDbm);
+	}
+
+	private long[] buildPlaybackEventMarkers() {
+		ArrayList<Long> markers = new ArrayList<>();
+		synchronized (triggerEvents) {
+			for (TriggerEvent event : triggerEvents) {
+				if (event.playback && event.playbackMillis >= 0)
+					markers.add(event.playbackMillis);
+			}
+		}
+		long[] out = new long[markers.size()];
+		for (int i = 0; i < markers.size(); i++)
+			out[i] = markers.get(i);
+		return out;
+	}
+
+	private void updateTriggerStatus(String status) {
+		if (triggerStatusLabel != null)
+			triggerStatusLabel.setText(status);
+	}
+
+	private String formatTriggerEventCountStatus() {
+		int live = 0;
+		int replay = 0;
+		synchronized (triggerEvents) {
+			for (TriggerEvent event : triggerEvents) {
+				if (event.playback)
+					replay++;
+				else
+					live++;
+			}
+		}
+		return "Events LIVE: " + live + " / REPLAY: " + replay;
+	}
+
+	private String formatTriggerEventTime(TriggerEvent event) {
+		if (event.epochMillis <= 0)
+			return "";
+		return LocalDateTime.ofInstant(Instant.ofEpochMilli(event.epochMillis), ZoneId.systemDefault())
+				.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+	}
+
+	private String formatMillis(long millis) {
+		if (millis < 0)
+			millis = 0;
+		long totalSeconds = millis / 1000;
+		long seconds = totalSeconds % 60;
+		long minutes = (totalSeconds / 60) % 60;
+		long hours = totalSeconds / 3600;
+		if (hours > 0)
+			return String.format("%d:%02d:%02d", hours, minutes, seconds);
+		return String.format("%02d:%02d", minutes, seconds);
+	}
+
 	private void startSpectrumPlayback() {
 		if (!parameterIsPlayingSpectrum.getValue()) {
 			stopSpectrumPlayback = true;
@@ -1158,6 +1867,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			return;
 		}
 		JFileChooser chooser = new JFileChooser(new File("."));
+		chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("HackRF spectrum data (*.hsr)", "hsr"));
 		int result = chooser.showOpenDialog(uiFrame);
 		if (result != JFileChooser.APPROVE_OPTION) {
 			parameterIsPlayingSpectrum.setValue(false);
@@ -1165,6 +1875,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		}
 
 		File file = chooser.getSelectedFile();
+		currentSpectrumPlaybackFile = file;
+		resetTriggerRangeOnPlaybackStart = true;
+		clearPlaybackTriggerEvents();
 		stopSpectrumPlayback = false;
 		hwProcessingQueue.clear();
 		threadSpectrumPlayback = new Thread(() -> playSpectrumRecording(file));
@@ -1194,12 +1907,16 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			parameterFrequency.setValue(liveFrequencyRangeBeforePlayback);
 			playbackHeader = null;
 			parameterDisplayFreqRange.setValue(parameterFreqRange.getValue());
+			resetTriggerRangeToActiveFullRange();
 			redrawFrequencySpectrumTable();
 			playbackPositionMillis = 0;
 			playbackDurationMillis = 0;
 			playbackCurrentEpochMillis = 0;
 			playbackSeekRequestMillis = -1;
+			resetTriggerRangeOnPlaybackStart = false;
 			waterfallPlot.setPlaybackStatus(false, 0, 0);
+			waterfallPlot.setPlaybackEventMarkers(new long[0]);
+			currentSpectrumPlaybackFile = null;
 			if (threadProcessing != null) {
 				threadProcessing.interrupt();
 				try {
@@ -1224,6 +1941,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			playbackHeader = reader.getHeader();
 			parameterDisplayFreqRange.setValue(getActiveRangesForDisplay());
 			updateFrequencySelectorForPlayback(playbackHeader);
+			if (resetTriggerRangeOnPlaybackStart) {
+				resetTriggerRangeToActiveFullRange();
+				resetTriggerRangeOnPlaybackStart = false;
+			}
 			playbackCurrentEpochMillis = playbackHeader.startEpochMillis <= 0 ? 0 : playbackHeader.startEpochMillis + startOffsetMillis;
 			redrawFrequencySpectrumTable();
 			fireHardwareStateChanged(true);
@@ -1392,17 +2113,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		long counter = 0;
 		long frameCounterChart = 0;
 		boolean dcap = false;
-		String pattern = ""; 
-		switch (parameterLogDetail.getValue()) {
-        case "FRA": pattern = "HH:mm:ss.S";
-                break;
-        case "SEC":  pattern = "HH:mm:ss";
-                break;
-        case "MIN":  pattern = "HH:mm";
-        		break;
-		}
-		DateTimeFormatter dtFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd " + pattern);
-		String dt1 = LocalDateTime.now().format(dtFormat);
+		String dt1 = formatStatsLogTimestamp();
 		String dt2 = dt1;
 
 		//mainWhile:
@@ -1533,8 +2244,14 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						/**
 						 * after filtering, calculate peak spectrum
 						 */
-						if (parameterShowPeaks.getValue()) {
+						TriggerSettings triggerSettingsSnapshot = snapshotTriggerSettings();
+						boolean triggerUsesPeaks = triggerSettingsSnapshot.enabled
+								&& TriggerSettings.SOURCE_PEAKS.equals(triggerSettingsSnapshot.source);
+						if (parameterShowPeaks.getValue() || triggerUsesPeaks) {
 							datasetSpectrum.refreshPeakSpectrum();
+						}
+						evaluateTrigger(datasetSpectrum, activePlaybackHeader != null);
+						if (parameterShowPeaks.getValue()) {
 							double[] spp = datasetSpectrum.calculateSpectrumPeakPower(parameterPowerFluxCal.getValue());
 							if (!parameterShowHoldMarker.getValue())
 							{
@@ -1542,7 +2259,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 									waterfallPlot.setStatusMessage(String.format(new Locale("sk","SK"), "Max: %.1f dBm @ %.2f MHz", spp[1], spp[2]),1);
 								waterfallPlot.setStatusMessage(String.format(""),2);
 							}
-							dt1 = LocalDateTime.now().format(dtFormat);
+							dt1 = formatStatsLogTimestamp();
 							/*
 							markerFrequencyPeak.setValue(spp[2]);
 							markerFrequencyPeak.setLabel(String.format("%.1f MHz", spp[2]));
@@ -1784,15 +2501,33 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	}
 
 	private String formatRecordingRangeName() {
-		return formatRecordingRangeName(getFreq().getStartMHz(), getFreq().getEndMHz(), parameterFreqShift.getValue());
+		SpectrumRecording.Header header = playbackHeader;
+		if (header != null) {
+			String ranges = header.ranges == null || header.ranges.trim().isEmpty()
+					? header.freqStartMHz + "-" + header.freqStopMHz
+					: header.ranges;
+			return formatRecordingRangeName(ranges, header.freqStartMHz, header.freqStopMHz, header.freqShift);
+		}
+		return formatRecordingRangeName(parameterFreqRange.getValue(), getFreq().getStartMHz(), getFreq().getEndMHz(),
+				parameterFreqShift.getValue());
+	}
+
+	private String formatVideoRecordingFilePrefix() {
+		String area = parameterVideoArea.getValue();
+		if ("SPEC+WF".equals(area))
+			return "# VIDEO SPEC+WF ";
+		if ("FULLSCR".equals(area))
+			return "# VIDEO FULLSCR ";
+		return "# VIDEO SPEC ";
 	}
 
 	private String formatRecordingRangeName(DatasetSpectrumPeak spectrum) {
-		return formatRecordingRangeName(spectrum.getFreqStartMHz(), spectrum.getFreqStopMHz(), spectrum.getFreqShift());
+		SpectrumRecording.Header header = playbackHeader;
+		String ranges = header == null ? parameterFreqRange.getValue() : header.ranges;
+		return formatRecordingRangeName(ranges, spectrum.getFreqStartMHz(), spectrum.getFreqStopMHz(), spectrum.getFreqShift());
 	}
 
-	private String formatRecordingRangeName(int fallbackStartMHz, int fallbackStopMHz, int shift) {
-		String ranges = parameterFreqRange.getValue();
+	private String formatRecordingRangeName(String ranges, int fallbackStartMHz, int fallbackStopMHz, int shift) {
 		int[] pairs = parseRangePairs(ranges);
 		if (pairs != null && pairs.length > 2) {
 			StringBuilder b = new StringBuilder();
@@ -2545,6 +3280,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private void setupParameterObservers() {
 		Runnable restartHackrf = this::restartHackrfSweep;
 		parameterFrequency.addListener(restartHackrf);
+		parameterFrequency.addListener(() -> {
+			if (!isReplayActive())
+				resetTriggerRangeToActiveFullRange();
+		});
 		parameterAntPower.addListener(restartHackrf);
 		parameterAntennaLNA.addListener(restartHackrf);
 		parameterFFTBinHz.addListener(restartHackrf);
@@ -2555,6 +3294,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			int[] pairs = parseRangePairs(parameterFreqRange.getValue());
 			waterfallPlot.setRangePairs(pairs, parameterFreqShift.getValue());
 			persistentDisplay.setRangePairs(pairs, parameterFreqShift.getValue());
+			if (!isReplayActive())
+				resetTriggerRangeToActiveFullRange();
 		});
 		parameterFreqRange.addListener(restartHackrf);
 		// update waterfall and persistent display compressed ranges when freqRange changes
@@ -2564,6 +3305,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			int[] pairs = parseRangePairs(parameterFreqRange.getValue());
 			waterfallPlot.setRangePairs(pairs, parameterFreqShift.getValue());
 			persistentDisplay.setRangePairs(pairs, parameterFreqShift.getValue());
+			if (!isReplayActive())
+				resetTriggerRangeToActiveFullRange();
 		});
 		parameterIsCapturingPaused.addListener(this::fireCapturingStateChanged);
 		

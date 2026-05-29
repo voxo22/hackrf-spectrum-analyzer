@@ -81,6 +81,7 @@ public class HackRFSweepSettingsUI extends JPanel
 	private JButton btnRecData;
 	private JButton btnRecSpectrum;
 	private JButton btnPlaySpectrum;
+	private JButton btnTrigger;
 	private JButton btnReset;
 	private JButton button_plus;
 	private JButton button_minus;
@@ -339,38 +340,45 @@ public class HackRFSweepSettingsUI extends JPanel
 		panelMainSettings.add(btnPause, "cell 0 25,growx,alignx left");
 		btnPause.setBackground(Color.yellow);
 		//btnPause.setBorderPainted(false);
-		btnPause.setPreferredSize(new Dimension(16, 20));
+		btnPause.setPreferredSize(new Dimension(16, 16));
 		btnPause.setBorder(BorderFactory.createEmptyBorder());
-		
+
+		btnTrigger = new JButton("TRIG");
+		panelMainSettings.add(btnTrigger, "cell 0 25,growx,alignx left");
+		btnTrigger.setForeground(Color.black);
+		btnTrigger.setBackground(new Color(0xFFAA33));
+		btnTrigger.setPreferredSize(new Dimension(25, 16));
+		btnTrigger.setBorder(BorderFactory.createEmptyBorder());
+
+		btnPlaySpectrum = new JButton("REPLAY");
+		panelMainSettings.add(btnPlaySpectrum, "cell 0 25,growx,alignx left,wrap");
+		btnPlaySpectrum.setForeground(Color.black);
+		btnPlaySpectrum.setBackground(Color.cyan);
+		btnPlaySpectrum.setPreferredSize(new Dimension(25, 16));
+		btnPlaySpectrum.setBorder(BorderFactory.createEmptyBorder());
+
 		btnRecVideo = new JButton("VIDEO");
-		panelMainSettings.add(btnRecVideo, "cell 0 25,growx,alignx left");
+		panelMainSettings.add(btnRecVideo, "cell 0 26,growx,alignx left");
 		btnRecVideo.setForeground(Color.black);
 		btnRecVideo.setBackground(Color.red);
 		//btnRecVideo.setBorderPainted(false);
-		btnRecVideo.setPreferredSize(new Dimension(25, 20));
+		btnRecVideo.setPreferredSize(new Dimension(25, 16));
 		btnRecVideo.setBorder(BorderFactory.createEmptyBorder());
 		
 		btnRecData = new JButton("STATS");
-		panelMainSettings.add(btnRecData, "cell 0 25,growx,alignx left");
+		panelMainSettings.add(btnRecData, "cell 0 26,growx,alignx left");
 		btnRecData.setForeground(Color.black);
 		btnRecData.setBackground(Color.red);
 		//btnRecData.setBorderPainted(false);
-		btnRecData.setPreferredSize(new Dimension(25, 20));
+		btnRecData.setPreferredSize(new Dimension(25, 16));
 		btnRecData.setBorder(BorderFactory.createEmptyBorder());
 
 		btnRecSpectrum = new JButton("DATA");
-		panelMainSettings.add(btnRecSpectrum, "cell 0 25,growx,alignx left");
+		panelMainSettings.add(btnRecSpectrum, "cell 0 26,growx,alignx left");
 		btnRecSpectrum.setForeground(Color.black);
 		btnRecSpectrum.setBackground(Color.red);
-		btnRecSpectrum.setPreferredSize(new Dimension(25, 20));
+		btnRecSpectrum.setPreferredSize(new Dimension(25, 16));
 		btnRecSpectrum.setBorder(BorderFactory.createEmptyBorder());
-
-		btnPlaySpectrum = new JButton("REPLAY");
-		panelMainSettings.add(btnPlaySpectrum, "cell 0 25,growx,alignx left");
-		btnPlaySpectrum.setForeground(Color.black);
-		btnPlaySpectrum.setBackground(Color.cyan);
-		btnPlaySpectrum.setPreferredSize(new Dimension(25, 20));
-		btnPlaySpectrum.setBorder(BorderFactory.createEmptyBorder());
 
 		JTabbedPane tabbedPane	= new JTabbedPane(JTabbedPane.TOP);
 		setLayout(new BorderLayout());
@@ -843,7 +851,7 @@ public class HackRFSweepSettingsUI extends JPanel
 			lblREC.setForeground(Color.WHITE);
 			tab3.add(lblREC, "growx,cell 0 8");
 			
-			JLabel lblLogDetail = new JLabel("CSV Log Interval ");
+			JLabel lblLogDetail = new JLabel("STATS Log Interval ");
 			lblLogDetail.setForeground(Color.WHITE);
 			tab3.add(lblLogDetail, "cell 0 8,alignx right");
 			
@@ -854,7 +862,7 @@ public class HackRFSweepSettingsUI extends JPanel
 			((ListEditor) spinnerLogDetail.getEditor()).getTextField().setColumns(4);
 			tab3.add(spinnerLogDetail, "cell 0 8,alignx right");
 
-			JLabel lblSpectrumRecordFrameRate = new JLabel("Spectrum REC FPS ");
+			JLabel lblSpectrumRecordFrameRate = new JLabel("DATA REC FPS ");
 			lblSpectrumRecordFrameRate.setForeground(Color.WHITE);
 			tab3.add(lblSpectrumRecordFrameRate, "cell 0 9,alignx right");
 			
@@ -916,7 +924,31 @@ public class HackRFSweepSettingsUI extends JPanel
 			((ListEditor) spinnerVideoFormat.getEditor()).getTextField().setColumns(3);
 			tab3.add(spinnerVideoFormat, "cell 0 13, alignx right");
 		}
+		compactSliders();
 		bindViewToModel();
+	}
+
+	private void compactSliders() {
+		Dimension compact = new Dimension(120, 16);
+		compactSlider(sliderGain, compact);
+		compactSlider(sliderGainLNA, compact);
+		compactSlider(sliderGainVGA, compact);
+		compactSlider(slider_AmplitudeOffset, compact);
+		compactSlider(slider_PowerFluxCal, compact);
+		compactSlider(sliderAvgOffset, compact);
+		compactSlider(slider_waterfallPaletteStart, compact);
+		compactSlider(slider_waterfallPaletteSize, compact);
+		compactSlider(slider_WaterfallSpeed, compact);
+	}
+
+	private void compactSlider(JSlider slider, Dimension size) {
+		if (slider == null)
+			return;
+		slider.setPreferredSize(size);
+		slider.setMinimumSize(new Dimension(40, size.height));
+		slider.setMaximumSize(new Dimension(Integer.MAX_VALUE, size.height));
+		slider.setBorder(BorderFactory.createEmptyBorder());
+		slider.setFocusable(false);
 	}
 
 	private void bindViewToModel() {
@@ -963,7 +995,7 @@ public class HackRFSweepSettingsUI extends JPanel
 		new MVCController(chckbxRemoveSpurs, hRF.isSpurRemoval());
 		
 		new MVCController((valueChangedCall) -> btnPause.addActionListener((event) -> valueChangedCall.accept(!hRF.isCapturingPaused().getValue())), 
-				isCapt -> btnPause.setText(!isCapt ? "||"  : "►"), 
+				isCapt -> btnPause.setText(!isCapt ? "PAUSE"  : "►"), 
 				hRF.isCapturingPaused());
 		
 		new MVCController((valueChangedCall) -> btnRecVideo.addActionListener((event) -> valueChangedCall.accept(!hRF.isRecordedVideo().getValue())), 
@@ -971,17 +1003,19 @@ public class HackRFSweepSettingsUI extends JPanel
 				hRF.isRecordedVideo());
 		
 		new MVCController((valueChangedCall) -> btnRecData.addActionListener((event) -> valueChangedCall.accept(!hRF.isRecordedData().getValue())), 
-				isRecData -> btnRecData.setText(!isRecData ? "CSV"  : "■"), 
+				isRecData -> btnRecData.setText(!isRecData ? "STATS"  : "■"), 
 				hRF.isRecordedData());
 
 		new MVCController((valueChangedCall) -> btnRecSpectrum.addActionListener((event) -> valueChangedCall.accept(!hRF.isRecordedSpectrum().getValue())),
-				isRecSpectrum -> btnRecSpectrum.setText(!isRecSpectrum ? "SPEC" : "■"),
+				isRecSpectrum -> btnRecSpectrum.setText(!isRecSpectrum ? "DATA" : "■"),
 				hRF.isRecordedSpectrum());
 
 		new MVCController((valueChangedCall) -> btnPlaySpectrum.addActionListener((event) -> valueChangedCall.accept(!hRF.isPlayingSpectrum().getValue())),
 				isPlayingSpectrum -> btnPlaySpectrum.setText(!isPlayingSpectrum ? "REPLAY" : "■"),
 				hRF.isPlayingSpectrum());
 	
+		btnTrigger.addActionListener((event) -> hRF.showTriggerDialog());
+
 		new MVCController(spinnerPeakFallSpeed, hRF.getPeakFallRate(), val -> Integer.parseInt(val.toString()), val -> val.toString());
 		new MVCController(spinnerPeakFallTrs, hRF.getPeakFallTrs(), val -> Integer.parseInt(val.toString()), val -> val.toString());
 		new MVCController(spinnerPeakHoldTime, hRF.getPeakHoldTime(), val -> Integer.parseInt(val.toString()), val -> val.toString());
@@ -1121,7 +1155,6 @@ public class HackRFSweepSettingsUI extends JPanel
 				slider_AmplitudeOffset,
 				slider_PowerFluxCal,
 				spinnerAvgIterations,
-				spinnerLogDetail,
 				spinnerSpectrumRecordFrameRate,
 				btnRecSpectrum
 		};

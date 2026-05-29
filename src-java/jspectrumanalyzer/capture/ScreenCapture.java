@@ -53,7 +53,7 @@ public class ScreenCapture {
 		}
 		else if(area.equals("SPEC+WF")) //record video of spectrum & waterfall
 		{
-			frame.setMinimumSize(new Dimension(width + 230, height));
+			frame.setMinimumSize(new Dimension(width + 230, height - 50));
 		}
 		else //record full spectrum analyzer screen
 		{

@@ -157,6 +157,11 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 		return xySeriesF;
 	}
 
+	public float[] getPeakSpectrumArray()
+	{
+		return spectrumPeakHold;
+	}
+
 	public XYSeriesImmutable createMaxHoldDataset(String name) {
 		float[] xValues	= new float[spectrum.length];
 		float[] yValues	= spectrumMaxHold;

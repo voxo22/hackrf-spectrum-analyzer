@@ -124,6 +124,8 @@ public interface HackRFSettings {
 
 	public ModelValueBoolean isSpurRemoval();
 
+	public void showTriggerDialog();
+
 
 	public void registerListener(HackRFEventListener listener);
 

@@ -56,6 +56,7 @@ public class WaterfallPlot extends JPanel {
 	private boolean			playbackVisible			= false;
 	private long			playbackPositionMillis	= 0;
 	private long			playbackDurationMillis	= 0;
+	private long[]			playbackEventMarkersMillis = new long[0];
 	private Consumer<Double>	playbackSeekListener	= null;
 
 	public WaterfallPlot(ChartPanel chartPanel, int maxHeight) {
@@ -318,6 +319,11 @@ public class WaterfallPlot extends JPanel {
 		repaint();
 	}
 
+	public void setPlaybackEventMarkers(long[] markersMillis) {
+		this.playbackEventMarkersMillis = markersMillis == null ? new long[0] : markersMillis.clone();
+		repaint();
+	}
+
 	public void setPlaybackSeekListener(Consumer<Double> playbackSeekListener) {
 		this.playbackSeekListener = playbackSeekListener;
 	}
@@ -523,6 +529,15 @@ public class WaterfallPlot extends JPanel {
 		g.fillRect(x, y, w, h);
 		g.setColor(new Color(0x4FAF4F));
 		g.fillRect(x, y, (int) Math.round(w * progress), h);
+		g.setColor(new Color(0xFFAA33));
+		if (duration > 0) {
+			for (long markerMillis : playbackEventMarkersMillis) {
+				if (markerMillis < 0 || markerMillis > duration)
+					continue;
+				int markerX = x + (int) Math.round(w * (markerMillis / (double) duration));
+				g.drawLine(markerX, y - 4, markerX, y + h + 4);
+			}
+		}
 		g.setColor(Color.WHITE);
 		g.drawString("PLAY " + formatMillis(position) + " / " + formatMillis(duration), x, y + h + 14);
 	}
