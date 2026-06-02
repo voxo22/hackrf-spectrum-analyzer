@@ -6,6 +6,13 @@
     "configurations": [
         {
             "type": "java",
+            "name": "IQAnalyzerApp",
+            "request": "launch",
+            "mainClass": "jspectrumanalyzer.iq.IQAnalyzerApp",
+            "projectName": "hackrf-sweep"
+        },
+        {
+            "type": "java",
             "name": "HackRFSweepSpectrumAnalyzer",
             "request": "launch",
             "mainClass": "jspectrumanalyzer.HackRFSweepSpectrumAnalyzer",

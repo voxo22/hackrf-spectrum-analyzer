@@ -15,6 +15,10 @@ RELEASE_DIR					= ../../release/
 SOURCES						= \
 								lib/hackrf/host/libhackrf/src/hackrf.c \
 								lib/hackrf/host/hackrf-tools/src/hackrf_sweep.c
+
+IQ_SOURCES					= \
+								lib/hackrf/host/libhackrf/src/hackrf.c \
+								src-iq/src-c/hackrf_iq.c
 	
 INCLUDE_PATHS				= -Ilib/hackrf/host/libhackrf/src	 -I$(LIBUSB_DIR)/include/libusb-1.0   
 JNA_LIB						= lib/hackrf-sweep-jna.jar
@@ -27,6 +31,8 @@ OBJECT_SUFFIX_WIN			= ow
 				 
 OBJECTS						= $(addsuffix .$(OBJECT_SUFFIX), $(addprefix $(BUILD_PATH)/, $(SOURCES))) 						
 OBJECTS_WIN					= $(addsuffix .$(OBJECT_SUFFIX_WIN), $(addprefix $(BUILD_PATH)/, $(SOURCES))) 						
+IQ_OBJECTS					= $(addsuffix .$(OBJECT_SUFFIX), $(addprefix $(BUILD_PATH)/, $(IQ_SOURCES))) 						
+IQ_OBJECTS_WIN				= $(addsuffix .$(OBJECT_SUFFIX_WIN), $(addprefix $(BUILD_PATH)/, $(IQ_SOURCES))) 						
 
 CFLAGS						= -DHACKRF_SWEEP_AS_LIBRARY -c -fPIC
 LDFLAGS						=  -shared 
@@ -60,6 +66,7 @@ INCLUDE_PATHS_WIN			= $(INCLUDE_PATHS) -Ilib/fftw-3.3.5-dll64
 LDLIBS_WIN					= -lusb-1.0 -lfftw3f-3 -lpthread 
 DLL_LIB_PTHREAD				= lib/win32-x86-64/libwinpthread-1.dll
 DLL_LIB_WIN					= $(OUTPUT_DLL_DIR_WIN)/hackrf-sweep.dll
+DLL_LIB_IQ_WIN				= $(OUTPUT_DLL_DIR_WIN)/hackrf-iq.dll
 DLL_LIB_FFTW				= lib/fftw-3.3.5-dll64/libfftw3f-3.dll
 DLL_LIB_USB					= $(LIBUSB_DIR)/MinGW64/dll/libusb-1.0.dll
 LDFLAGS_WIN					+= -Wl,--kill-at  -static-libgcc -static-libstdc++ -shared
@@ -69,6 +76,7 @@ ANT_PATH					= ""
 #required installed libraries for linux: openjdk-8 or newer, libfftw3, libusb-1.0 
 JDK_EXECUTABLE				= java #required to generate jna wrapper
 DLL_LIB						= $(OUTPUT_DLL_DIR)/libhackrf-sweep.so
+DLL_LIB_IQ					= $(OUTPUT_DLL_DIR)/libhackrf-iq.so
 LDLIBS						= -lusb-1.0 -lfftw3 -lfftw3f
 CFLAGS						+= -march=x86-64
 LIB_DIR						= linux-x86-64
@@ -81,12 +89,12 @@ ZIP_FILE_PATH				= $(OUTPUT_DLL_DIR)/../../$(ZIP_FILE)
 .NOTPARALLEL: all
 .PHONY: all
 
-all: prepare $(MAIN_JAR) $(DLL_LIB) $(ZIP_FILE_PATH)
+all: prepare $(MAIN_JAR) $(DLL_LIB) $(DLL_LIB_IQ) $(ZIP_FILE_PATH)
 
 .PHONY: dirs
 dirs:
 	@echo "Creating directories"
-	@mkdir -p $(dir $(OBJECTS))
+	@mkdir -p $(dir $(OBJECTS)) $(dir $(OBJECTS_WIN)) $(dir $(IQ_OBJECTS)) $(dir $(IQ_OBJECTS_WIN))
 
 $(MAIN_JAR):
 	echo "running ant..."
@@ -94,13 +102,13 @@ $(MAIN_JAR):
 	ant -buildfile lib/hackrf_sweep_spectral_analyzer_buildjar_ant.xml create_run_jar
 	echo "running ant... done"
 	
-$(ZIP_FILE_PATH): $(DLL_LIB) $(DLL_LIB_WIN)
+$(ZIP_FILE_PATH): $(DLL_LIB) $(DLL_LIB_WIN) $(DLL_LIB_IQ) $(DLL_LIB_IQ_WIN)
 	mkdir -p $(RELEASE_DIR)
 	cd $(OUTPUT_DLL_DIR)/../../ && rm -rf $(ZIP_FILE) &&  zip -r $(ZIP_FILE)  *
 	yes | cp -rf $(ZIP_FILE_PATH) $(RELEASE_DIR)
 
 .PHONY: prepare
-prepare: dirs $(OBJECTS) $(OBJECTS_WIN) $(DLL_LIB_FFTW)
+prepare: dirs $(OBJECTS) $(OBJECTS_WIN) $(IQ_OBJECTS) $(IQ_OBJECTS_WIN) $(DLL_LIB_FFTW)
 	mkdir -p $(OUTPUT_DLL_DIR) $(OUTPUT_DLL_DIR_WIN)	
 	cp -f lib/program.ico lib/program.png $(OUTPUT_DLL_DIR)/../
 	cp lib/launchers/hackrf_sweep_spectrum_analyzer_linux.sh $(OUTPUT_PATH)
@@ -120,23 +128,41 @@ jnabridge: $(JNA_SWEEP_HEADER)
 
 $(DLL_LIB_WIN): $(OBJECTS_WIN) 
 	echo "---- Building windows version [start] ----"	
+	@mkdir -p $(dir $@)
 	$(CXX_WIN) $(LDFLAGS_WIN)   $(LDPATHS_WIN)  $(OBJECTS_WIN)  -o $(DLL_LIB_WIN) $(LDLIBS_WIN)
 	x86_64-w64-mingw32-strip --strip-unneeded $(DLL_LIB_WIN)
 	echo "---- Building windows version [done ] ----"	
+
+$(DLL_LIB_IQ_WIN): $(IQ_OBJECTS_WIN) 
+	echo "---- Building windows IQ version [start] ----"	
+	@mkdir -p $(dir $@)
+	$(CXX_WIN) $(LDFLAGS_WIN)   $(LDPATHS_WIN)  $(IQ_OBJECTS_WIN)  -o $(DLL_LIB_IQ_WIN) $(LDLIBS_WIN)
+	x86_64-w64-mingw32-strip --strip-unneeded $(DLL_LIB_IQ_WIN)
+	echo "---- Building windows IQ version [done ] ----"	
 	
 $(DLL_LIB):  $(OBJECTS)
 	echo "---- Building linux version [start] ----"	
+	@mkdir -p $(dir $@)
 	$(CXX) $(LDFLAGS) $(LDPATHS) $(OBJECTS) -o $(DLL_LIB) $(LDLIBS)
 	strip --strip-unneeded $(DLL_LIB)
 	echo "---- Building linux version [done ] ----"
 
+$(DLL_LIB_IQ):  $(IQ_OBJECTS)
+	echo "---- Building linux IQ version [start] ----"	
+	@mkdir -p $(dir $@)
+	$(CXX) $(LDFLAGS) $(LDPATHS) $(IQ_OBJECTS) -o $(DLL_LIB_IQ) $(LDLIBS)
+	strip --strip-unneeded $(DLL_LIB_IQ)
+	echo "---- Building linux IQ version [done ] ----"
+
 $(BUILD_PATH)/%.c.$(OBJECT_SUFFIX): %.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(INCLUDE_PATHS)  $< -o $@
 
 $(BUILD_PATH)/%.c.$(OBJECT_SUFFIX_WIN): %.c
+	@mkdir -p $(dir $@)
 	$(CC_WIN) $(CFLAGS_WIN) $(INCLUDE_PATHS_WIN)  $< -o $@
 	
 .PHONY: clean
 clean:
-	rm -f  $(MAIN_JAR) $(OBJECTS) $(OBJECTS_WIN) $(DLL_LIB) $(DLL_LIB_WIN) # $(JNA_LIB)
+	rm -f  $(MAIN_JAR) $(OBJECTS) $(OBJECTS_WIN) $(IQ_OBJECTS) $(IQ_OBJECTS_WIN) $(DLL_LIB) $(DLL_LIB_WIN) $(DLL_LIB_IQ) $(DLL_LIB_IQ_WIN) # $(JNA_LIB)
 	rm -rf $(OUTPUT_DLL_DIR) $(BUILD_PATH) $(OUTPUT_PATH)/*	
