@@ -423,6 +423,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
     private int										lastX;
     private int										lastXX;
     private boolean									dragging;
+	private boolean									draggingStartedInMultiRange;
+	private int										draggingBaseStartMHz;
+	private int										draggingBaseStopMHz;
+	private int										draggingPanDeltaMHz;
 	private final TriggerSettings					triggerSettings					= new TriggerSettings();
 	private final ArrayList<TriggerEvent>			triggerEvents					= new ArrayList<>();
 	private long									lastTriggerAlertMillis			= 0;
@@ -2935,8 +2939,14 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                     chartPanel.requestFocus();
                     return;
                 }
+                draggingStartedInMultiRange = false;
                 if (isInAxisArea(e.getX(), e.getY())) {
                     dragging = true;
+                    int[] activePairs = parseRangePairs(parameterFreqRange.getValue());
+                    draggingStartedInMultiRange = isMultiRange(activePairs);
+                    draggingBaseStartMHz = getFreq().getStartMHz();
+                    draggingBaseStopMHz = getFreq().getEndMHz();
+                    draggingPanDeltaMHz = 0;
                     lastX = (int) chart.getXYPlot().getDomainAxis().java2DToValue(e.getX(),
                     		chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), chart.getXYPlot().getDomainAxisEdge());
                     chartPanel.setDomainZoomable(false);
@@ -2951,20 +2961,39 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
             		dragging = false;
             		return;
             	}
+                boolean releasedAxisDrag = dragging;
             	dragging = false;
             	chartPanel.setDomainZoomable(true);
             	if (lastXX != e.getX())
             	{
 		        	chart.getXYPlot().getRangeAxis().setAutoRange(false);
 		        	chart.getXYPlot().getRangeAxis().setRange(-100, -10);
+                    int[] activePairs = parseRangePairs(parameterFreqRange.getValue());
+                    if (releasedAxisDrag && draggingStartedInMultiRange && isMultiRange(activePairs)) {
+                        int newLowerX = draggingBaseStartMHz + draggingPanDeltaMHz;
+                        int newUpperX = draggingBaseStopMHz + draggingPanDeltaMHz;
+                        newLowerX = clampFrequencyMHz(newLowerX);
+                        newUpperX = clampFrequencyMHz(newUpperX);
+                        if (newUpperX - newLowerX < 1)
+                            newUpperX = Math.min(7200, newLowerX + 1);
+                        applySingleFrequencyRange(newLowerX, newUpperX, false);
+                        draggingStartedInMultiRange = false;
+                        return;
+                    }
 		        	int newLowerX = (int) Math.round(chart.getXYPlot().getDomainAxis().getLowerBound());
 		            int newUpperX = (int) Math.round(chart.getXYPlot().getDomainAxis().getUpperBound());
+		            if (isMultiRange(activePairs)) {
+                        newLowerX = (int) Math.round(mapCompressedToOriginal(newLowerX, activePairs));
+                        newUpperX = (int) Math.round(mapCompressedToOriginal(newUpperX, activePairs));
+		            }
 		            if (newLowerX < 0) newLowerX = 0;
                     if (newUpperX > 7200) newUpperX = 7200;
 		            double newDif = newUpperX - newLowerX;
 		            if (newDif < 1) newUpperX = newLowerX + 1;
 		            int[] newChartParams = setupChartParams(newDif);
 		            parameterFrequency.setValue(new FrequencyRange(newLowerX, newUpperX));
+		            if (isMultiRange(activePairs))
+                        parameterFreqRange.setValue(newLowerX + "-" + newUpperX);
 		            parameterFFTBinHz.setValue(newChartParams[0]);
 		            parameterAmplitudeOffset.setValue(newChartParams[1]);
 		            restartHackrfSweep();
@@ -2985,10 +3014,21 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                 double dif = upperX - lowerX;
                 double mouseX = chart.getXYPlot().getDomainAxis().java2DToValue(e.getX(),
                 		chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), chart.getXYPlot().getDomainAxisEdge());
+                int[] activePairs = parseRangePairs(parameterFreqRange.getValue());
                 
                 if (notches < 0) {
                     // Zoom in
                 	//int newLowerX = (int) Math.round(lowerX + dif * zoomFactor); //from edge
+                    if (isMultiRange(activePairs)) {
+                        double cursorFrequencyMHz = mapCompressedToOriginal(mouseX, activePairs);
+                        double subRangeDif = findRangeLengthForFrequency(cursorFrequencyMHz, activePairs);
+                        int newLowerX = (int) Math.round(cursorFrequencyMHz - subRangeDif * zoomFactor);
+                        int newUpperX = (int) Math.round(cursorFrequencyMHz + subRangeDif * zoomFactor);
+                        if (newUpperX - newLowerX < 1)
+                            newUpperX = newLowerX + 1;
+                        applySingleFrequencyRange(newLowerX, newUpperX, true);
+                        return;
+                    }
                     int newLowerX = (int) Math.round(mouseX - dif * zoomFactor); //from center
                 	//int newUpperX = (int) Math.round(upperX - dif * zoomFactor);
                     int newUpperX = (int) Math.round(mouseX + dif * zoomFactor);
@@ -3001,6 +3041,15 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                     restartHackrfSweep();
                 } else {
                     // Zoom out
+                    if (isMultiRange(activePairs)) {
+                        double cursorFrequencyMHz = mapCompressedToOriginal(mouseX, activePairs);
+                        int[] subRange = findRangeForFrequency(cursorFrequencyMHz, activePairs);
+                        dif = subRange[1] - subRange[0];
+                        int newLowerX = (int) Math.round(subRange[0] - dif * zoomFactor);
+                        int newUpperX = (int) Math.round(subRange[1] + dif * zoomFactor);
+                        applySingleFrequencyRange(newLowerX, newUpperX, true);
+                        return;
+                    }
                 	int newLowerX = (int) Math.round(lowerX - dif * zoomFactor); //from edge
                     if (newLowerX < 0) newLowerX = 0;
                     int newUpperX = (int) Math.round(upperX + dif * zoomFactor);
@@ -3029,6 +3078,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                 	if (lowerX >= 0 && upperX <= 7200) {
 	                    int deltaX = lastX - (int) chart.getXYPlot().getDomainAxis().java2DToValue(e.getX(),
 	                    		chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), chart.getXYPlot().getDomainAxisEdge());
+	                    if (draggingStartedInMultiRange)
+                            draggingPanDeltaMHz += deltaX;
 	                    
 	                    // Pan the plot
 	                    chart.getXYPlot().getDomainAxis().setLowerBound(lowerX + deltaX);
@@ -3056,6 +3107,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                     	if (newLowerX < 0) newLowerX = 0;
                     	if (newUpperX > 7200) newUpperX = 7200;
                     	if (newUpperX - newLowerX < 1) newUpperX = newLowerX + 1;
+                        if (isMultiRange(parseRangePairs(parameterFreqRange.getValue()))) {
+                            applySingleFrequencyRange(newLowerX, newUpperX, false);
+                            break;
+                        }
                     	parameterFrequency.setValue(new FrequencyRange(newLowerX, newUpperX));
                     	restartHackrfSweep();
                         break;
@@ -3065,6 +3120,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                     	if (newLowerX < 0) newLowerX = 0;
                     	if (newUpperX > 7200) newUpperX = 7200;
                     	if (newUpperX - newLowerX < 1) newLowerX = newUpperX - 1;
+                        if (isMultiRange(parseRangePairs(parameterFreqRange.getValue()))) {
+                            applySingleFrequencyRange(newLowerX, newUpperX, false);
+                            break;
+                        }
                     	parameterFrequency.setValue(new FrequencyRange(newLowerX, newUpperX));
                     	restartHackrfSweep();
                         break;
@@ -3094,6 +3153,61 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		}
 
 		return false;
+	}
+
+	private boolean isMultiRange(int[] pairs) {
+		return pairs != null && pairs.length > 2;
+	}
+
+	private int clampFrequencyMHz(int frequencyMHz) {
+		if (frequencyMHz < 0)
+			return 0;
+		if (frequencyMHz > 7200)
+			return 7200;
+		return frequencyMHz;
+	}
+
+	private double findRangeLengthForFrequency(double frequencyMHz, int[] pairs) {
+		if (pairs == null)
+			return Math.max(1, getFreq().getEndMHz() - getFreq().getStartMHz());
+		for (int i = 0; i < pairs.length; i += 2) {
+			int start = pairs[i];
+			int stop = pairs[i + 1];
+			if (frequencyMHz >= start && frequencyMHz <= stop)
+				return Math.max(1, stop - start);
+		}
+		return Math.max(1, getFreq().getEndMHz() - getFreq().getStartMHz());
+	}
+
+	private int[] findRangeForFrequency(double frequencyMHz, int[] pairs) {
+		if (pairs != null) {
+			for (int i = 0; i < pairs.length; i += 2) {
+				int start = pairs[i];
+				int stop = pairs[i + 1];
+				if (frequencyMHz >= start && frequencyMHz <= stop)
+					return new int[] { start, stop };
+			}
+		}
+		return new int[] { getFreq().getStartMHz(), getFreq().getEndMHz() };
+	}
+
+	private void applySingleFrequencyRange(int startMHz, int stopMHz, boolean updateChartParams) {
+		int newLowerX = clampFrequencyMHz(startMHz);
+		int newUpperX = clampFrequencyMHz(stopMHz);
+		if (newUpperX - newLowerX < 1) {
+			if (newLowerX >= 7200)
+				newLowerX = 7199;
+			newUpperX = newLowerX + 1;
+		}
+		double newDif = newUpperX - newLowerX;
+		if (updateChartParams) {
+			int[] newChartParams = setupChartParams(newDif);
+			parameterFFTBinHz.setValue(newChartParams[0]);
+			parameterAmplitudeOffset.setValue(newChartParams[1]);
+		}
+		parameterFreqRange.setValue(newLowerX + "-" + newUpperX);
+		parameterFrequency.setValue(new FrequencyRange(newLowerX, newUpperX));
+		restartHackrfSweep();
 	}
 
 	/**
