@@ -4,6 +4,7 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Container;
+import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Rectangle;
@@ -32,7 +33,6 @@ import javax.swing.JSplitPane;
 import javax.swing.JSlider;
 import javax.swing.JSpinner;
 import javax.swing.JTextField;
-import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.UIManager;
@@ -73,8 +73,10 @@ public class IQAnalyzerApp {
 	private JComboBox<SampleViewOption> sampleViewCombo;
 	private JLabel timeViewInfoLabel;
 	private JComboBox<PresetOption> presetCombo;
-	private JSpinner lnaSpinner;
-	private JSpinner vgaSpinner;
+	private JSlider lnaSlider;
+	private JSlider vgaSlider;
+	private JLabel lnaValueLabel;
+	private JLabel vgaValueLabel;
 	private JCheckBox rfAmpCheck;
 	private JComboBox<ViewModeOption> viewModeCombo;
 	private JTextField channelOffsetField;
@@ -97,6 +99,7 @@ public class IQAnalyzerApp {
 	private JButton runStopButton;
 	private JLabel statusLabel;
 	private Timer repaintTimer;
+	private Timer rfRestartTimer;
 	private Thread iqThread;
 	private volatile IQChannelProcessor channelProcessor;
 	private IQAudioOutput audioOutput = new IQAudioOutput();
@@ -108,6 +111,7 @@ public class IQAnalyzerApp {
 	private byte[] iqRecordBuffer = new byte[MAX_BLOCK_BYTES];
 	private volatile long startedNanos = 0;
 	private volatile boolean streaming = false;
+	private volatile int streamGeneration = 0;
 	private volatile int activeRawSampleRateHz = DEFAULT_SAMPLE_RATE_HZ;
 	private Long spectrumDragBaseOffsetHz = null;
 
@@ -125,7 +129,12 @@ public class IQAnalyzerApp {
 		SwingUtilities.invokeLater(() -> new IQAnalyzerApp().show(centerFreqHz, sampleRateHz, lnaGain, vgaGain));
 	}
 
-	private void show(long centerFreqHz, int sampleRateHz, int lnaGain, int vgaGain) {
+	public JFrame show(long centerFreqHz, int sampleRateHz, int lnaGain, int vgaGain) {
+		return show(centerFreqHz, sampleRateHz, lnaGain, vgaGain, false, 0, 0, null);
+	}
+
+	public JFrame show(long centerFreqHz, int sampleRateHz, int lnaGain, int vgaGain, boolean rfAmp,
+			long channelOffsetHz, int channelBandwidthHz, Runnable closedCallback) {
 		ringBuffer = new IQRingBuffer(createBufferBytes(sampleRateHz));
 		timeDomainPanel = new IQTimeDomainPanel(ringBuffer, DEFAULT_VISIBLE_SAMPLES);
 		timeDomainPanel.addVisibleSamplesListener(e -> SwingUtilities.invokeLater(this::syncTimeViewFromPanel));
@@ -135,7 +144,7 @@ public class IQAnalyzerApp {
 		frame = new JFrame("HackRF Time-Domain Analyzer");
 		frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 		frame.setLayout(new BorderLayout());
-		frame.add(createControls(centerFreqHz, sampleRateHz, lnaGain, vgaGain), BorderLayout.EAST);
+		frame.add(createControls(centerFreqHz, sampleRateHz, lnaGain, vgaGain, rfAmp), BorderLayout.EAST);
 		splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, timeDomainPanel, spectrumPanel);
 		splitPane.setResizeWeight(0.75d);
 		splitPane.setDividerSize(6);
@@ -175,12 +184,34 @@ public class IQAnalyzerApp {
 				stopRecordings();
 				stopStream();
 				repaintTimer.stop();
+				if (rfRestartTimer != null) {
+					rfRestartTimer.stop();
+				}
+				if (closedCallback != null) {
+					closedCallback.run();
+				}
 			}
 		});
 
+		applyInitialChannelSelection(channelOffsetHz, channelBandwidthHz, sampleRateHz);
 		frame.setVisible(true);
 		repaintTimer.start();
 		startStream();
+		return frame;
+	}
+
+	private void applyInitialChannelSelection(long channelOffsetHz, int channelBandwidthHz, int sampleRateHz) {
+		if (channelOffsetField == null || viewModeCombo == null) {
+			return;
+		}
+		channelOffsetField.setText(formatOffset(channelOffsetHz));
+		if (channelBandwidthHz <= 0 || channelBandwidthHz > 1_000_000 || channelBandwidthHz >= sampleRateHz * 0.9d) {
+			viewModeCombo.setSelectedIndex(0);
+			return;
+		}
+		viewModeCombo.setSelectedIndex(1);
+		selectBandwidth(channelBandwidthHz);
+		selectOutputRate(Math.min(1_000_000, Math.max(48_000, channelBandwidthHz)));
 	}
 
 	private boolean restoreWindowGeometry() {
@@ -276,7 +307,7 @@ public class IQAnalyzerApp {
 		}
 	}
 
-	private JPanel createControls(long centerFreqHz, int sampleRateHz, int lnaGain, int vgaGain) {
+	private JPanel createControls(long centerFreqHz, int sampleRateHz, int lnaGain, int vgaGain, boolean rfAmp) {
 		JPanel controls = new JPanel();
 		controls.setLayout(new BoxLayout(controls, BoxLayout.Y_AXIS));
 		controls.setBorder(new EmptyBorder(6, 8, 6, 8));
@@ -285,6 +316,13 @@ public class IQAnalyzerApp {
 		controls.setForeground(TEXT_FG);
 
 		centerField = new JTextField(formatFrequency(centerFreqHz), 6);
+		centerField.addActionListener(e -> applyRfSettingsLive());
+		centerField.addFocusListener(new FocusAdapter() {
+			@Override
+			public void focusLost(FocusEvent e) {
+				applyRfSettingsLive();
+			}
+		});
 		sampleRateCombo = new JComboBox<>(new RateOption[] {
 				new RateOption("2 MS/s", 2_000_000),
 				new RateOption("4 MS/s", 4_000_000),
@@ -296,6 +334,7 @@ public class IQAnalyzerApp {
 				new RateOption("20 MS/s", 20_000_000)
 		});
 		selectRate(sampleRateHz);
+		sampleRateCombo.addActionListener(e -> scheduleRfSettingsLiveApply());
 
 		sampleViewCombo = new JComboBox<>(new SampleViewOption[] {
 				new SampleViewOption("Custom", 0),
@@ -321,9 +360,21 @@ public class IQAnalyzerApp {
 		});
 		timeViewInfoLabel = new JLabel("");
 
-		lnaSpinner = new JSpinner(new SpinnerNumberModel(lnaGain, 0, 40, 8));
-		vgaSpinner = new JSpinner(new SpinnerNumberModel(vgaGain, 0, 62, 2));
+		lnaSlider = createGainSlider(0, 40, 8, lnaGain);
+		vgaSlider = createGainSlider(0, 62, 2, vgaGain);
+		lnaValueLabel = createGainValueLabel(lnaSlider.getValue());
+		vgaValueLabel = createGainValueLabel(vgaSlider.getValue());
 		rfAmpCheck = new JCheckBox("RF amp");
+		rfAmpCheck.setSelected(rfAmp);
+		lnaSlider.addChangeListener(e -> {
+			lnaValueLabel.setText(formatGainValue(lnaSlider.getValue()));
+			scheduleRfSettingsLiveApply();
+		});
+		vgaSlider.addChangeListener(e -> {
+			vgaValueLabel.setText(formatGainValue(vgaSlider.getValue()));
+			scheduleRfSettingsLiveApply();
+		});
+		rfAmpCheck.addActionListener(e -> scheduleRfSettingsLiveApply());
 		presetCombo = new JComboBox<>(new PresetOption[] {
 				new PresetOption("Manual", 0, 0, 0),
 				new PresetOption("Wide pulses", 0, 0, 1024),
@@ -429,7 +480,7 @@ public class IQAnalyzerApp {
 
 		JPanel rfSection = createSection("RF");
 		addLabeledPair(rfSection, "Center", centerField, "Rate", sampleRateCombo);
-		addLabeledPair(rfSection, "LNA", lnaSpinner, "VGA", vgaSpinner);
+		addGainSliderPair(rfSection);
 		JPanel runRow = new JPanel(new BorderLayout(6, 0));
 		runRow.setBackground(PANEL_BG);
 		runRow.add(rfAmpCheck, BorderLayout.WEST);
@@ -517,6 +568,39 @@ public class IQAnalyzerApp {
 		addInlineValue(panel, leftComponent, 1, row, 0.45d);
 		addInlineLabel(panel, rightLabel, 2, row);
 		addInlineValue(panel, rightComponent, 3, row, 0.55d, true);
+	}
+
+	private void addGainSliderPair(JPanel panel) {
+		int row = nextControlRow(panel);
+		GridBagConstraints lnaConstraints = new GridBagConstraints();
+		lnaConstraints.gridx = 0;
+		lnaConstraints.gridy = row;
+		lnaConstraints.gridwidth = 2;
+		lnaConstraints.weightx = 0.5d;
+		lnaConstraints.fill = GridBagConstraints.HORIZONTAL;
+		lnaConstraints.insets = new java.awt.Insets(2, 4, 2, 4);
+		panel.add(createGainSliderPanel("LNA", lnaSlider, lnaValueLabel), lnaConstraints);
+
+		GridBagConstraints vgaConstraints = new GridBagConstraints();
+		vgaConstraints.gridx = 2;
+		vgaConstraints.gridy = row;
+		vgaConstraints.gridwidth = GridBagConstraints.REMAINDER;
+		vgaConstraints.weightx = 0.5d;
+		vgaConstraints.fill = GridBagConstraints.HORIZONTAL;
+		vgaConstraints.insets = new java.awt.Insets(2, 4, 2, 4);
+		panel.add(createGainSliderPanel("VGA", vgaSlider, vgaValueLabel), vgaConstraints);
+	}
+
+	private JPanel createGainSliderPanel(String label, JSlider slider, JLabel valueLabel) {
+		JPanel panel = new JPanel(new BorderLayout(4, 0));
+		panel.setBackground(PANEL_BG);
+		panel.setForeground(TEXT_FG);
+		JLabel labelComponent = new JLabel(label);
+		labelComponent.setForeground(TEXT_FG);
+		panel.add(labelComponent, BorderLayout.WEST);
+		panel.add(slider, BorderLayout.CENTER);
+		panel.add(valueLabel, BorderLayout.EAST);
+		return panel;
 	}
 
 	private void addInline(JPanel panel, Component... components) {
@@ -635,6 +719,40 @@ public class IQAnalyzerApp {
 				}
 			}
 		}
+	}
+
+	private JSlider createGainSlider(int min, int max, int step, int value) {
+		JSlider slider = new JSlider(JSlider.HORIZONTAL, min, max, clamp(value, min, max));
+		slider.setSnapToTicks(true);
+		slider.setMinorTickSpacing(step);
+		slider.setBackground(PANEL_BG);
+		slider.setForeground(TEXT_FG);
+		slider.setFont(new Font("Monospaced", Font.BOLD, 14));
+		slider.setPreferredSize(new java.awt.Dimension(150, 28));
+		return slider;
+	}
+
+	private JLabel createGainValueLabel(int value) {
+		JLabel label = new JLabel(formatGainValue(value));
+		label.setForeground(TEXT_FG);
+		label.setFont(new Font("Monospaced", Font.BOLD, 13));
+		label.setHorizontalAlignment(JLabel.RIGHT);
+		label.setPreferredSize(new java.awt.Dimension(44, 22));
+		return label;
+	}
+
+	private String formatGainValue(int gain) {
+		return gain + " dB";
+	}
+
+	private int clamp(int value, int min, int max) {
+		if (value < min) {
+			return min;
+		}
+		if (value > max) {
+			return max;
+		}
+		return value;
 	}
 
 	private void styleButton(JButton button, Color background, Color foreground) {
@@ -794,8 +912,44 @@ public class IQAnalyzerApp {
 	}
 
 	private void restartStream() {
-		stopStream();
+		stopStream(false);
 		startStream();
+	}
+
+	private void scheduleRfSettingsLiveApply() {
+		if (!streaming) {
+			return;
+		}
+		if (rfRestartTimer == null) {
+			rfRestartTimer = new Timer(250, e -> applyRfSettingsLive());
+			rfRestartTimer.setRepeats(false);
+		}
+		rfRestartTimer.restart();
+		setStatus("RF pending", false);
+	}
+
+	private void applyRfSettingsLive() {
+		if (centerField == null) {
+			return;
+		}
+		long centerFreqHz;
+		try {
+			centerFreqHz = parseFrequencyHz(centerField.getText());
+			RateOption rate = (RateOption) sampleRateCombo.getSelectedItem();
+			if (rate == null) {
+				throw new IllegalArgumentException("Missing sample rate");
+			}
+			lnaSlider.getValue();
+			vgaSlider.getValue();
+		} catch (RuntimeException e) {
+			setStatus("Invalid RF settings", true);
+			return;
+		}
+		centerField.setText(formatFrequency(centerFreqHz));
+		if (streaming) {
+			restartStream();
+			setStatus("RF applied", false);
+		}
 	}
 
 	private void startStream() {
@@ -814,8 +968,8 @@ public class IQAnalyzerApp {
 			RateOption rate = (RateOption) sampleRateCombo.getSelectedItem();
 			sampleRateHz = rate == null ? DEFAULT_SAMPLE_RATE_HZ : rate.sampleRateHz;
 			displayRateHz = calculateDisplayRateHz(sampleRateHz);
-			lnaGain = ((Number) lnaSpinner.getValue()).intValue();
-			vgaGain = ((Number) vgaSpinner.getValue()).intValue();
+			lnaGain = lnaSlider.getValue();
+			vgaGain = vgaSlider.getValue();
 			rfAmp = rfAmpCheck.isSelected();
 		} catch (RuntimeException e) {
 			setStatus("Invalid settings", true);
@@ -825,6 +979,7 @@ public class IQAnalyzerApp {
 		blocks.set(0);
 		bytes.set(0);
 		activeRawSampleRateHz = sampleRateHz;
+		final int streamId = ++streamGeneration;
 		latestCenterFreqHz.set(centerFreqHz);
 		latestSampleRateHz.set(displayRateHz);
 		latestDecimation.set(calculateDecimation(sampleRateHz));
@@ -836,6 +991,9 @@ public class IQAnalyzerApp {
 
 		iqThread = new Thread(() -> {
 			int result = HackRFIQNativeBridge.start((callbackCenterFreqHz, callbackSampleRateHz, iqData) -> {
+				if (streamId != streamGeneration) {
+					return;
+				}
 				IQRingBuffer activeRingBuffer = ringBuffer;
 				if (activeRingBuffer != null) {
 					IQChannelProcessor processor = channelProcessor;
@@ -869,7 +1027,11 @@ public class IQAnalyzerApp {
 			}, centerFreqHz, sampleRateHz, DEFAULT_BASEBAND_FILTER_HZ, lnaGain, vgaGain, rfAmp);
 
 			SwingUtilities.invokeLater(() -> {
+				if (streamId != streamGeneration) {
+					return;
+				}
 				streaming = false;
+				iqThread = null;
 				if (result != 0) {
 					audioOutput.stop();
 				}
@@ -922,11 +1084,18 @@ public class IQAnalyzerApp {
 	}
 
 	private void stopStream() {
+		stopStream(true);
+	}
+
+	private void stopStream(boolean updateStatus) {
 		if (!streaming && iqThread == null) {
 			updateButtons();
 			return;
 		}
-		setStatus("Stopping", false);
+		streamGeneration++;
+		if (updateStatus) {
+			setStatus("Stopping", false);
+		}
 		HackRFIQNativeBridge.stop();
 		audioOutput.stop();
 		Thread thread = iqThread;
@@ -940,7 +1109,9 @@ public class IQAnalyzerApp {
 		}
 		streaming = false;
 		updateButtons();
-		setStatus("Stopped", false);
+		if (updateStatus) {
+			setStatus("Stopped", false);
+		}
 	}
 
 	private void applyDspSettingsLive() {
@@ -1107,15 +1278,36 @@ public class IQAnalyzerApp {
 				return;
 			}
 		}
+		channelBandwidthCombo.addItem(new BandwidthOption(formatBandwidthLabel(bandwidthHz), bandwidthHz));
+		channelBandwidthCombo.setSelectedIndex(channelBandwidthCombo.getItemCount() - 1);
 	}
 
 	private void selectOutputRate(int outputRateHz) {
+		int bestIndex = -1;
 		for (int i = 0; i < outputRateCombo.getItemCount(); i++) {
 			if (outputRateCombo.getItemAt(i).outputRateHz == outputRateHz) {
 				outputRateCombo.setSelectedIndex(i);
 				return;
 			}
+			if (outputRateCombo.getItemAt(i).outputRateHz >= outputRateHz && bestIndex < 0) {
+				bestIndex = i;
+			}
 		}
+		if (bestIndex >= 0) {
+			outputRateCombo.setSelectedIndex(bestIndex);
+		} else if (outputRateCombo.getItemCount() > 0) {
+			outputRateCombo.setSelectedIndex(outputRateCombo.getItemCount() - 1);
+		}
+	}
+
+	private String formatBandwidthLabel(int bandwidthHz) {
+		if (bandwidthHz >= 1_000_000) {
+			return String.format(Locale.US, "%.3g MHz", bandwidthHz / 1_000_000d);
+		}
+		if (bandwidthHz >= 1000) {
+			return String.format(Locale.US, "%.3g kHz", bandwidthHz / 1000d);
+		}
+		return bandwidthHz + " Hz";
 	}
 
 	private void selectSampleView(int samples) {
@@ -1172,7 +1364,7 @@ public class IQAnalyzerApp {
 		if (frequencyHz % 1_000_000 == 0) {
 			return String.format(Locale.US, "%d MHz", frequencyHz / 1_000_000);
 		}
-		String value = String.format(Locale.US, "%.6f", frequencyHz / 1_000_000d);
+		String value = String.format(Locale.US, "%.2f", frequencyHz / 1_000_000d);
 		while (value.indexOf('.') >= 0 && value.endsWith("0")) {
 			value = value.substring(0, value.length() - 1);
 		}

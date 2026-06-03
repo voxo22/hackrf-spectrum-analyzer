@@ -2,10 +2,12 @@ package jspectrumanalyzer.iq;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -27,6 +29,9 @@ public class IQTimeDomainPanel extends JPanel {
 	private static final int DEVIATION_SCALE_SAMPLES = 4096;
 	private static final int OVERVIEW_THRESHOLD_SAMPLES = 2097153;
 	private static final long OVERVIEW_REFRESH_NANOS = 600_000_000L;
+	private static final int ZOOM_BUTTON_SIZE = 42;
+	private static final int ZOOM_BUTTON_GAP = 8;
+	private static final double BUTTON_ZOOM_FACTOR = 1.5d;
 
 	private byte[] snapshot;
 	private IQRingBuffer ringBuffer;
@@ -74,6 +79,7 @@ public class IQTimeDomainPanel extends JPanel {
 	private long[] burstPrefixScratch = new long[0];
 	private final float[] deviationScaleScratch = new float[DEVIATION_SCALE_SAMPLES];
 	private final EventListenerList listenerList = new EventListenerList();
+	private volatile int hoverZoomButton = 0;
 
 	public IQTimeDomainPanel(IQRingBuffer ringBuffer, int visibleSamples) {
 		this.ringBuffer = ringBuffer;
@@ -220,6 +226,7 @@ public class IQTimeDomainPanel extends JPanel {
 			drawHeader(g, read);
 			g.setColor(new Color(0xaaaaaa));
 			g.drawString("Waiting for IQ samples...", 16, mid);
+			drawZoomButtons(g);
 			return;
 		}
 
@@ -257,6 +264,7 @@ public class IQTimeDomainPanel extends JPanel {
 		}
 		drawTriggerMarker(g, top, bottom);
 		drawMeasurement(g, top, bottom);
+		drawZoomButtons(g);
 	}
 
 	private int readSnapshot(IQRingBuffer activeRingBuffer) {
@@ -517,7 +525,7 @@ public class IQTimeDomainPanel extends JPanel {
 			g.drawString("FSK deviation", Math.max(12, getWidth() - 182), 34);
 		} else if (envelopeOnly) {
 			g.setColor(COLOR_ENVELOPE);
-			g.drawString("Envelope", Math.max(12, getWidth() - 160), 34);
+			g.drawString("Envelope", Math.max(12, getWidth() - 230), 34);
 		}
 		if (burstDetectorEnabled) {
 			drawBurstStats(g);
@@ -633,6 +641,56 @@ public class IQTimeDomainPanel extends JPanel {
 		return x + 18 + g.getFontMetrics().stringWidth(label) + 18;
 	}
 
+	private void drawZoomButtons(Graphics2D g) {
+		Rectangle plus = getZoomButtonBounds(true);
+		Rectangle minus = getZoomButtonBounds(false);
+		drawZoomButton(g, plus, "+", hoverZoomButton == 1);
+		drawZoomButton(g, minus, "-", hoverZoomButton == -1);
+	}
+
+	private void drawZoomButton(Graphics2D g, Rectangle bounds, String label, boolean hover) {
+		java.awt.Composite oldComposite = g.getComposite();
+		Color oldColor = g.getColor();
+		Font oldFont = g.getFont();
+		g.setComposite(java.awt.AlphaComposite.SrcOver.derive(hover ? 0.58f : 0.38f));
+		g.setColor(new Color(0x202020));
+		g.fillRoundRect(bounds.x, bounds.y, bounds.width, bounds.height, 10, 10);
+		g.setComposite(java.awt.AlphaComposite.SrcOver.derive(hover ? 0.95f : 0.75f));
+		g.setColor(new Color(0xffffff));
+		g.drawRoundRect(bounds.x, bounds.y, bounds.width, bounds.height, 10, 10);
+		g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 30));
+		int textWidth = g.getFontMetrics().stringWidth(label);
+		int textAscent = g.getFontMetrics().getAscent();
+		int textX = bounds.x + (bounds.width - textWidth) / 2;
+		int textY = bounds.y + (bounds.height + textAscent) / 2 - 5;
+		g.drawString(label, textX, textY);
+		g.setComposite(oldComposite);
+		g.setColor(oldColor);
+		g.setFont(oldFont);
+	}
+
+	private Rectangle getZoomButtonBounds(boolean plus) {
+		int x = Math.max(8, getWidth() - ZOOM_BUTTON_SIZE - 14);
+		int y = 46 + (plus ? 0 : ZOOM_BUTTON_SIZE + ZOOM_BUTTON_GAP);
+		return new Rectangle(x, y, ZOOM_BUTTON_SIZE, ZOOM_BUTTON_SIZE);
+	}
+
+	private int getZoomButtonAt(int x, int y) {
+		if (getZoomButtonBounds(true).contains(x, y)) {
+			return 1;
+		}
+		if (getZoomButtonBounds(false).contains(x, y)) {
+			return -1;
+		}
+		return 0;
+	}
+
+	private void zoomTimeAxis(boolean zoomIn) {
+		double factor = zoomIn ? (1d / BUTTON_ZOOM_FACTOR) : BUTTON_ZOOM_FACTOR;
+		int next = (int) Math.round(visibleSamples * factor);
+		setVisibleSamplesInternal(next, false);
+	}
+
 	private void installMouseControls() {
 		MouseAdapter adapter = new MouseAdapter() {
 			@Override
@@ -644,6 +702,12 @@ public class IQTimeDomainPanel extends JPanel {
 
 			@Override
 			public void mouseClicked(MouseEvent e) {
+				int zoomButton = getZoomButtonAt(e.getX(), e.getY());
+				if (e.getButton() == MouseEvent.BUTTON1 && zoomButton != 0) {
+					zoomTimeAxis(zoomButton > 0);
+					e.consume();
+					return;
+				}
 				if (e.getClickCount() >= 2 && e.getButton() == MouseEvent.BUTTON1) {
 					setVisibleSamplesInternal(defaultVisibleSamples, false);
 				} else if (e.getButton() == MouseEvent.BUTTON3) {
@@ -653,6 +717,10 @@ public class IQTimeDomainPanel extends JPanel {
 
 			@Override
 			public void mousePressed(MouseEvent e) {
+				if (e.getButton() == MouseEvent.BUTTON1 && getZoomButtonAt(e.getX(), e.getY()) != 0) {
+					e.consume();
+					return;
+				}
 				if (e.getButton() == MouseEvent.BUTTON1 && e.getClickCount() == 1) {
 					measureStartX = e.getX();
 					measureEndX = e.getX();
@@ -664,6 +732,25 @@ public class IQTimeDomainPanel extends JPanel {
 			public void mouseDragged(MouseEvent e) {
 				if (measureStartX >= 0) {
 					measureEndX = e.getX();
+					repaint();
+				}
+			}
+
+			@Override
+			public void mouseMoved(MouseEvent e) {
+				int nextHover = getZoomButtonAt(e.getX(), e.getY());
+				if (hoverZoomButton != nextHover) {
+					hoverZoomButton = nextHover;
+					setCursor(nextHover == 0 ? Cursor.getDefaultCursor() : Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+					repaint();
+				}
+			}
+
+			@Override
+			public void mouseExited(MouseEvent e) {
+				if (hoverZoomButton != 0) {
+					hoverZoomButton = 0;
+					setCursor(Cursor.getDefaultCursor());
 					repaint();
 				}
 			}

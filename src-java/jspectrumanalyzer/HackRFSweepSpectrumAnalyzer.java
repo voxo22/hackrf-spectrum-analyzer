@@ -97,6 +97,7 @@ import jspectrumanalyzer.core.SpectrumRecording;
 import jspectrumanalyzer.core.SpurFilter;
 import jspectrumanalyzer.core.jfc.XYSeriesCollectionImmutable;
 import jspectrumanalyzer.core.jfc.XYSeriesImmutable;
+import jspectrumanalyzer.iq.IQAnalyzerApp;
 import jspectrumanalyzer.nativebridge.HackRFSweepDataCallback;
 import jspectrumanalyzer.nativebridge.HackRFSweepNativeBridge;
 import jspectrumanalyzer.ui.HackRFSweepSettingsUI;
@@ -256,6 +257,32 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		}
 	}
 
+	private static class IQSelection {
+		final double anchorMHz;
+		double startMHz;
+		double stopMHz;
+		double displayStartMHz;
+		double displayStopMHz;
+		double compressedStartMHz;
+		double compressedStopMHz;
+		final int[] subRange;
+
+		IQSelection(double anchorMHz, int[] subRange) {
+			this.anchorMHz = anchorMHz;
+			this.subRange = subRange;
+			this.startMHz = anchorMHz;
+			this.stopMHz = anchorMHz;
+			this.displayStartMHz = anchorMHz;
+			this.displayStopMHz = anchorMHz;
+			this.compressedStartMHz = anchorMHz;
+			this.compressedStopMHz = anchorMHz;
+		}
+
+		double getBandwidthMHz() {
+			return Math.abs(stopMHz - startMHz);
+		}
+	}
+
 	/**
 	 * Color palette for UI
 	 */
@@ -274,6 +301,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	}
 
 	public static final int	SPECTRUM_PALETTE_SIZE_MIN	= 5;
+	private static final double IQ_SELECTION_MAX_BW_MHZ = 20.0d;
+	private static final double IQ_SELECTION_MIN_BW_MHZ = 0.001d;
 /*
 	private static int	pFreqMin						= 920;
 	private static int	pFreqMax						= 960;
@@ -422,11 +451,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
     private float									fShift;
     private int										lastX;
     private int										lastXX;
-    private boolean									dragging;
+	private boolean									dragging;
 	private boolean									draggingStartedInMultiRange;
 	private int										draggingBaseStartMHz;
 	private int										draggingBaseStopMHz;
 	private int										draggingPanDeltaMHz;
+	private IQSelection								iqSelection;
 	private final TriggerSettings					triggerSettings					= new TriggerSettings();
 	private final ArrayList<TriggerEvent>			triggerEvents					= new ArrayList<>();
 	private long									lastTriggerAlertMillis			= 0;
@@ -2729,6 +2759,21 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			}
 		});
 		
+		chartPanel.addOverlay(new Overlay() {
+			@Override
+			public void addChangeListener(OverlayChangeListener listener) {
+			}
+
+			@Override
+			public void paintOverlay(Graphics2D g2, ChartPanel chartPanel) {
+				drawIQSelectionOverlay(g2);
+			}
+
+			@Override
+			public void removeChangeListener(OverlayChangeListener listener) {
+			}
+		});
+
 		/**
 		 * Date Time overlay
 		 */
@@ -2841,6 +2886,135 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		g2.setStroke(oldStroke);
 		g2.setColor(oldColor);
 	}
+
+	private void drawIQSelectionOverlay(Graphics2D g2) {
+		IQSelection selection = iqSelection;
+		if (selection == null)
+			return;
+		Rectangle2D area = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
+		if (area == null || area.getWidth() <= 0 || area.getHeight() <= 0)
+			return;
+		XYPlot plot = chart.getXYPlot();
+		double x1Value = selection.compressedStartMHz;
+		double x2Value = selection.compressedStopMHz;
+		double x1 = plot.getDomainAxis().valueToJava2D(x1Value, area, plot.getDomainAxisEdge());
+		double x2 = plot.getDomainAxis().valueToJava2D(x2Value, area, plot.getDomainAxisEdge());
+		int x = (int) Math.round(Math.min(x1, x2));
+		int width = (int) Math.max(1, Math.round(Math.abs(x2 - x1)));
+		int y = (int) area.getY();
+		int height = (int) area.getHeight();
+
+		java.awt.Composite oldComposite = g2.getComposite();
+		java.awt.Stroke oldStroke = g2.getStroke();
+		Color oldColor = g2.getColor();
+		g2.setComposite(java.awt.AlphaComposite.SrcOver.derive(0.34f));
+		g2.setColor(new Color(0x8b0000));
+		g2.fillRect(x, y, width, height);
+		g2.setComposite(java.awt.AlphaComposite.SrcOver.derive(0.85f));
+		g2.setStroke(new BasicStroke(2f));
+		g2.drawRect(x, y, width, height);
+		g2.setComposite(oldComposite);
+
+		String text = String.format(Locale.US, "IQ %.3f-%.3f MHz   BW %.3f MHz",
+				Math.min(selection.displayStartMHz, selection.displayStopMHz),
+				Math.max(selection.displayStartMHz, selection.displayStopMHz), selection.getBandwidthMHz());
+		g2.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 12));
+		int textWidth = g2.getFontMetrics().stringWidth(text);
+		int textX = Math.max((int) area.getX() + 4,
+				Math.min(x + 4, (int) area.getMaxX() - textWidth - 4));
+		int textY = y + 18;
+		g2.setColor(new Color(0, 0, 0, 150));
+		g2.fillRect(textX - 3, textY - 13, textWidth + 6, 17);
+		g2.setColor(Color.white);
+		g2.drawString(text, textX, textY);
+		g2.setStroke(oldStroke);
+		g2.setColor(oldColor);
+	}
+
+	private boolean isInPlotArea(int mouseX, int mouseY) {
+		Rectangle2D area = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
+		return area != null && area.contains(mouseX, mouseY);
+	}
+
+	private double mouseToDomainMHz(int mouseX) {
+		XYPlot plot = chart.getXYPlot();
+		return plot.getDomainAxis().java2DToValue(mouseX,
+				chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), plot.getDomainAxisEdge());
+	}
+
+	private double domainToSelectionMHz(double domainMHz, int[] activePairs) {
+		if (isMultiRange(activePairs))
+			return mapCompressedToOriginal(domainMHz, activePairs);
+		return domainMHz;
+	}
+
+	private double selectionToCompressedMHz(double selectionMHz, int[] activePairs) {
+		if (isMultiRange(activePairs))
+			return mapRealToCompressed(selectionMHz, activePairs);
+		return selectionMHz;
+	}
+
+	private IQSelection startIQSelection(MouseEvent e) {
+		int[] activePairs = parseRangePairs(getActiveRangesForDisplay());
+		double anchorMHz = domainToSelectionMHz(mouseToDomainMHz(e.getX()), activePairs);
+		int[] subRange = isMultiRange(activePairs) ? findRangeForFrequency(anchorMHz, activePairs) : null;
+		if (subRange == null) {
+			double lower = chart.getXYPlot().getDomainAxis().getLowerBound();
+			double upper = chart.getXYPlot().getDomainAxis().getUpperBound();
+			subRange = new int[] { (int) Math.floor(Math.min(lower, upper)), (int) Math.ceil(Math.max(lower, upper)) };
+		}
+		anchorMHz = Math.max(subRange[0], Math.min(subRange[1], anchorMHz));
+		IQSelection selection = new IQSelection(anchorMHz, subRange);
+		updateIQSelection(selection, e.getX());
+		return selection;
+	}
+
+	private void updateIQSelection(IQSelection selection, int mouseX) {
+		int[] activePairs = parseRangePairs(getActiveRangesForDisplay());
+		double currentMHz = domainToSelectionMHz(mouseToDomainMHz(mouseX), activePairs);
+		double minMHz = Math.max(selection.subRange[0], selection.anchorMHz - IQ_SELECTION_MAX_BW_MHZ);
+		double maxMHz = Math.min(selection.subRange[1], selection.anchorMHz + IQ_SELECTION_MAX_BW_MHZ);
+		currentMHz = Math.max(minMHz, Math.min(maxMHz, currentMHz));
+		selection.startMHz = Math.min(selection.anchorMHz, currentMHz);
+		selection.stopMHz = Math.max(selection.anchorMHz, currentMHz);
+
+		int shift = isMultiRange(activePairs) ? getActiveFreqShiftForDisplay() : 0;
+		selection.displayStartMHz = selection.startMHz + shift;
+		selection.displayStopMHz = selection.stopMHz + shift;
+		selection.compressedStartMHz = selectionToCompressedMHz(selection.startMHz, activePairs);
+		selection.compressedStopMHz = selectionToCompressedMHz(selection.stopMHz, activePairs);
+		chartPanel.repaint();
+	}
+
+	private void openIQAnalyzerForSelection(IQSelection selection) {
+		if (selection == null || selection.getBandwidthMHz() < IQ_SELECTION_MIN_BW_MHZ)
+			return;
+		double displayStart = Math.min(selection.displayStartMHz, selection.displayStopMHz);
+		double displayStop = Math.max(selection.displayStartMHz, selection.displayStopMHz);
+		double centerMHz = (displayStart + displayStop) * 0.5d;
+		double bandwidthMHz = Math.min(IQ_SELECTION_MAX_BW_MHZ, displayStop - displayStart);
+		long centerHz = Math.round(centerMHz * 1_000_000d);
+		int bandwidthHz = Math.max(1, (int) Math.round(bandwidthMHz * 1_000_000d));
+		int sampleRateHz = chooseIQSampleRateHz(bandwidthHz);
+		int lnaGain = parameterGainLNA.getValue();
+		int vgaGain = 32;
+		boolean rfAmp = parameterAntennaLNA.getValue();
+
+		new Thread(() -> {
+			stopHackrfSweep();
+			SwingUtilities.invokeLater(() -> new IQAnalyzerApp().show(centerHz, sampleRateHz, lnaGain, vgaGain, rfAmp,
+					0, bandwidthHz, this::restartHackrfSweep));
+		}, "open-iq-analyzer").start();
+	}
+
+	private int chooseIQSampleRateHz(int bandwidthHz) {
+		int[] rates = { 2_000_000, 4_000_000, 6_000_000, 8_000_000, 10_000_000, 12_500_000, 16_000_000, 20_000_000 };
+		for (int rate : rates) {
+			if (rate >= bandwidthHz)
+				return rate;
+		}
+		return 20_000_000;
+	}
 	
 	/**
 	 * Displays a cross marker with current frequency and signal strength when
@@ -2939,8 +3113,16 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                     chartPanel.requestFocus();
                     return;
                 }
+                if (SwingUtilities.isRightMouseButton(e) && isInPlotArea(e.getX(), e.getY())) {
+                	iqSelection = startIQSelection(e);
+                	dragging = false;
+                	chartPanel.setDomainZoomable(false);
+                	chartPanel.requestFocus();
+                	e.consume();
+                	return;
+                }
                 draggingStartedInMultiRange = false;
-                if (isInAxisArea(e.getX(), e.getY())) {
+                if (SwingUtilities.isLeftMouseButton(e) && isInAxisArea(e.getX(), e.getY())) {
                     dragging = true;
                     int[] activePairs = parseRangePairs(parameterFreqRange.getValue());
                     draggingStartedInMultiRange = isMultiRange(activePairs);
@@ -2959,6 +3141,18 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
             public void mouseReleased(MouseEvent e) {
             	if (isReplayActive()) {
             		dragging = false;
+            		iqSelection = null;
+            		chartPanel.repaint();
+            		return;
+            	}
+            	if (iqSelection != null) {
+            		IQSelection finishedSelection = iqSelection;
+            		updateIQSelection(finishedSelection, e.getX());
+            		iqSelection = null;
+            		chartPanel.setDomainZoomable(true);
+            		chartPanel.repaint();
+            		openIQAnalyzerForSelection(finishedSelection);
+            		e.consume();
             		return;
             	}
                 boolean releasedAxisDrag = dragging;
@@ -3070,6 +3264,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
             public void mouseDragged(MouseEvent e) {
                 if (isReplayActive()) {
                 	dragging = false;
+                	iqSelection = null;
+                	return;
+                }
+                if (iqSelection != null) {
+                	updateIQSelection(iqSelection, e.getX());
+                	e.consume();
                 	return;
                 }
                 if (dragging) {
