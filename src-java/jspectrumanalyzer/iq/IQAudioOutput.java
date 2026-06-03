@@ -29,6 +29,11 @@ public class IQAudioOutput {
 	private static final int TARGET_AUDIO_RATE_HZ = 48_000;
 	private static final int MAX_QUEUE_BLOCKS = 48;
 	private static final double START_FADE_SECONDS = 0.35d;
+	private static final double AM_DC_CUTOFF_HZ = 3d;
+	private static final double AUDIO_DC_CUTOFF_HZ = 12d;
+	public static final int MIN_TONE_CUTOFF_HZ = 3_000;
+	public static final int MAX_TONE_CUTOFF_HZ = 22_000;
+	public static final int DEFAULT_TONE_CUTOFF_HZ = 16_000;
 
 	private final ArrayBlockingQueue<byte[]> queue = new ArrayBlockingQueue<>(MAX_QUEUE_BLOCKS);
 	private SourceDataLine line;
@@ -41,10 +46,13 @@ public class IQAudioOutput {
 	private double amDc = 0;
 	private double audioLowPass = 0;
 	private double audioDc = 0;
-	private double audioLowPassAlpha = 0.2d;
+	private double amDcAlpha = 0.0001d;
+	private double audioDcAlpha = 0.0001d;
+	private volatile double audioLowPassAlpha = 0.2d;
 	private double resampleAccumulator = 0;
 	private double audioSamplesPerInputSample = 1;
 	private volatile double volume = 0.8d;
+	private volatile int toneCutoffHz = DEFAULT_TONE_CUTOFF_HZ;
 	private int fadeSamplesRemaining = 0;
 	private int fadeTotalSamples = 1;
 	private boolean amDcInitialized = false;
@@ -58,7 +66,9 @@ public class IQAudioOutput {
 		this.inputRateHz = Math.max(1, inputRateHz);
 		this.audioRateHz = TARGET_AUDIO_RATE_HZ;
 		this.audioSamplesPerInputSample = TARGET_AUDIO_RATE_HZ / (double) this.inputRateHz;
-		this.audioLowPassAlpha = calculateAudioLowPassAlpha(this.mode, this.inputRateHz);
+		this.amDcAlpha = calculateOnePoleAlpha(AM_DC_CUTOFF_HZ, this.inputRateHz);
+		this.audioDcAlpha = calculateOnePoleAlpha(AUDIO_DC_CUTOFF_HZ, this.inputRateHz);
+		this.audioLowPassAlpha = calculateAudioLowPassAlpha(this.inputRateHz);
 		this.resampleAccumulator = 0;
 		this.fadeTotalSamples = Math.max(1, (int) Math.round(audioRateHz * START_FADE_SECONDS));
 		this.fadeSamplesRemaining = this.mode == Mode.OFF ? 0 : this.fadeTotalSamples;
@@ -121,6 +131,15 @@ public class IQAudioOutput {
 		volume = Math.pow(10d, (normalized - 1d) * 2d);
 	}
 
+	public void setToneCutoffHz(int cutoffHz) {
+		toneCutoffHz = Math.max(MIN_TONE_CUTOFF_HZ, Math.min(MAX_TONE_CUTOFF_HZ, cutoffHz));
+		audioLowPassAlpha = calculateAudioLowPassAlpha(inputRateHz);
+	}
+
+	public int getToneCutoffHz() {
+		return toneCutoffHz;
+	}
+
 	public void setRecorder(WavFileWriter recorder) {
 		this.recorder = recorder;
 	}
@@ -175,7 +194,7 @@ public class IQAudioOutput {
 			int i = iqData[sample * 2];
 			int q = iqData[sample * 2 + 1];
 			double magnitude = Math.sqrt(i * i + q * q) / 181d;
-			amDc = amDc * 0.999d + magnitude * 0.001d;
+			amDc += (magnitude - amDc) * amDcAlpha;
 			double audio = (magnitude - amDc) * 6d;
 			out = resampleAndWrite(pcm, out, audio);
 		}
@@ -214,7 +233,7 @@ public class IQAudioOutput {
 	}
 
 	private int resampleAndWrite(byte[] pcm, int out, double audio) {
-		audioDc = audioDc * 0.9995d + audio * 0.0005d;
+		audioDc += (audio - audioDc) * audioDcAlpha;
 		audio -= audioDc;
 		audioLowPass += (audio - audioLowPass) * audioLowPassAlpha;
 		resampleAccumulator += audioSamplesPerInputSample;
@@ -228,8 +247,8 @@ public class IQAudioOutput {
 		return out;
 	}
 
-	private double calculateAudioLowPassAlpha(Mode mode, int inputRateHz) {
-		double cutoffHz = mode == Mode.AM ? 14_000d : 16_000d;
+	private double calculateAudioLowPassAlpha(int inputRateHz) {
+		double cutoffHz = toneCutoffHz;
 		double maxUsefulCutoff = inputRateHz * 0.42d;
 		if (cutoffHz > maxUsefulCutoff) {
 			cutoffHz = maxUsefulCutoff;
@@ -237,6 +256,10 @@ public class IQAudioOutput {
 		if (cutoffHz < 100d) {
 			cutoffHz = 100d;
 		}
+		return 1d - Math.exp(-2d * Math.PI * cutoffHz / Math.max(1d, inputRateHz));
+	}
+
+	private double calculateOnePoleAlpha(double cutoffHz, int inputRateHz) {
 		return 1d - Math.exp(-2d * Math.PI * cutoffHz / Math.max(1d, inputRateHz));
 	}
 

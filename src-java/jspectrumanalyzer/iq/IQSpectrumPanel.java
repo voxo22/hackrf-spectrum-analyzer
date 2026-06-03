@@ -2,6 +2,7 @@ package jspectrumanalyzer.iq;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Graphics;
@@ -20,7 +21,8 @@ public class IQSpectrumPanel extends JPanel {
 	private static final float MIN_DB_SPAN = 24f;
 	private static final float MAX_DB_SPAN = 80f;
 	private static final float DB_HEADROOM = 4f;
-	private static final float SCALE_SMOOTHING = 0.22f;
+	private static final float SPECTRUM_SMOOTHING = 0.35f;
+	private static final float SCALE_SMOOTHING = 0.32f;
 
 	private final byte[] snapshot = new byte[FFT_SIZE * 2];
 	private final double[] real = new double[FFT_SIZE];
@@ -31,8 +33,12 @@ public class IQSpectrumPanel extends JPanel {
 	private IQRingBuffer ringBuffer;
 	private volatile int sampleRateHz = 1;
 	private volatile int channelBandwidthHz = 0;
+	private volatile long centerFrequencyHz = 0;
+	private volatile long channelOffsetHz = 0;
 	private DoubleConsumer offsetDragListener;
 	private double dragStartHz = 0;
+	private double dragDeltaHz = 0;
+	private boolean dragging = false;
 	private float displayMinDb = -90f;
 	private float displayMaxDb = -10f;
 
@@ -40,6 +46,7 @@ public class IQSpectrumPanel extends JPanel {
 		this.ringBuffer = ringBuffer;
 		setBackground(Color.BLACK);
 		setPreferredSize(new Dimension(1000, 190));
+		setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		installMouseControls();
 	}
 
@@ -49,6 +56,14 @@ public class IQSpectrumPanel extends JPanel {
 
 	public void setSampleRateHz(int sampleRateHz) {
 		this.sampleRateHz = Math.max(1, sampleRateHz);
+	}
+
+	public void setCenterFrequencyHz(long centerFrequencyHz) {
+		this.centerFrequencyHz = Math.max(0, centerFrequencyHz);
+	}
+
+	public void setChannelOffsetHz(long channelOffsetHz) {
+		this.channelOffsetHz = channelOffsetHz;
 	}
 
 	public void setChannelBandwidthHz(int channelBandwidthHz) {
@@ -82,6 +97,7 @@ public class IQSpectrumPanel extends JPanel {
 		g.fillRect(0, 0, width, height);
 		drawGrid(g, width, top, bottom);
 		drawChannelBandwidth(g, width, top, bottom);
+		drawDragHint(g, width, top);
 
 		IQRingBuffer active = ringBuffer;
 		int read = active == null ? 0 : active.readLatest(snapshot, snapshot.length);
@@ -96,13 +112,15 @@ public class IQSpectrumPanel extends JPanel {
 		updateScale();
 		g.setColor(new Color(0x4cc9f0));
 		g.setStroke(new BasicStroke(1.2f));
-		int previousX = 0;
-		int previousY = dbToY(spectrumDb[0], top, plotHeight);
+		int shiftX = dragging ? offsetHzToSignedPixels(dragDeltaHz, width) : 0;
+		int previousX = shiftX;
+		int previousY = dbToY(smoothedDb[0], top, plotHeight);
 		for (int x = 1; x < width; x++) {
 			int bin = x * (FFT_SIZE - 1) / (width - 1);
 			int y = dbToY(smoothedDb[bin], top, plotHeight);
-			g.drawLine(previousX, previousY, x, y);
-			previousX = x;
+			int drawX = x + shiftX;
+			g.drawLine(previousX, previousY, drawX, y);
+			previousX = drawX;
 			previousY = y;
 		}
 
@@ -143,6 +161,32 @@ public class IQSpectrumPanel extends JPanel {
 		g.drawLine(right, top, right, bottom);
 	}
 
+	private void drawDragHint(Graphics2D g, int width, int top) {
+		if (dragging || offsetDragListener == null || width < 220) {
+			return;
+		}
+		g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
+		g.setColor(new Color(0x9f9f9f));
+		int x = Math.max(12, width - 166);
+		int y = top + 5;
+		drawHandIcon(g, x, y);
+		g.drawString("drag to tune offset", x + 20, top + 16);
+	}
+
+	private void drawHandIcon(Graphics2D g, int x, int y) {
+		g.setColor(new Color(0xb6b6b6));
+		g.setStroke(new BasicStroke(1.4f));
+		g.drawLine(x + 4, y + 8, x + 4, y + 2);
+		g.drawLine(x + 7, y + 8, x + 7, y + 1);
+		g.drawLine(x + 10, y + 8, x + 10, y + 2);
+		g.drawLine(x + 13, y + 9, x + 13, y + 4);
+		g.drawLine(x + 3, y + 8, x + 8, y + 14);
+		g.drawLine(x + 8, y + 14, x + 14, y + 14);
+		g.drawLine(x + 14, y + 14, x + 16, y + 9);
+		g.drawLine(x + 3, y + 8, x, y + 10);
+		g.drawLine(x, y + 10, x + 5, y + 15);
+	}
+
 	private void drawLabels(Graphics2D g, int width, int height) {
 		double spanKhz = sampleRateHz / 1000d;
 		g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
@@ -150,10 +194,20 @@ public class IQSpectrumPanel extends JPanel {
 		String bwText = channelBandwidthHz > 0 ? String.format("   BW %.1f kHz", channelBandwidthHz / 1000d) : "";
 		g.drawString(String.format("Channel spectrum   span %.1f kHz%s", spanKhz, bwText), 12, 16);
 		g.setColor(new Color(0x999999));
-		g.drawString(String.format("-%.1f kHz", spanKhz / 2d), 8, height - 6);
-		g.drawString("0", Math.max(8, width / 2 - 4), height - 6);
-		g.drawString(String.format("+%.1f kHz", spanKhz / 2d), Math.max(8, width - 78), height - 6);
+		long centerHz = Math.max(0, Math.round(centerFrequencyHz + channelOffsetHz - (dragging ? dragDeltaHz : 0d)));
+		long leftHz = Math.max(0, Math.round(centerHz - sampleRateHz / 2d));
+		long rightHz = Math.max(0, Math.round(centerHz + sampleRateHz / 2d));
+		String left = formatFrequencyLabel(leftHz);
+		String center = formatFrequencyLabel(centerHz);
+		String right = formatFrequencyLabel(rightHz);
+		g.drawString(left, 8, height - 6);
+		g.drawString(center, Math.max(8, width / 2 - g.getFontMetrics().stringWidth(center) / 2), height - 6);
+		g.drawString(right, Math.max(8, width - g.getFontMetrics().stringWidth(right) - 8), height - 6);
 		g.drawString(String.format("%.0f..%.0f dB", displayMinDb, displayMaxDb), Math.max(8, width - 86), 16);
+	}
+
+	private String formatFrequencyLabel(long frequencyHz) {
+		return String.format("%.2f MHz", frequencyHz / 1_000_000d);
 	}
 
 	private void computeSpectrum() {
@@ -168,6 +222,27 @@ public class IQSpectrumPanel extends JPanel {
 			double mag = Math.sqrt(real[shifted] * real[shifted] + imag[shifted] * imag[shifted]);
 			spectrumDb[i] = (float) (20d * Math.log10(mag + 1e-9));
 		}
+		suppressDcSpike();
+	}
+
+	private void suppressDcSpike() {
+		int center = FFT_SIZE / 2;
+		float replacement = Math.min(averageDb(center - 5, center - 3), averageDb(center + 3, center + 5));
+		for (int bin = center - 1; bin <= center + 1; bin++) {
+			if (bin >= 0 && bin < spectrumDb.length && spectrumDb[bin] > replacement) {
+				spectrumDb[bin] = replacement;
+			}
+		}
+	}
+
+	private float averageDb(int start, int end) {
+		float sum = 0f;
+		int count = 0;
+		for (int bin = Math.max(0, start); bin <= end && bin < spectrumDb.length; bin++) {
+			sum += spectrumDb[bin];
+			count++;
+		}
+		return count == 0 ? -120f : sum / count;
 	}
 
 	private void smoothSpectrum() {
@@ -175,7 +250,7 @@ public class IQSpectrumPanel extends JPanel {
 			if (smoothedDb[i] == 0f) {
 				smoothedDb[i] = spectrumDb[i];
 			} else {
-				smoothedDb[i] = smoothedDb[i] * 0.82f + spectrumDb[i] * 0.18f;
+				smoothedDb[i] = smoothedDb[i] * (1f - SPECTRUM_SMOOTHING) + spectrumDb[i] * SPECTRUM_SMOOTHING;
 			}
 		}
 	}
@@ -220,12 +295,30 @@ public class IQSpectrumPanel extends JPanel {
 			@Override
 			public void mousePressed(MouseEvent e) {
 				dragStartHz = xToOffsetHz(e.getX());
+				dragDeltaHz = 0;
+				dragging = true;
 				notifyOffsetDrag(Double.NaN);
+				repaint();
 			}
 
 			@Override
 			public void mouseDragged(MouseEvent e) {
-				notifyOffsetDrag(xToOffsetHz(e.getX()) - dragStartHz);
+				dragDeltaHz = xToOffsetHz(e.getX()) - dragStartHz;
+				notifyOffsetDrag(dragDeltaHz);
+				repaint();
+			}
+
+			@Override
+			public void mouseReleased(MouseEvent e) {
+				if (!dragging) {
+					return;
+				}
+				dragDeltaHz = xToOffsetHz(e.getX()) - dragStartHz;
+				notifyOffsetDrag(dragDeltaHz);
+				notifyOffsetDrag(Double.POSITIVE_INFINITY);
+				dragging = false;
+				dragDeltaHz = 0;
+				repaint();
 			}
 		};
 		addMouseListener(adapter);
@@ -253,6 +346,13 @@ public class IQSpectrumPanel extends JPanel {
 		double normalized = offsetHz / sampleRateHz + 0.5d;
 		int x = (int) Math.round(normalized * (width - 1));
 		return Math.max(0, Math.min(width - 1, x));
+	}
+
+	private int offsetHzToSignedPixels(double offsetHz, int width) {
+		if (sampleRateHz <= 0 || width <= 1) {
+			return 0;
+		}
+		return (int) Math.round(offsetHz / sampleRateHz * (width - 1));
 	}
 
 	private void fft(double[] real, double[] imag) {

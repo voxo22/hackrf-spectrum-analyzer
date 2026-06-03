@@ -170,11 +170,11 @@ public class IQTimeDomainPanel extends JPanel {
 	}
 
 	public void offerTriggerSamples(byte[] data, int length) {
-		if (data == null || length < 2 || !triggerEnabled || !singleTriggerEnabled || singleTriggerCaptured) {
+		if (data == null || length < 2 || !singleTriggerEnabled || singleTriggerCaptured) {
 			return;
 		}
 		synchronized (this) {
-			if (!triggerEnabled || !singleTriggerEnabled || singleTriggerCaptured) {
+			if (!singleTriggerEnabled || singleTriggerCaptured) {
 				return;
 			}
 			processSingleTriggerSamples(data, length & ~1);
@@ -223,6 +223,7 @@ public class IQTimeDomainPanel extends JPanel {
 			burstStats = BurstStats.empty();
 			burstMarks = new BurstMark[0];
 			drawGrid(g, width, top, bottom, mid);
+			drawTriggerThreshold(g, width, mid, plotHeight);
 			drawHeader(g, read);
 			g.setColor(new Color(0xaaaaaa));
 			g.drawString("Waiting for IQ samples...", 16, mid);
@@ -262,6 +263,7 @@ public class IQTimeDomainPanel extends JPanel {
 		if (burstDetectorEnabled && !deviationView) {
 			drawBurstEnvelopeOverlay(g, samples, mid, plotHeight);
 		}
+		drawTriggerThreshold(g, width, mid, plotHeight);
 		drawTriggerMarker(g, top, bottom);
 		drawMeasurement(g, top, bottom);
 		drawZoomButtons(g);
@@ -510,7 +512,7 @@ public class IQTimeDomainPanel extends JPanel {
 			g.setColor(new Color(0x888888));
 			g.drawString("No buffered samples", Math.max(12, getWidth() - 150), 34);
 		}
-		if (triggerEnabled) {
+		if (isTriggerThresholdVisible()) {
 			g.setColor(triggerFound ? new Color(0x75ff7a) : new Color(0xff7b7b));
 			String triggerText;
 			if (singleTriggerEnabled) {
@@ -523,9 +525,6 @@ public class IQTimeDomainPanel extends JPanel {
 		if (deviationView) {
 			g.setColor(COLOR_DEVIATION);
 			g.drawString("FSK deviation", Math.max(12, getWidth() - 182), 34);
-		} else if (envelopeOnly) {
-			g.setColor(COLOR_ENVELOPE);
-			g.drawString("Envelope", Math.max(12, getWidth() - 230), 34);
 		}
 		if (burstDetectorEnabled) {
 			drawBurstStats(g);
@@ -631,7 +630,7 @@ public class IQTimeDomainPanel extends JPanel {
 			x = drawLegendItem(g, x, y, COLOR_I, "I");
 			x = drawLegendItem(g, x, y, COLOR_Q, "Q");
 		}
-		drawLegendItem(g, x, y, COLOR_ENVELOPE, "|IQ|");
+		drawLegendItem(g, x, y, COLOR_ENVELOPE, "|IQ| Envelope");
 	}
 
 	private int drawLegendItem(Graphics2D g, int x, int y, Color color, String label) {
@@ -856,12 +855,39 @@ public class IQTimeDomainPanel extends JPanel {
 	}
 
 	private void drawTriggerMarker(Graphics2D g, int top, int bottom) {
-		if (!triggerEnabled) {
+		if (!isTriggerThresholdVisible()) {
 			return;
 		}
 		int x = sampleToX(triggerSampleInView);
 		g.setColor(triggerFound ? new Color(0x75ff7a) : new Color(0x777777));
 		g.drawLine(x, top, x, bottom);
+	}
+
+	private void drawTriggerThreshold(Graphics2D g, int width, int mid, int plotHeight) {
+		if (!isTriggerThresholdVisible() || width <= 1) {
+			return;
+		}
+		int y = envelopeToY(triggerThreshold, mid, plotHeight);
+		g.setColor(new Color(0xff9f1c));
+		g.setStroke(new BasicStroke(1.2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_BEVEL, 0,
+				new float[] { 8f, 6f }, 0));
+		g.drawLine(0, y, width, y);
+
+		String label = "TH " + triggerThreshold + " |IQ|";
+		Font previousFont = g.getFont();
+		g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 11));
+		int labelWidth = g.getFontMetrics().stringWidth(label);
+		int labelX = 34;
+		int labelY = Math.max(12, y - 4);
+		g.setColor(new Color(0x101010));
+		g.fillRect(labelX - 4, labelY - 11, labelWidth + 8, 14);
+		g.setColor(new Color(0xffbd4a));
+		g.drawString(label, labelX, labelY);
+		g.setFont(previousFont);
+	}
+
+	private boolean isTriggerThresholdVisible() {
+		return triggerEnabled || singleTriggerEnabled;
 	}
 
 	private int sampleToX(int sample) {

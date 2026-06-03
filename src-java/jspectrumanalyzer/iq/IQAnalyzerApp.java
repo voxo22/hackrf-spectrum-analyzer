@@ -89,11 +89,13 @@ public class IQAnalyzerApp {
 	private JCheckBox audioEnableCheck;
 	private JComboBox<IQAudioOutput.Mode> audioModeCombo;
 	private JSlider audioVolumeSlider;
+	private JSlider audioToneSlider;
+	private JLabel audioToneValueLabel;
 	private JButton audioRecordButton;
 	private JButton iqRecordButton;
 	private JLabel recordStatusLabel;
 	private JCheckBox triggerCheck;
-	private JCheckBox singleTriggerCheck;
+	private JButton singleTriggerButton;
 	private JSlider triggerLevelSlider;
 	private JComboBox<TriggerPreOption> triggerPreCombo;
 	private JButton runStopButton;
@@ -113,6 +115,12 @@ public class IQAnalyzerApp {
 	private volatile boolean streaming = false;
 	private volatile int streamGeneration = 0;
 	private volatile int activeRawSampleRateHz = DEFAULT_SAMPLE_RATE_HZ;
+	private volatile long activeCenterFreqHz = DEFAULT_CENTER_FREQ_HZ;
+	private volatile int activeRfSampleRateHz = DEFAULT_SAMPLE_RATE_HZ;
+	private volatile int activeLnaGain = DEFAULT_LNA_GAIN;
+	private volatile int activeVgaGain = DEFAULT_VGA_GAIN;
+	private volatile boolean activeRfAmp = false;
+	private boolean singleTriggerArmed = false;
 	private Long spectrumDragBaseOffsetHz = null;
 
 	public static void main(String[] args) {
@@ -162,13 +170,16 @@ public class IQAnalyzerApp {
 			timeDomainPanel.setBurstDetectorEnabled(burstDetectCheck.isSelected());
 			timeDomainPanel.setTrigger(triggerCheck.isSelected(), triggerLevelSlider.getValue(),
 					triggerPre == null ? 25 : triggerPre.percent);
-			timeDomainPanel.setSingleTrigger(singleTriggerCheck.isSelected());
+			timeDomainPanel.setSingleTrigger(singleTriggerArmed);
 			timeDomainPanel.setStats(latestCenterFreqHz.get(), (int) latestSampleRateHz.get(), blocks.get(),
 					bytes.get(), startedNanos, (int) latestDecimation.get());
+			spectrumPanel.setCenterFrequencyHz(latestCenterFreqHz.get());
 			spectrumPanel.setSampleRateHz((int) latestSampleRateHz.get());
+			spectrumPanel.setChannelOffsetHz(getCurrentChannelOffsetHz());
 			spectrumPanel.setChannelBandwidthHz(getSelectedChannelBandwidthHz());
 			updateTimeViewInfo();
 			updateRecordingStatus();
+			styleSingleTriggerButton();
 			timeDomainPanel.repaint();
 			spectrumPanel.repaint();
 		});
@@ -244,7 +255,7 @@ public class IQAnalyzerApp {
 		if (splitPane != null) {
 			properties.setProperty("split.divider", Integer.toString(splitPane.getDividerLocation()));
 		}
-		saveAudioSettings(properties);
+		savePanelSettings(properties);
 		try (FileOutputStream output = new FileOutputStream(WINDOW_SETTINGS_FILE)) {
 			properties.store(output, "HackRF IQ Analyzer window settings");
 		} catch (IOException e) {
@@ -265,8 +276,20 @@ public class IQAnalyzerApp {
 		return properties;
 	}
 
-	private void restoreAudioSettings() {
+	private void restorePanelSettings() {
 		Properties properties = loadSettingsProperties();
+		if (envelopeCheck != null) {
+			envelopeCheck.setSelected(Boolean.parseBoolean(properties.getProperty("view.envelope", "true")));
+		}
+		if (deviationCheck != null) {
+			deviationCheck.setSelected(Boolean.parseBoolean(properties.getProperty("view.deviation", "false")));
+		}
+		if (burstDetectCheck != null) {
+			burstDetectCheck.setSelected(Boolean.parseBoolean(properties.getProperty("view.burst", "false")));
+		}
+		if (autoLevelCheck != null) {
+			autoLevelCheck.setSelected(Boolean.parseBoolean(properties.getProperty("view.autoLevel", "true")));
+		}
 		if (audioEnableCheck != null) {
 			audioEnableCheck.setSelected(Boolean.parseBoolean(properties.getProperty("audio.enabled", "false")));
 		}
@@ -284,9 +307,37 @@ public class IQAnalyzerApp {
 			audioVolumeSlider.setValue(parsePropertyInt(properties, "audio.volume", 80));
 			audioOutput.setVolumePercent(audioVolumeSlider.getValue());
 		}
+		if (audioToneSlider != null) {
+			audioToneSlider.setValue(clamp(parsePropertyInt(properties, "audio.toneCutoffHz",
+					IQAudioOutput.DEFAULT_TONE_CUTOFF_HZ), IQAudioOutput.MIN_TONE_CUTOFF_HZ,
+					IQAudioOutput.MAX_TONE_CUTOFF_HZ));
+			applyAudioToneCutoff();
+		}
+		if (triggerCheck != null) {
+			triggerCheck.setSelected(Boolean.parseBoolean(properties.getProperty("trigger.enabled", "false")));
+		}
+		if (triggerPreCombo != null) {
+			selectTriggerPre(parsePropertyInt(properties, "trigger.prePercent", 25));
+		}
+		if (triggerLevelSlider != null) {
+			triggerLevelSlider.setValue(clamp(parsePropertyInt(properties, "trigger.level", 64),
+					triggerLevelSlider.getMinimum(), triggerLevelSlider.getMaximum()));
+		}
 	}
 
-	private void saveAudioSettings(Properties properties) {
+	private void savePanelSettings(Properties properties) {
+		if (envelopeCheck != null) {
+			properties.setProperty("view.envelope", Boolean.toString(envelopeCheck.isSelected()));
+		}
+		if (deviationCheck != null) {
+			properties.setProperty("view.deviation", Boolean.toString(deviationCheck.isSelected()));
+		}
+		if (burstDetectCheck != null) {
+			properties.setProperty("view.burst", Boolean.toString(burstDetectCheck.isSelected()));
+		}
+		if (autoLevelCheck != null) {
+			properties.setProperty("view.autoLevel", Boolean.toString(autoLevelCheck.isSelected()));
+		}
 		if (audioEnableCheck != null) {
 			properties.setProperty("audio.enabled", Boolean.toString(audioEnableCheck.isSelected()));
 		}
@@ -296,6 +347,19 @@ public class IQAnalyzerApp {
 		}
 		if (audioVolumeSlider != null) {
 			properties.setProperty("audio.volume", Integer.toString(audioVolumeSlider.getValue()));
+		}
+		if (audioToneSlider != null) {
+			properties.setProperty("audio.toneCutoffHz", Integer.toString(audioToneSlider.getValue()));
+		}
+		if (triggerCheck != null) {
+			properties.setProperty("trigger.enabled", Boolean.toString(triggerCheck.isSelected()));
+		}
+		if (triggerPreCombo != null) {
+			TriggerPreOption triggerPre = (TriggerPreOption) triggerPreCombo.getSelectedItem();
+			properties.setProperty("trigger.prePercent", Integer.toString(triggerPre == null ? 25 : triggerPre.percent));
+		}
+		if (triggerLevelSlider != null) {
+			properties.setProperty("trigger.level", Integer.toString(triggerLevelSlider.getValue()));
 		}
 	}
 
@@ -440,7 +504,17 @@ public class IQAnalyzerApp {
 		audioVolumeSlider.setToolTipText("Audio output volume");
 		audioVolumeSlider.addChangeListener(e -> audioOutput.setVolumePercent(audioVolumeSlider.getValue()));
 		audioOutput.setVolumePercent(audioVolumeSlider.getValue());
-		restoreAudioSettings();
+		audioToneSlider = new JSlider(IQAudioOutput.MIN_TONE_CUTOFF_HZ, IQAudioOutput.MAX_TONE_CUTOFF_HZ,
+				IQAudioOutput.DEFAULT_TONE_CUTOFF_HZ);
+		audioToneSlider.setPreferredSize(new java.awt.Dimension(100, 34));
+		audioToneSlider.setMajorTickSpacing(5_000);
+		audioToneSlider.setMinorTickSpacing(1_000);
+		audioToneSlider.setSnapToTicks(true);
+		audioToneSlider.setPaintTicks(true);
+		audioToneSlider.setToolTipText("Audio tone bandwidth cutoff");
+		audioToneValueLabel = createAudioToneValueLabel(audioToneSlider.getValue());
+		audioToneSlider.addChangeListener(e -> applyAudioToneCutoff());
+		applyAudioToneCutoff();
 		audioRecordButton = new JButton("Audio REC");
 		iqRecordButton = new JButton("IQ REC");
 		recordStatusLabel = new JLabel("");
@@ -450,14 +524,14 @@ public class IQAnalyzerApp {
 		audioRecordButton.addActionListener(e -> toggleAudioRecording());
 		iqRecordButton.addActionListener(e -> toggleIqRecording());
 		triggerCheck = new JCheckBox("Trigger");
-		singleTriggerCheck = new JCheckBox("Single");
 		triggerCheck.addActionListener(e -> timeDomainPanel.clearSingleTriggerHold());
-		singleTriggerCheck.addActionListener(e -> timeDomainPanel.clearSingleTriggerHold());
+		singleTriggerButton = new JButton("Single Arm");
+		singleTriggerButton.addActionListener(e -> toggleSingleTrigger());
 		triggerLevelSlider = new JSlider(1, 181, 64);
 		triggerLevelSlider.setPreferredSize(new java.awt.Dimension(100, 34));
 		triggerLevelSlider.setMajorTickSpacing(60);
 		triggerLevelSlider.setPaintTicks(true);
-		triggerLevelSlider.setToolTipText("Magnitude trigger threshold");
+		triggerLevelSlider.setToolTipText("Burst trigger threshold; lower is more sensitive");
 		triggerPreCombo = new JComboBox<>(new TriggerPreOption[] {
 				new TriggerPreOption("10%", 10),
 				new TriggerPreOption("25%", 25),
@@ -465,6 +539,7 @@ public class IQAnalyzerApp {
 				new TriggerPreOption("75%", 75)
 		});
 		triggerPreCombo.setSelectedIndex(1);
+		restorePanelSettings();
 		runStopButton = new JButton("Run");
 		statusLabel = new JLabel("Idle");
 		styleButton(runStopButton, START_BG, Color.BLACK);
@@ -501,16 +576,18 @@ public class IQAnalyzerApp {
 		addInline(viewSection, autoLevelCheck);
 
 		JPanel audioSection = createSection("Audio");
+		audioSection.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 150));
 		addWide(audioSection, audioEnableCheck);
 		addLabeled(audioSection, "Demod", audioModeCombo);
 		addLabeled(audioSection, "Volume", audioVolumeSlider);
+		addLabeledPair(audioSection, "Tone/BW", audioToneSlider, "", audioToneValueLabel);
 		addInline(audioSection, audioRecordButton, iqRecordButton);
 		addWide(audioSection, recordStatusLabel);
 
 		JPanel triggerSection = createSection("Trigger");
-		addInline(triggerSection, triggerCheck, singleTriggerCheck);
+		addInline(triggerSection, triggerCheck, singleTriggerButton);
 		addLabeled(triggerSection, "Pre", triggerPreCombo);
-		addLabeled(triggerSection, "Level", triggerLevelSlider);
+		addLabeled(triggerSection, "Threshold", triggerLevelSlider);
 
 		controls.add(rfSection);
 		controls.add(channelSection);
@@ -520,6 +597,7 @@ public class IQAnalyzerApp {
 		styleComponentTree(controls);
 		styleRunStopButton();
 		styleRecordButtons();
+		styleSingleTriggerButton();
 
 		updateButtons();
 		syncTimeViewFromPanel();
@@ -566,7 +644,9 @@ public class IQAnalyzerApp {
 		int row = nextControlRow(panel);
 		addInlineLabel(panel, leftLabel, 0, row);
 		addInlineValue(panel, leftComponent, 1, row, 0.45d);
-		addInlineLabel(panel, rightLabel, 2, row);
+		if (rightLabel != null && rightLabel.length() > 0) {
+			addInlineLabel(panel, rightLabel, 2, row);
+		}
 		addInlineValue(panel, rightComponent, 3, row, 0.55d, true);
 	}
 
@@ -741,8 +821,30 @@ public class IQAnalyzerApp {
 		return label;
 	}
 
+	private JLabel createAudioToneValueLabel(int value) {
+		JLabel label = new JLabel(formatAudioToneValue(value));
+		label.setForeground(TEXT_FG);
+		label.setHorizontalAlignment(JLabel.RIGHT);
+		label.setPreferredSize(new java.awt.Dimension(48, 22));
+		return label;
+	}
+
+	private void applyAudioToneCutoff() {
+		if (audioToneSlider == null) {
+			return;
+		}
+		audioOutput.setToneCutoffHz(audioToneSlider.getValue());
+		if (audioToneValueLabel != null) {
+			audioToneValueLabel.setText(formatAudioToneValue(audioOutput.getToneCutoffHz()));
+		}
+	}
+
 	private String formatGainValue(int gain) {
 		return gain + " dB";
+	}
+
+	private String formatAudioToneValue(int cutoffHz) {
+		return Math.round(cutoffHz / 1000f) + "kHz";
 	}
 
 	private int clamp(int value, int min, int max) {
@@ -780,6 +882,33 @@ public class IQAnalyzerApp {
 			styleButton(iqRecordButton, iqRecorder == null ? Color.RED : STOP_BG, Color.BLACK);
 			iqRecordButton.setText(iqRecorder == null ? "IQ REC" : "STOP IQ");
 		}
+	}
+
+	private void styleSingleTriggerButton() {
+		if (singleTriggerButton == null) {
+			return;
+		}
+		if (!singleTriggerArmed) {
+			styleButton(singleTriggerButton, START_BG, Color.BLACK);
+			singleTriggerButton.setText("Single Arm");
+		} else {
+			styleButton(singleTriggerButton, new Color(0xff9f1c), Color.BLACK);
+			singleTriggerButton.setText("Cancel Single");
+		}
+	}
+
+	private void toggleSingleTrigger() {
+		if (!singleTriggerArmed) {
+			singleTriggerArmed = true;
+			timeDomainPanel.clearSingleTriggerHold();
+		} else {
+			singleTriggerArmed = false;
+			timeDomainPanel.clearSingleTriggerHold();
+		}
+		if (timeDomainPanel != null) {
+			timeDomainPanel.setSingleTrigger(singleTriggerArmed);
+		}
+		styleSingleTriggerButton();
 	}
 
 	private void toggleAudioRecording() {
@@ -933,19 +1062,29 @@ public class IQAnalyzerApp {
 			return;
 		}
 		long centerFreqHz;
+		int sampleRateHz;
+		int lnaGain;
+		int vgaGain;
+		boolean rfAmp;
 		try {
 			centerFreqHz = parseFrequencyHz(centerField.getText());
 			RateOption rate = (RateOption) sampleRateCombo.getSelectedItem();
 			if (rate == null) {
 				throw new IllegalArgumentException("Missing sample rate");
 			}
-			lnaSlider.getValue();
-			vgaSlider.getValue();
+			sampleRateHz = rate.sampleRateHz;
+			lnaGain = lnaSlider.getValue();
+			vgaGain = vgaSlider.getValue();
+			rfAmp = rfAmpCheck.isSelected();
 		} catch (RuntimeException e) {
 			setStatus("Invalid RF settings", true);
 			return;
 		}
 		centerField.setText(formatFrequency(centerFreqHz));
+		if (streaming && centerFreqHz == activeCenterFreqHz && sampleRateHz == activeRfSampleRateHz
+				&& lnaGain == activeLnaGain && vgaGain == activeVgaGain && rfAmp == activeRfAmp) {
+			return;
+		}
 		if (streaming) {
 			restartStream();
 			setStatus("RF applied", false);
@@ -979,6 +1118,11 @@ public class IQAnalyzerApp {
 		blocks.set(0);
 		bytes.set(0);
 		activeRawSampleRateHz = sampleRateHz;
+		activeCenterFreqHz = centerFreqHz;
+		activeRfSampleRateHz = sampleRateHz;
+		activeLnaGain = lnaGain;
+		activeVgaGain = vgaGain;
+		activeRfAmp = rfAmp;
 		final int streamId = ++streamGeneration;
 		latestCenterFreqHz.set(centerFreqHz);
 		latestSampleRateHz.set(displayRateHz);
@@ -1137,6 +1281,15 @@ public class IQAnalyzerApp {
 		if (channelOffsetField == null || viewModeCombo == null) {
 			return;
 		}
+		ViewModeOption viewMode = (ViewModeOption) viewModeCombo.getSelectedItem();
+		if (viewMode == null || !viewMode.channel) {
+			return;
+		}
+		if (Double.isInfinite(deltaHz)) {
+			applyDspSettingsLive();
+			spectrumDragBaseOffsetHz = null;
+			return;
+		}
 		if (Double.isNaN(deltaHz)) {
 			try {
 				spectrumDragBaseOffsetHz = Long.valueOf(parseFrequencyHz(channelOffsetField.getText()));
@@ -1145,16 +1298,14 @@ public class IQAnalyzerApp {
 			}
 			return;
 		}
-		ViewModeOption viewMode = (ViewModeOption) viewModeCombo.getSelectedItem();
-		if (viewMode == null || !viewMode.channel) {
-			return;
-		}
 		try {
 			long baseOffsetHz = spectrumDragBaseOffsetHz == null ? parseFrequencyHz(channelOffsetField.getText())
 					: spectrumDragBaseOffsetHz.longValue();
 			long nextOffsetHz = Math.round(baseOffsetHz - deltaHz);
 			channelOffsetField.setText(formatOffset(nextOffsetHz));
-			applyDspSettingsLive();
+			if (!streaming) {
+				applyDspSettingsLive();
+			}
 		} catch (RuntimeException e) {
 			setStatus("Invalid offset", true);
 		}
@@ -1214,6 +1365,21 @@ public class IQAnalyzerApp {
 		}
 		BandwidthOption bandwidth = (BandwidthOption) channelBandwidthCombo.getSelectedItem();
 		return bandwidth == null ? 0 : bandwidth.bandwidthHz;
+	}
+
+	private long getCurrentChannelOffsetHz() {
+		if (channelOffsetField == null || viewModeCombo == null) {
+			return 0;
+		}
+		ViewModeOption viewMode = (ViewModeOption) viewModeCombo.getSelectedItem();
+		if (viewMode == null || !viewMode.channel) {
+			return 0;
+		}
+		try {
+			return parseFrequencyHz(channelOffsetField.getText());
+		} catch (RuntimeException e) {
+			return 0;
+		}
 	}
 
 	private int calculateDecimation(int rawSampleRateHz) {
@@ -1317,6 +1483,16 @@ public class IQAnalyzerApp {
 				return;
 			}
 		}
+	}
+
+	private void selectTriggerPre(int percent) {
+		for (int i = 0; i < triggerPreCombo.getItemCount(); i++) {
+			if (triggerPreCombo.getItemAt(i).percent == percent) {
+				triggerPreCombo.setSelectedIndex(i);
+				return;
+			}
+		}
+		triggerPreCombo.setSelectedIndex(1);
 	}
 
 	private void syncTimeViewFromPanel() {
