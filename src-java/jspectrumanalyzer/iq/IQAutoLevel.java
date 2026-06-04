@@ -59,7 +59,7 @@ public class IQAutoLevel {
 
 		for (int i = 0; i < length; i++) {
 			double center = (i & 1) == 0 ? centerI : centerQ;
-			iqData[i] = clamp((iqData[i] - center) * gain);
+			iqData[i] = clamp((iqData[i] - center) * gain + center);
 		}
 	}
 

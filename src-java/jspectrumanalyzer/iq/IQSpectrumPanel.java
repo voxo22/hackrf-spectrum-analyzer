@@ -35,6 +35,7 @@ public class IQSpectrumPanel extends JPanel {
 	private volatile int channelBandwidthHz = 0;
 	private volatile long centerFrequencyHz = 0;
 	private volatile long channelOffsetHz = 0;
+	private volatile long dcArtifactOffsetHz = 0;
 	private DoubleConsumer offsetDragListener;
 	private double dragStartHz = 0;
 	private double dragDeltaHz = 0;
@@ -64,6 +65,10 @@ public class IQSpectrumPanel extends JPanel {
 
 	public void setChannelOffsetHz(long channelOffsetHz) {
 		this.channelOffsetHz = channelOffsetHz;
+	}
+
+	public void setDcArtifactOffsetHz(long dcArtifactOffsetHz) {
+		this.dcArtifactOffsetHz = dcArtifactOffsetHz;
 	}
 
 	public void setChannelBandwidthHz(int channelBandwidthHz) {
@@ -222,27 +227,41 @@ public class IQSpectrumPanel extends JPanel {
 			double mag = Math.sqrt(real[shifted] * real[shifted] + imag[shifted] * imag[shifted]);
 			spectrumDb[i] = (float) (20d * Math.log10(mag + 1e-9));
 		}
-		suppressDcSpike();
+		suppressDcSpike(dcArtifactOffsetHz);
 	}
 
-	private void suppressDcSpike() {
-		int center = FFT_SIZE / 2;
-		float replacement = Math.min(averageDb(center - 5, center - 3), averageDb(center + 3, center + 5));
-		for (int bin = center - 1; bin <= center + 1; bin++) {
-			if (bin >= 0 && bin < spectrumDb.length && spectrumDb[bin] > replacement) {
-				spectrumDb[bin] = replacement;
+	private void suppressDcSpike(long offsetHz) {
+		int center = offsetHzToBin(offsetHz);
+		int radius = 1;
+		int referenceRadius = 5;
+		float reference = 0f;
+		int count = 0;
+		for (int offset = -referenceRadius; offset <= referenceRadius; offset++) {
+			if (Math.abs(offset) <= radius) {
+				continue;
+			}
+			int index = center + offset;
+			if (index >= 0 && index < spectrumDb.length) {
+				reference += spectrumDb[index];
+				count++;
+			}
+		}
+		if (count == 0) {
+			return;
+		}
+		reference /= count;
+		for (int offset = -radius; offset <= radius; offset++) {
+			int index = center + offset;
+			if (index >= 0 && index < spectrumDb.length && spectrumDb[index] > reference) {
+				spectrumDb[index] = reference;
 			}
 		}
 	}
 
-	private float averageDb(int start, int end) {
-		float sum = 0f;
-		int count = 0;
-		for (int bin = Math.max(0, start); bin <= end && bin < spectrumDb.length; bin++) {
-			sum += spectrumDb[bin];
-			count++;
-		}
-		return count == 0 ? -120f : sum / count;
+	private int offsetHzToBin(long offsetHz) {
+		double normalized = offsetHz / (double) Math.max(1, sampleRateHz) + 0.5d;
+		int bin = (int) Math.round(normalized * (FFT_SIZE - 1));
+		return Math.max(0, Math.min(FFT_SIZE - 1, bin));
 	}
 
 	private void smoothSpectrum() {

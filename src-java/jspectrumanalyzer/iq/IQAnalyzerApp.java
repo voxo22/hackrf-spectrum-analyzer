@@ -55,6 +55,10 @@ public class IQAnalyzerApp {
 	private static final int DEFAULT_VISIBLE_SAMPLES = 4096;
 	private static final int DEFAULT_BUFFER_SECONDS = 2;
 	private static final int MAX_BLOCK_BYTES = 262_144;
+	private static final int NARROW_DC_AVOID_MIN_HZ = 50_000;
+	private static final int NARROW_DC_AVOID_GUARD_HZ = 25_000;
+	private static final int WIDE_DC_AVOID_HZ = 100_000;
+	private static final int WIDE_DC_AVOID_GUARD_HZ = 25_000;
 	private static final File WINDOW_SETTINGS_FILE = new File("hackrf-iq-analyzer.ini");
 
 	private final AtomicLong blocks = new AtomicLong();
@@ -104,6 +108,7 @@ public class IQAnalyzerApp {
 	private Timer rfRestartTimer;
 	private Thread iqThread;
 	private volatile IQChannelProcessor channelProcessor;
+	private volatile IQFrequencyShifter wideLowIfShifter;
 	private IQAudioOutput audioOutput = new IQAudioOutput();
 	private IQAutoLevel autoLevel = new IQAutoLevel();
 	private volatile WavFileWriter audioRecorder;
@@ -116,6 +121,7 @@ public class IQAnalyzerApp {
 	private volatile int streamGeneration = 0;
 	private volatile int activeRawSampleRateHz = DEFAULT_SAMPLE_RATE_HZ;
 	private volatile long activeCenterFreqHz = DEFAULT_CENTER_FREQ_HZ;
+	private volatile long activeLowIfShiftHz = 0;
 	private volatile int activeRfSampleRateHz = DEFAULT_SAMPLE_RATE_HZ;
 	private volatile int activeLnaGain = DEFAULT_LNA_GAIN;
 	private volatile int activeVgaGain = DEFAULT_VGA_GAIN;
@@ -176,6 +182,7 @@ public class IQAnalyzerApp {
 			spectrumPanel.setCenterFrequencyHz(latestCenterFreqHz.get());
 			spectrumPanel.setSampleRateHz((int) latestSampleRateHz.get());
 			spectrumPanel.setChannelOffsetHz(getCurrentChannelOffsetHz());
+			spectrumPanel.setDcArtifactOffsetHz(-activeLowIfShiftHz);
 			spectrumPanel.setChannelBandwidthHz(getSelectedChannelBandwidthHz());
 			updateTimeViewInfo();
 			updateRecordingStatus();
@@ -506,7 +513,7 @@ public class IQAnalyzerApp {
 		audioOutput.setVolumePercent(audioVolumeSlider.getValue());
 		audioToneSlider = new JSlider(IQAudioOutput.MIN_TONE_CUTOFF_HZ, IQAudioOutput.MAX_TONE_CUTOFF_HZ,
 				IQAudioOutput.DEFAULT_TONE_CUTOFF_HZ);
-		audioToneSlider.setPreferredSize(new java.awt.Dimension(100, 34));
+		audioToneSlider.setPreferredSize(new java.awt.Dimension(108, 30));
 		audioToneSlider.setMajorTickSpacing(5_000);
 		audioToneSlider.setMinorTickSpacing(1_000);
 		audioToneSlider.setSnapToTicks(true);
@@ -521,6 +528,8 @@ public class IQAnalyzerApp {
 		styleButton(audioRecordButton, Color.RED, Color.BLACK);
 		styleButton(iqRecordButton, Color.RED, Color.BLACK);
 		recordStatusLabel.setForeground(MUTED_FG);
+		recordStatusLabel.setPreferredSize(new java.awt.Dimension(180, 22));
+		recordStatusLabel.setMinimumSize(new java.awt.Dimension(180, 22));
 		audioRecordButton.addActionListener(e -> toggleAudioRecording());
 		iqRecordButton.addActionListener(e -> toggleIqRecording());
 		triggerCheck = new JCheckBox("Trigger");
@@ -576,11 +585,10 @@ public class IQAnalyzerApp {
 		addInline(viewSection, autoLevelCheck);
 
 		JPanel audioSection = createSection("Audio");
-		audioSection.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 150));
-		addWide(audioSection, audioEnableCheck);
+		audioSection.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 136));
+		addInline(audioSection, audioEnableCheck, createAudioToneRow());
 		addLabeled(audioSection, "Demod", audioModeCombo);
 		addLabeled(audioSection, "Volume", audioVolumeSlider);
-		addLabeledPair(audioSection, "Tone/BW", audioToneSlider, "", audioToneValueLabel);
 		addInline(audioSection, audioRecordButton, iqRecordButton);
 		addWide(audioSection, recordStatusLabel);
 
@@ -829,6 +837,17 @@ public class IQAnalyzerApp {
 		return label;
 	}
 
+	private JPanel createAudioToneRow() {
+		JPanel panel = new JPanel(new BorderLayout(4, 0));
+		panel.setBackground(PANEL_BG);
+		JLabel label = new JLabel("BW");
+		label.setForeground(TEXT_FG);
+		panel.add(label, BorderLayout.WEST);
+		panel.add(audioToneSlider, BorderLayout.CENTER);
+		panel.add(audioToneValueLabel, BorderLayout.EAST);
+		return panel;
+	}
+
 	private void applyAudioToneCutoff() {
 		if (audioToneSlider == null) {
 			return;
@@ -980,11 +999,20 @@ public class IQAnalyzerApp {
 	}
 
 	private File createRecordingFile(String prefix, int bandwidthHz) {
-		long centerHz = latestCenterFreqHz.get();
+		long centerHz = getSelectedRecordingCenterFreqHz();
 		bandwidthHz = Math.max(1, bandwidthHz);
 		String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss"));
 		return new File(String.format(Locale.US, "# %s %dHz BW-%s %s.wav", prefix, centerHz,
 				formatRecordingBandwidth(bandwidthHz), timestamp));
+	}
+
+	private long getSelectedRecordingCenterFreqHz() {
+		long centerHz = latestCenterFreqHz.get();
+		ViewModeOption viewMode = viewModeCombo == null ? null : (ViewModeOption) viewModeCombo.getSelectedItem();
+		if (viewMode == null || !viewMode.channel) {
+			return centerHz;
+		}
+		return Math.max(0, centerHz + getCurrentChannelOffsetHz());
 	}
 
 	private int getSelectedRecordingBandwidthHz() {
@@ -1097,6 +1125,8 @@ public class IQAnalyzerApp {
 		}
 
 		long centerFreqHz;
+		long hardwareCenterFreqHz;
+		long lowIfShiftHz;
 		int sampleRateHz;
 		int displayRateHz;
 		int lnaGain;
@@ -1110,6 +1140,8 @@ public class IQAnalyzerApp {
 			lnaGain = lnaSlider.getValue();
 			vgaGain = vgaSlider.getValue();
 			rfAmp = rfAmpCheck.isSelected();
+			lowIfShiftHz = calculateLowIfShiftHz(sampleRateHz);
+			hardwareCenterFreqHz = centerFreqHz - lowIfShiftHz;
 		} catch (RuntimeException e) {
 			setStatus("Invalid settings", true);
 			return;
@@ -1119,6 +1151,7 @@ public class IQAnalyzerApp {
 		bytes.set(0);
 		activeRawSampleRateHz = sampleRateHz;
 		activeCenterFreqHz = centerFreqHz;
+		activeLowIfShiftHz = lowIfShiftHz;
 		activeRfSampleRateHz = sampleRateHz;
 		activeLnaGain = lnaGain;
 		activeVgaGain = vgaGain;
@@ -1131,7 +1164,7 @@ public class IQAnalyzerApp {
 		configureDspPipeline(sampleRateHz, true);
 		streaming = true;
 		updateButtons();
-		setStatus("Starting", false);
+		setStatus(lowIfShiftHz == 0 ? "Starting" : "Starting Low-IF", false);
 
 		iqThread = new Thread(() -> {
 			int result = HackRFIQNativeBridge.start((callbackCenterFreqHz, callbackSampleRateHz, iqData) -> {
@@ -1142,7 +1175,17 @@ public class IQAnalyzerApp {
 				if (activeRingBuffer != null) {
 					IQChannelProcessor processor = channelProcessor;
 					if (processor == null) {
-						byte[] copy = copyAndLevel(iqData, iqData.length);
+						byte[] recordingData = iqData;
+						int recordingLength = iqData.length;
+						IQFrequencyShifter shifter = wideLowIfShifter;
+						if (shifter != null) {
+							if (channelOutput.length < iqData.length) {
+								channelOutput = new byte[iqData.length];
+							}
+							recordingLength = shifter.process(iqData, iqData.length, channelOutput);
+							recordingData = channelOutput;
+						}
+						byte[] copy = copyAndLevel(recordingData, recordingLength);
 						timeDomainPanel.offerTriggerSamples(copy, copy.length);
 						activeRingBuffer.write(copy);
 						writeIqRecording(copy, copy.length);
@@ -1167,8 +1210,8 @@ public class IQAnalyzerApp {
 				}
 				blocks.incrementAndGet();
 				bytes.addAndGet(iqData.length);
-				latestCenterFreqHz.set(callbackCenterFreqHz);
-			}, centerFreqHz, sampleRateHz, DEFAULT_BASEBAND_FILTER_HZ, lnaGain, vgaGain, rfAmp);
+				latestCenterFreqHz.set(centerFreqHz);
+			}, hardwareCenterFreqHz, sampleRateHz, DEFAULT_BASEBAND_FILTER_HZ, lnaGain, vgaGain, rfAmp);
 
 			SwingUtilities.invokeLater(() -> {
 				if (streamId != streamGeneration) {
@@ -1263,6 +1306,12 @@ public class IQAnalyzerApp {
 			return;
 		}
 		try {
+			long lowIfShiftHz = calculateLowIfShiftHz(activeRawSampleRateHz);
+			if (lowIfShiftHz != activeLowIfShiftHz) {
+				restartStream();
+				setStatus(lowIfShiftHz == 0 ? "DSP applied" : "Low-IF applied", false);
+				return;
+			}
 			configureDspPipeline(activeRawSampleRateHz, true);
 			setStatus("DSP applied", false);
 		} catch (RuntimeException e) {
@@ -1316,14 +1365,17 @@ public class IQAnalyzerApp {
 		boolean channelMode = viewMode != null && viewMode.channel;
 		int displayRateHz = calculateDisplayRateHz(rawSampleRateHz);
 		IQChannelProcessor newProcessor = null;
+		IQFrequencyShifter newWideLowIfShifter = null;
 		if (channelMode) {
-			double channelOffsetHz = parseFrequencyHz(channelOffsetField.getText());
+			double channelOffsetHz = parseFrequencyHz(channelOffsetField.getText()) + activeLowIfShiftHz;
 			BandwidthOption bandwidth = (BandwidthOption) channelBandwidthCombo.getSelectedItem();
 			int channelBandwidthHz = bandwidth == null ? 200_000 : bandwidth.bandwidthHz;
 			OutputRateOption outputRate = (OutputRateOption) outputRateCombo.getSelectedItem();
 			int outputRateHz = outputRate == null ? 250_000 : outputRate.outputRateHz;
 			newProcessor = new IQChannelProcessor(rawSampleRateHz, channelOffsetHz, channelBandwidthHz, outputRateHz);
 			displayRateHz = newProcessor.getActualOutputRateHz();
+		} else if (activeLowIfShiftHz != 0) {
+			newWideLowIfShifter = new IQFrequencyShifter(rawSampleRateHz, activeLowIfShiftHz);
 		}
 
 		if (resetBuffer || ringBuffer == null) {
@@ -1333,6 +1385,7 @@ public class IQAnalyzerApp {
 			spectrumPanel.setRingBuffer(newRingBuffer);
 		}
 		channelProcessor = newProcessor;
+		wideLowIfShifter = newWideLowIfShifter;
 		latestSampleRateHz.set(displayRateHz);
 		latestDecimation.set(newProcessor == null ? 1 : newProcessor.getDecimation());
 
@@ -1365,6 +1418,57 @@ public class IQAnalyzerApp {
 		}
 		BandwidthOption bandwidth = (BandwidthOption) channelBandwidthCombo.getSelectedItem();
 		return bandwidth == null ? 0 : bandwidth.bandwidthHz;
+	}
+
+	private long calculateLowIfShiftHz(int rawSampleRateHz) {
+		if (viewModeCombo == null) {
+			return 0;
+		}
+		ViewModeOption viewMode = (ViewModeOption) viewModeCombo.getSelectedItem();
+		if (viewMode == null) {
+			return 0;
+		}
+		if (!viewMode.channel) {
+			return calculateWideLowIfShiftHz(rawSampleRateHz);
+		}
+		if (channelOffsetField == null) {
+			return 0;
+		}
+		long channelOffsetHz = parseFrequencyHz(channelOffsetField.getText());
+		int bandwidthHz = getSelectedChannelBandwidthHz();
+		long avoidHz = calculateLowIfAvoidHz(rawSampleRateHz, bandwidthHz);
+		if (avoidHz <= 0 || Math.abs(channelOffsetHz) >= avoidHz) {
+			return 0;
+		}
+		long shiftHz = channelOffsetHz < 0 ? -avoidHz : avoidHz;
+		long requestedCenterHz = centerField == null ? activeCenterFreqHz : parseFrequencyHz(centerField.getText());
+		if (requestedCenterHz - shiftHz <= 0) {
+			shiftHz = -shiftHz;
+		}
+		return shiftHz;
+	}
+
+	private long calculateWideLowIfShiftHz(int rawSampleRateHz) {
+		long maxShiftHz = rawSampleRateHz / 2L - WIDE_DC_AVOID_GUARD_HZ;
+		if (maxShiftHz <= 0) {
+			return 0;
+		}
+		long shiftHz = Math.min(WIDE_DC_AVOID_HZ, maxShiftHz);
+		long requestedCenterHz = centerField == null ? activeCenterFreqHz : parseFrequencyHz(centerField.getText());
+		if (requestedCenterHz - shiftHz <= 0) {
+			shiftHz = -shiftHz;
+		}
+		return shiftHz;
+	}
+
+	private long calculateLowIfAvoidHz(int rawSampleRateHz, int bandwidthHz) {
+		long halfBandwidthHz = Math.max(0, bandwidthHz) / 2L;
+		long avoidHz = Math.max(NARROW_DC_AVOID_MIN_HZ, halfBandwidthHz + NARROW_DC_AVOID_GUARD_HZ);
+		long maxOffsetHz = Math.max(0, rawSampleRateHz / 2L - halfBandwidthHz - NARROW_DC_AVOID_GUARD_HZ);
+		if (maxOffsetHz <= 0) {
+			return 0;
+		}
+		return Math.min(avoidHz, maxOffsetHz);
 	}
 
 	private long getCurrentChannelOffsetHz() {
