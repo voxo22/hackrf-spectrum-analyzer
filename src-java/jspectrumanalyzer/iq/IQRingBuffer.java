@@ -15,10 +15,17 @@ public class IQRingBuffer {
 	}
 
 	public synchronized void write(byte[] data) {
-		if (data == null || data.length == 0) {
+		write(data, data == null ? 0 : data.length);
+	}
+
+	public synchronized void write(byte[] data, int requestedLength) {
+		if (data == null || requestedLength <= 0) {
 			return;
 		}
-		int length = data.length;
+		int length = Math.min(data.length, requestedLength) & ~1;
+		if (length <= 0) {
+			return;
+		}
 		if (length > buffer.length) {
 			int offset = length - buffer.length;
 			System.arraycopy(data, offset, buffer, 0, buffer.length);

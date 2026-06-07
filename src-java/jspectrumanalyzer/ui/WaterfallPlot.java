@@ -53,6 +53,8 @@ public class WaterfallPlot extends JPanel {
 	private int[]			rangePairs				= null;
 	private double			compressedTotalLength	= 0;
 	private int				wfFreqShift			= 0;
+	private double			frequencyStartOverrideMHz = Double.NaN;
+	private double			frequencyStopOverrideMHz = Double.NaN;
 	private boolean			playbackVisible			= false;
 	private long			playbackPositionMillis	= 0;
 	private long			playbackDurationMillis	= 0;
@@ -126,8 +128,11 @@ public class WaterfallPlot extends JPanel {
 		long start	= System.nanoTime();
 
 		int size = spectrum.spectrumLength();
-		double startFreq = spectrum.getFreqStartMHz() * 1000000d;
-		double freqRange = (spectrum.getFreqStopMHz() - spectrum.getFreqStartMHz()) * 1000000d;
+		double displayStartMHz = Double.isNaN(frequencyStartOverrideMHz)
+				? spectrum.getFreqStartMHz() : frequencyStartOverrideMHz;
+		double displayStopMHz = Double.isNaN(frequencyStopOverrideMHz)
+				? spectrum.getFreqStopMHz() : frequencyStopOverrideMHz;
+		double freqRange = (displayStopMHz - displayStartMHz) * 1000000d;
 		double width = bufferedImages[0].getWidth();
 		double spectrumPalleteMax = spectrumPaletteStart + spectrumPaletteSize;
 
@@ -153,7 +158,6 @@ public class WaterfallPlot extends JPanel {
 		Arrays.fill(drawMaxBuffer, minimumValueDrawBuffer);
 
 		//optimized drawing
-		double widthDivSize = (double)width / size;
 		double inverseSpectrumPaletteSize	= 1d/spectrumPaletteSize;
 		double spectrumPaletteStartDivSpectrumPaletteSize	= (double)spectrumPaletteStart/spectrumPaletteSize;
 		for (int i = 0; i < size; i++) {
@@ -196,7 +200,14 @@ public class WaterfallPlot extends JPanel {
 				double percentage = mapped / compressedTotalLength;
 				pixelX = (int) Math.round(percentage * width);
 			} else {
-				pixelX = (int) Math.round(widthDivSize * i);
+				double frequencyMHz = spectrum.getFreqStartMHz()
+						+ spectrum.getFFTBinSizeHz() * i / 1000000d;
+				double percentage = (frequencyMHz - displayStartMHz)
+						/ Math.max(1e-12d, displayStopMHz - displayStartMHz);
+				if (percentage < 0d || percentage > 1d) {
+					continue;
+				}
+				pixelX = (int) Math.round(percentage * width);
 			}
 			pixelX = pixelX >= drawMaxBuffer.length ? drawMaxBuffer.length - 1 : pixelX < 0 ? 0 : pixelX;
 			if (percentagePower > drawMaxBuffer[pixelX])
@@ -319,6 +330,22 @@ public class WaterfallPlot extends JPanel {
 		repaint();
 	}
 
+	public void setFrequencyBounds(double startMHz, double stopMHz) {
+		double nextStart = Double.NaN;
+		double nextStop = Double.NaN;
+		if (Double.isFinite(startMHz) && Double.isFinite(stopMHz) && stopMHz > startMHz) {
+			nextStart = startMHz;
+			nextStop = stopMHz;
+		}
+		if (Double.compare(frequencyStartOverrideMHz, nextStart) == 0
+				&& Double.compare(frequencyStopOverrideMHz, nextStop) == 0) {
+			return;
+		}
+		frequencyStartOverrideMHz = nextStart;
+		frequencyStopOverrideMHz = nextStop;
+		repaint();
+	}
+
 	public void setPlaybackEventMarkers(long[] markersMillis) {
 		this.playbackEventMarkersMillis = markersMillis == null ? new long[0] : markersMillis.clone();
 		repaint();
@@ -393,8 +420,12 @@ public class WaterfallPlot extends JPanel {
 				double freqHz = (origNoShift + wfFreqShift) * 1000000d;
 				return freqHz;
 			} else {
-				double startFreq = (lastSpectrum.getFreqStartMHz() + lastSpectrum.getFreqShift()) * 1000000d;
-				double stopFreq = (lastSpectrum.getFreqStopMHz() + lastSpectrum.getFreqShift()) * 1000000d;
+				double startMHz = Double.isNaN(frequencyStartOverrideMHz)
+						? lastSpectrum.getFreqStartMHz() : frequencyStartOverrideMHz;
+				double stopMHz = Double.isNaN(frequencyStopOverrideMHz)
+						? lastSpectrum.getFreqStopMHz() : frequencyStopOverrideMHz;
+				double startFreq = (startMHz + lastSpectrum.getFreqShift()) * 1000000d;
+				double stopFreq = (stopMHz + lastSpectrum.getFreqShift()) * 1000000d;
 				double freqRange = (stopFreq - startFreq);
 				double percentageFreq = x / (double) chartWidth;
 				double freq = percentageFreq * freqRange + startFreq;

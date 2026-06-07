@@ -29,6 +29,8 @@ public interface HackRFSettings {
 
 	public ModelValueInt getFFTBinHz();
 
+	public ModelValueInt getIqReplayRbwHz();
+
 	public ModelValue<FrequencyRange> getFrequency();
 
 	public ModelValueInt getGain();
@@ -105,6 +107,8 @@ public interface HackRFSettings {
 	public ModelValueBoolean isRecordedSpectrum();
 
 	public ModelValueBoolean isPlayingSpectrum();
+
+	public ModelValue<String> getReplayType();
 	
 	public ModelValueBoolean isChartsRealtimeVisible();
 	

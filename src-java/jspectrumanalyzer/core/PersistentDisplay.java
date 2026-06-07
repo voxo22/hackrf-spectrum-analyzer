@@ -71,6 +71,8 @@ public class PersistentDisplay {
     private int[]                 rangePairs              = null;
     private double                compressedTotalLength   = 0;
     private int                   pdFreqShift             = 0;
+	private volatile double		frequencyStartOverrideMHz = Double.NaN;
+	private volatile double		frequencyStopOverrideMHz = Double.NaN;
 
 	public PersistentDisplay() {
 		setImageSize(320, 240);
@@ -169,7 +171,18 @@ public class PersistentDisplay {
 				double percentage = mapped / compressedTotalLength;
 				x = (int) Math.round(percentage * width);
 			} else {
-				x = i * width / spectrum.length;
+				double frequencyMHz = datasetSpectrum.getFreqStartMHz()
+						+ datasetSpectrum.getFFTBinSizeHz() * i / 1000000d;
+				if (Double.isFinite(frequencyStartOverrideMHz) && Double.isFinite(frequencyStopOverrideMHz)) {
+					double percentage = (frequencyMHz - frequencyStartOverrideMHz)
+							/ Math.max(1e-12d, frequencyStopOverrideMHz - frequencyStartOverrideMHz);
+					if (percentage < 0d || percentage > 1d) {
+						continue;
+					}
+					x = (int) Math.round(percentage * width);
+				} else {
+					x = i * width / spectrum.length;
+				}
 			}
 			int y = //(power - yMin) * (0 - height) / (yMax - yMin) + height; 
 					(int) ((power - yMin) * hDivYRange
@@ -289,6 +302,22 @@ public class PersistentDisplay {
 			}
 			this.compressedTotalLength = sum;
 		}
+	}
+
+	public void setFrequencyBounds(double startMHz, double stopMHz) {
+		double nextStart = Double.NaN;
+		double nextStop = Double.NaN;
+		if (Double.isFinite(startMHz) && Double.isFinite(stopMHz) && stopMHz > startMHz) {
+			nextStart = startMHz;
+			nextStop = stopMHz;
+		}
+		if (Double.compare(frequencyStartOverrideMHz, nextStart) == 0
+				&& Double.compare(frequencyStopOverrideMHz, nextStop) == 0) {
+			return;
+		}
+		frequencyStartOverrideMHz = nextStart;
+		frequencyStopOverrideMHz = nextStop;
+		reset();
 	}
 
 	public void setPersistenceTime(int persistenceTimeSecs) {

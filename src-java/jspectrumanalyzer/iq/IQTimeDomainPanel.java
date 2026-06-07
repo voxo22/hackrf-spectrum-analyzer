@@ -27,6 +27,8 @@ public class IQTimeDomainPanel extends JPanel {
 	private static final Color COLOR_ENVELOPE = new Color(0xeeee00);
 	private static final Color COLOR_DEVIATION = new Color(0xd98cff);
 	private static final int DEVIATION_SCALE_SAMPLES = 4096;
+	private static final int DEVIATION_MIN_MAGNITUDE = 6;
+	private static final double DEVIATION_MIN_COHERENCE = 0.22d;
 	private static final int OVERVIEW_THRESHOLD_SAMPLES = 2097153;
 	private static final long OVERVIEW_REFRESH_NANOS = 600_000_000L;
 	private static final int ZOOM_BUTTON_SIZE = 42;
@@ -541,6 +543,7 @@ public class IQTimeDomainPanel extends JPanel {
 		String text = "Burst " + stats.count + "   width " + formatTime(stats.averageWidthSeconds);
 		if (stats.averagePeriodSeconds > 0) {
 			text += "   period " + formatTime(stats.averagePeriodSeconds)
+					+ String.format("   frequency %.1f Hz", 1d / stats.averagePeriodSeconds)
 					+ String.format("   duty %.1f%%", stats.dutyPercent);
 		}
 		g.drawString(text, 12, 34);
@@ -1036,25 +1039,75 @@ public class IQTimeDomainPanel extends JPanel {
 		g.setColor(color);
 		g.setStroke(new BasicStroke(1.2f));
 
-		int previousX = 0;
-		int previousY = deviationToY(1, mid, plotHeight);
-		for (int x = 1; x < width; x++) {
-			int sample = 1 + x * (samples - 2) / (width - 1);
-			int y = deviationToY(sample, mid, plotHeight);
-			g.drawLine(previousX, previousY, x, y);
+		int previousX = -1;
+		int previousY = 0;
+		for (int x = 0; x < width; x++) {
+			int start = 1 + x * (samples - 1) / width;
+			int end = 1 + (x + 1) * (samples - 1) / width;
+			double deviation = averagedDeviationHz(start, end, samples);
+			if (Double.isNaN(deviation)) {
+				previousX = -1;
+				continue;
+			}
+			int y = deviationToY(deviation, mid, plotHeight);
+			if (previousX >= 0) {
+				g.drawLine(previousX, previousY, x, y);
+			}
 			previousX = x;
 			previousY = y;
 		}
 	}
 
-	private int deviationToY(int sample, int mid, int plotHeight) {
-		double normalized = deviationHz(sample) / Math.max(1d, deviationScaleHz);
+	private int deviationToY(double deviationHz, int mid, int plotHeight) {
+		double normalized = deviationHz / Math.max(1d, deviationScaleHz);
 		if (normalized > 1d) {
 			normalized = 1d;
 		} else if (normalized < -1d) {
 			normalized = -1d;
 		}
 		return mid - (int) Math.round(normalized * plotHeight * 0.45);
+	}
+
+	private double averagedDeviationHz(int start, int end, int samples) {
+		start = Math.max(1, Math.min(samples - 1, start));
+		end = Math.max(start + 1, Math.min(samples, end));
+		if (end - start < 3) {
+			int center = (start + end) / 2;
+			start = Math.max(1, center - 2);
+			end = Math.min(samples, center + 3);
+		}
+		double crossSum = 0d;
+		double dotSum = 0d;
+		double vectorMagnitudeSum = 0d;
+		int valid = 0;
+		for (int sample = start; sample < end; sample++) {
+			int prevI = snapshot[(sample - 1) * 2];
+			int prevQ = snapshot[(sample - 1) * 2 + 1];
+			int i = snapshot[sample * 2];
+			int q = snapshot[sample * 2 + 1];
+			if (magnitude(prevI, prevQ) < DEVIATION_MIN_MAGNITUDE
+					|| magnitude(i, q) < DEVIATION_MIN_MAGNITUDE) {
+				continue;
+			}
+			double cross = prevI * q - prevQ * i;
+			double dot = prevI * i + prevQ * q;
+			double vectorMagnitude = Math.hypot(cross, dot);
+			if (vectorMagnitude <= 0d) {
+				continue;
+			}
+			crossSum += cross;
+			dotSum += dot;
+			vectorMagnitudeSum += vectorMagnitude;
+			valid++;
+		}
+		if (valid < 2 || vectorMagnitudeSum <= 0d) {
+			return Double.NaN;
+		}
+		double coherence = Math.hypot(crossSum, dotSum) / vectorMagnitudeSum;
+		if (coherence < DEVIATION_MIN_COHERENCE) {
+			return Double.NaN;
+		}
+		return Math.atan2(crossSum, dotSum) * sampleRateHz / (2d * Math.PI);
 	}
 
 	private double deviationHz(int sample) {
@@ -1072,15 +1125,15 @@ public class IQTimeDomainPanel extends JPanel {
 			return;
 		}
 		int countTarget = Math.min(DEVIATION_SCALE_SAMPLES, samples - 1);
-		int step = Math.max(1, (samples - 1) / countTarget);
 		int count = 0;
-		for (int sample = 1; sample < samples && count < deviationScaleScratch.length; sample += step) {
-			int i = snapshot[sample * 2];
-			int q = snapshot[sample * 2 + 1];
-			if (magnitude(i, q) < 5) {
+		for (int bin = 0; bin < countTarget && count < deviationScaleScratch.length; bin++) {
+			int start = 1 + bin * (samples - 1) / countTarget;
+			int end = 1 + (bin + 1) * (samples - 1) / countTarget;
+			double deviation = averagedDeviationHz(start, end, samples);
+			if (Double.isNaN(deviation)) {
 				continue;
 			}
-			deviationScaleScratch[count++] = (float) Math.abs(deviationHz(sample));
+			deviationScaleScratch[count++] = (float) Math.abs(deviation);
 		}
 		if (count < 8) {
 			return;

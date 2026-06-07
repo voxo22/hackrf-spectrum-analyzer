@@ -39,6 +39,7 @@ import java.math.BigDecimal;
 import java.util.Locale;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.locks.ReentrantLock;
 import javax.swing.ImageIcon;
@@ -98,6 +99,11 @@ import jspectrumanalyzer.core.SpurFilter;
 import jspectrumanalyzer.core.jfc.XYSeriesCollectionImmutable;
 import jspectrumanalyzer.core.jfc.XYSeriesImmutable;
 import jspectrumanalyzer.iq.IQAnalyzerApp;
+import jspectrumanalyzer.iq.IQChannelProcessor;
+import jspectrumanalyzer.iq.IQFftChannelProcessor;
+import jspectrumanalyzer.iq.IQReplayFile;
+import jspectrumanalyzer.iq.IQSampleProcessor;
+import jspectrumanalyzer.iq.IQSpectrumFrame;
 import jspectrumanalyzer.nativebridge.HackRFSweepDataCallback;
 import jspectrumanalyzer.nativebridge.HackRFSweepNativeBridge;
 import jspectrumanalyzer.ui.HackRFSweepSettingsUI;
@@ -109,6 +115,126 @@ import shared.mvc.ModelValue.ModelValueBoolean;
 import shared.mvc.ModelValue.ModelValueInt;
 
 public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepDataCallback {
+	private static final String MAIN_WINDOW_TITLE = "HackRF Spectrum Analyzer";
+	private static final int IQ_REPLAY_FRAMES_PER_SECOND = 100;
+	private static final double IQ_REPLAY_MAX_VIEW_SPAN_MULTIPLIER = 10d;
+	private static final int IQ_REPLAY_MIN_TARGET_RBW_HZ = 50;
+
+	private enum ReplayType {
+		DATA, WAV, RAW
+	}
+
+	private static class IQReplayAnalyzerFeed {
+		private static class InputBlock {
+			byte[] data;
+			int length;
+
+			InputBlock(int capacity) {
+				data = new byte[capacity];
+			}
+		}
+
+		final IQAnalyzerApp analyzer;
+		final IQSampleProcessor processor;
+		final int outputSampleRateHz;
+		final ArrayBlockingQueue<InputBlock> pending = new ArrayBlockingQueue<>(8);
+		final ArrayBlockingQueue<InputBlock> available = new ArrayBlockingQueue<>(8);
+		byte[] output = new byte[262144];
+		volatile boolean running;
+		Thread worker;
+
+		IQReplayAnalyzerFeed(IQAnalyzerApp analyzer, int sourceSampleRateHz, long channelOffsetHz,
+				int channelBandwidthHz, int outputRateHz) {
+			this.analyzer = analyzer;
+			boolean fullBandwidth = Math.abs(channelOffsetHz) <= sourceSampleRateHz / 200L
+					&& channelBandwidthHz >= sourceSampleRateHz * 0.9d
+					&& outputRateHz >= sourceSampleRateHz;
+			IQSampleProcessor selectedProcessor = null;
+			if (!fullBandwidth) {
+				try {
+					selectedProcessor = new IQFftChannelProcessor(sourceSampleRateHz, channelOffsetHz,
+							channelBandwidthHz, outputRateHz);
+				} catch (Throwable error) {
+					System.err.println("Replay FFT channelizer unavailable, using FIR: " + error.getMessage());
+					selectedProcessor = new IQChannelProcessor(sourceSampleRateHz, channelOffsetHz,
+							channelBandwidthHz, outputRateHz);
+				}
+			}
+			this.processor = selectedProcessor;
+			this.outputSampleRateHz = processor == null ? sourceSampleRateHz : processor.getActualOutputRateHz();
+			if (processor != null) {
+				running = true;
+				worker = new Thread(this::processLoop, "iq-replay-channelizer");
+				worker.setDaemon(true);
+				worker.start();
+			}
+		}
+
+		void accept(byte[] iqData, int length) {
+			if (processor == null) {
+				analyzer.acceptExternalIQ(iqData, length);
+				return;
+			}
+			InputBlock block = available.poll();
+			if (block == null) {
+				block = new InputBlock(length);
+			} else if (block.data.length < length) {
+				block.data = new byte[length];
+			}
+			System.arraycopy(iqData, 0, block.data, 0, length);
+			block.length = length;
+			try {
+				pending.put(block);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				available.offer(block);
+			}
+		}
+
+		private void processLoop() {
+			while (running) {
+				InputBlock block;
+				try {
+					block = pending.take();
+				} catch (InterruptedException e) {
+					if (!running) {
+						return;
+					}
+					continue;
+				}
+				if (output.length < block.length) {
+					output = new byte[block.length];
+				}
+				int processed = processor.process(block.data, block.length, output);
+				available.offer(block);
+				if (processed > 0 && running) {
+					analyzer.acceptExternalIQOwned(output, processed);
+				}
+			}
+		}
+
+		void close() {
+			running = false;
+			Thread activeWorker = worker;
+			worker = null;
+			if (activeWorker != null) {
+				activeWorker.interrupt();
+				try {
+					activeWorker.join(500);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+			}
+			pending.clear();
+			available.clear();
+			if (processor instanceof AutoCloseable) {
+				try {
+					((AutoCloseable) processor).close();
+				} catch (Exception ignored) {
+				}
+			}
+		}
+	}
 
 	private static class PerformanceEntry{
 		final String name;
@@ -265,9 +391,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		double displayStopMHz;
 		double compressedStartMHz;
 		double compressedStopMHz;
-		final int[] subRange;
+		final double[] subRange;
 
-		IQSelection(double anchorMHz, int[] subRange) {
+		IQSelection(double anchorMHz, double[] subRange) {
 			this.anchorMHz = anchorMHz;
 			this.subRange = subRange;
 			this.startMHz = anchorMHz;
@@ -362,6 +488,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private ModelValueBoolean						parameterIsRecordedData				= new ModelValueBoolean("Recording", false);
 	private ModelValueBoolean						parameterIsRecordedSpectrum			= new ModelValueBoolean("DATA Recording", false);
 	private ModelValueBoolean						parameterIsPlayingSpectrum			= new ModelValueBoolean("Spectrum Playback", false);
+	private ModelValue<String>						parameterReplayType					= new ModelValue<>("Replay Type", "");
 	private ArrayList<HackRFEventListener>			hRFlisteners						= new ArrayList<>();
 	private ArrayBlockingQueue<FFTBins>				hwProcessingQueue					= new ArrayBlockingQueue<>(1000);
 	private BufferedImage							imageFrequencyAllocationTableBands	= null;
@@ -370,6 +497,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private ModelValueBoolean						parameterAntennaLNA   				= new ModelValueBoolean("RF amp", false);
 	private ModelValueBoolean						parameterAntPower					= new ModelValueBoolean("Antenna Power", false);
 	private ModelValueInt							parameterFFTBinHz					= new ModelValueInt("RBW", 50);
+	private ModelValueInt							parameterIqReplayRbwHz				= new ModelValueInt("IQ Replay RBW", 20_000);
 	private ModelValueBoolean						parameterFilterSpectrum				= new ModelValueBoolean("Filter", false);
 	private ModelValue<FrequencyRange>				parameterFrequency					= new ModelValue<>("Frequency Range", new FrequencyRange(920, 960));
 	private ModelValue<FrequencyAllocationTable>	parameterFrequencyAllocationTable	= new ModelValue<FrequencyAllocationTable>("Frequency Allocation Table", new FrequencyAllocations().getTable().get("Slovakia.csv"));
@@ -440,8 +568,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private long									spectrumRecordFramesWritten			= 0;
 	private Thread									threadSpectrumPlayback;
 	private volatile File							currentSpectrumPlaybackFile;
+	private volatile File							lastReplayDirectory				= new File(".");
 	private volatile boolean						stopSpectrumPlayback				= false;
 	private volatile SpectrumRecording.Header		playbackHeader;
+	private volatile ReplayType						playbackType;
+	private volatile IQReplayFile					playbackIqFile;
+	private final CopyOnWriteArrayList<IQReplayAnalyzerFeed> playbackIqAnalyzers		= new CopyOnWriteArrayList<>();
 	private volatile long							playbackPositionMillis				= 0;
 	private volatile long							playbackDurationMillis				= 0;
 	private volatile long							playbackCurrentEpochMillis			= 0;
@@ -457,6 +589,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private int										draggingBaseStopMHz;
 	private int										draggingPanDeltaMHz;
 	private IQSelection								iqSelection;
+	private double									dragZoomAnchorMHz				= Double.NaN;
+	private double									dragZoomCurrentMHz				= Double.NaN;
+	private int										dragZoomAnchorX				= -1;
+	private int										iqReplayPanLastX				= -1;
 	private final TriggerSettings					triggerSettings					= new TriggerSettings();
 	private final ArrayList<TriggerEvent>			triggerEvents					= new ArrayList<>();
 	private long									lastTriggerAlertMillis			= 0;
@@ -574,7 +710,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		uiFrame.setExtendedState(uiFrame.getExtendedState() | Frame.MAXIMIZED_BOTH);
 		uiFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 		uiFrame.setLayout(new BorderLayout());
-		uiFrame.setTitle("HackRF Spectrum Analyzer");
+		uiFrame.setTitle(MAIN_WINDOW_TITLE);
 		uiFrame.add(splitPanePanel, BorderLayout.CENTER);
 		uiFrame.setMinimumSize(new Dimension(pSizeX, pSizeY));
 		uiFrame.add(settingsPanel, BorderLayout.EAST);
@@ -691,6 +827,11 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				}
 			}
 			if (p.getProperty("FFTBinHz") != null) parameterFFTBinHz.setValue(Integer.parseInt(p.getProperty("FFTBinHz")));
+			if (p.getProperty("ReplayDirectory") != null) {
+				File replayDirectory = new File(p.getProperty("ReplayDirectory"));
+				if (replayDirectory.isDirectory())
+					lastReplayDirectory = replayDirectory;
+			}
 			if (p.getProperty("Samples") != null) parameterSamples.setValue(Integer.parseInt(p.getProperty("Samples")));
 			if (p.getProperty("GainTotal") != null) parameterGainTotal.setValue(Integer.parseInt(p.getProperty("GainTotal")));
 			if (p.getProperty("GainLNA") != null) parameterGainLNA.setValue(Integer.parseInt(p.getProperty("GainLNA")));
@@ -768,6 +909,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			Properties p = new Properties();
 			p.setProperty("paramFreqRange", parameterFreqRange.getValue() == null ? "" : parameterFreqRange.getValue());
 			p.setProperty("FFTBinHz", Integer.toString(parameterFFTBinHz.getValue()));
+			File replayDirectory = lastReplayDirectory;
+			if (replayDirectory != null)
+				p.setProperty("ReplayDirectory", replayDirectory.getAbsolutePath());
 			p.setProperty("Samples", Integer.toString(parameterSamples.getValue()));
 			p.setProperty("GainTotal", Integer.toString(parameterGainTotal.getValue()));
 			p.setProperty("GainLNA", Integer.toString(parameterGainLNA.getValue()));
@@ -836,6 +980,11 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	@Override
 	public ModelValueInt getFFTBinHz() {
 		return parameterFFTBinHz;
+	}
+
+	@Override
+	public ModelValueInt getIqReplayRbwHz() {
+		return parameterIqReplayRbwHz;
 	}
 
 	@Override
@@ -973,6 +1122,11 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	}
 
 	@Override
+	public ModelValue<String> getReplayType() {
+		return parameterReplayType;
+	}
+
+	@Override
 	public ModelValueBoolean isChartsRealtimeVisible() {
 		return parameterShowRealtime;
 	}
@@ -1100,6 +1254,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 	private void fireCapturingStateChanged() {
 		SwingUtilities.invokeLater(() -> {
+			if (chartPanel != null) {
+				chartPanel.repaint();
+			}
 			synchronized (hRFlisteners) {
 				for (HackRFEventListener hackRFEventListener : hRFlisteners) {
 					try {
@@ -1244,7 +1401,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		}
 		DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd " + pattern);
 		long replayTime = playbackCurrentEpochMillis;
-		if (playbackHeader != null && replayTime > 0) {
+		if (isReplayActive() && replayTime > 0) {
 			return LocalDateTime.ofInstant(Instant.ofEpochMilli(replayTime), ZoneId.systemDefault()).format(formatter);
 		}
 		return LocalDateTime.now().format(formatter);
@@ -1568,8 +1725,19 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			return;
 		}
 		updateTriggerStatus("Searching replay...");
-		Thread searchThread = new Thread(() -> searchTriggerEventsInReplay(file));
+		ReplayType searchType = playbackType;
+		Thread searchThread = new Thread(() -> {
+			if (searchType == ReplayType.DATA) {
+				searchTriggerEventsInReplay(file);
+			} else if (searchType == ReplayType.WAV || searchType == ReplayType.RAW) {
+				searchTriggerEventsInIqReplay(file);
+			} else {
+				SwingUtilities.invokeLater(() -> updateTriggerStatus("Unsupported replay type"));
+			}
+		});
 		searchThread.setName("trigger replay search");
+		searchThread.setDaemon(true);
+		searchThread.setPriority(Thread.MIN_PRIORITY);
 		searchThread.start();
 	}
 
@@ -1613,6 +1781,77 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			SwingUtilities.invokeLater(() -> updateTriggerStatus("Replay search failed: " + e.getMessage()));
 			return;
 		}
+		synchronized (triggerEvents) {
+			triggerEvents.removeIf(event -> event.playback);
+			triggerEvents.addAll(found);
+		}
+		SwingUtilities.invokeLater(() -> {
+			refreshTriggerTable();
+			waterfallPlot.setPlaybackEventMarkers(buildPlaybackEventMarkers());
+			updateTriggerStatus("Found " + found.size() + " replay events / " + formatTriggerEventCountStatus());
+		});
+	}
+
+	private void searchTriggerEventsInIqReplay(File file) {
+		ArrayList<TriggerEvent> found = new ArrayList<>();
+		try (IQReplayFile iqFile = IQReplayFile.open(file)) {
+			TriggerSettings settings = snapshotTriggerSettings();
+			int sampleRateHz = iqFile.getSampleRateHz();
+			int fftSize = IQSpectrumFrame.chooseSize(sampleRateHz, parameterIqReplayRbwHz.getValue());
+			int frameSamples = Math.max(fftSize, Math.max(1, sampleRateHz / IQ_REPLAY_FRAMES_PER_SECOND));
+			long frameMillis = Math.max(1, Math.round(frameSamples * 1000d / sampleRateHz));
+			long durationMillis = iqFile.getDurationMillis();
+			IQSpectrumFrame spectrumFrame = new IQSpectrumFrame(fftSize);
+			byte[] iqData = new byte[frameSamples * 2];
+			float[] searchPeak = null;
+			float[] searchPeakHold = null;
+			long[] searchPeakHoldTime = null;
+			boolean previousMatched = false;
+			long previousOffsetMillis = 0;
+			float fftBinHz = sampleRateHz / (float) fftSize;
+			double firstBinMHz = (iqFile.getCenterFrequencyHz() - sampleRateHz / 2d + fftBinHz * 0.5d)
+					/ 1_000_000d;
+
+			for (long frameStartMillis = 0; frameStartMillis < durationMillis; frameStartMillis += frameMillis) {
+				iqFile.seekMillis(frameStartMillis);
+				iqFile.readLoopedSigned(iqData);
+				long frameOffsetMillis = Math.min(durationMillis, frameStartMillis + frameMillis);
+				float[] spectrum = spectrumFrame.compute(iqData, iqData.length - fftSize * 2);
+				for (int i = 0; i < spectrum.length; i++) {
+					spectrum[i] -= (30 - parameterAmplitudeOffset.getValue());
+				}
+
+				float[] triggerValues = spectrum;
+				if (TriggerSettings.SOURCE_PEAKS.equals(settings.source)) {
+					if (searchPeak == null) {
+						searchPeak = spectrum.clone();
+						searchPeakHold = spectrum.clone();
+						searchPeakHoldTime = new long[spectrum.length];
+						java.util.Arrays.fill(searchPeakHoldTime, frameOffsetMillis);
+					} else {
+						updateTriggerSearchPeaks(spectrum, searchPeak, searchPeakHold, searchPeakHoldTime,
+								Math.max(1, frameOffsetMillis - previousOffsetMillis), frameOffsetMillis);
+					}
+					triggerValues = searchPeakHold;
+				}
+
+				TriggerHit hit = evaluateTriggerFrame(triggerValues, firstBinMHz, fftBinHz, settings);
+				if (hit.matched && !previousMatched) {
+					found.add(new TriggerEvent(file.lastModified() + frameOffsetMillis, frameOffsetMillis, true,
+							hit.frequencyMHz, hit.amplitudeDbm, hit.maxLevelDbm, hit.totalPowerDbm));
+				}
+				previousMatched = hit.matched;
+				previousOffsetMillis = frameOffsetMillis;
+			}
+		} catch (IOException | RuntimeException e) {
+			e.printStackTrace();
+			SwingUtilities.invokeLater(() -> updateTriggerStatus("Replay search failed: " + e.getMessage()));
+			return;
+		}
+		storeTriggerReplaySearchResults(found);
+	}
+
+	private void storeTriggerReplaySearchResults(ArrayList<TriggerEvent> found) {
 		synchronized (triggerEvents) {
 			triggerEvents.removeIf(event -> event.playback);
 			triggerEvents.addAll(found);
@@ -1699,12 +1938,17 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 	private TriggerHit evaluateTriggerFrame(float[] values, int freqStartMHz, float fftBinHz, int freqShift,
 			TriggerSettings settings) {
+		return evaluateTriggerFrame(values, freqStartMHz + freqShift, fftBinHz, settings);
+	}
+
+	private TriggerHit evaluateTriggerFrame(float[] values, double firstBinMHz, float fftBinHz,
+			TriggerSettings settings) {
 		double bestAmp = -1000;
-		double bestFreq = freqStartMHz + freqShift;
+		double bestFreq = firstBinMHz;
 		double powerMw = 0;
 		double freqStepMHz = fftBinHz / 1000000d;
 		for (int i = 0; i < values.length; i++) {
-			double freqMHz = freqStartMHz + freqStepMHz * i + freqShift;
+			double freqMHz = firstBinMHz + freqStepMHz * i;
 			if (freqMHz < settings.startMHz || freqMHz > settings.stopMHz)
 				continue;
 			if (values[i] > -95) {
@@ -1900,8 +2144,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			parameterIsPlayingSpectrum.setValue(false);
 			return;
 		}
-		JFileChooser chooser = new JFileChooser(new File("."));
-		chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("HackRF spectrum data (*.hsr)", "hsr"));
+		File replayDirectory = lastReplayDirectory;
+		if (replayDirectory == null || !replayDirectory.isDirectory())
+			replayDirectory = new File(".");
+		JFileChooser chooser = new JFileChooser(replayDirectory);
+		chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
+				"HackRF replay (*.hsr, *.wav, *.pcm)", "hsr", "wav", "pcm"));
 		int result = chooser.showOpenDialog(uiFrame);
 		if (result != JFileChooser.APPROVE_OPTION) {
 			parameterIsPlayingSpectrum.setValue(false);
@@ -1909,37 +2157,60 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		}
 
 		File file = chooser.getSelectedFile();
+		File selectedDirectory = file.getAbsoluteFile().getParentFile();
+		if (selectedDirectory != null)
+			lastReplayDirectory = selectedDirectory;
 		currentSpectrumPlaybackFile = file;
 		resetTriggerRangeOnPlaybackStart = true;
 		clearPlaybackTriggerEvents();
 		stopSpectrumPlayback = false;
 		hwProcessingQueue.clear();
-		threadSpectrumPlayback = new Thread(() -> playSpectrumRecording(file));
+		threadSpectrumPlayback = new Thread(() -> playReplayFile(file));
 		threadSpectrumPlayback.setName("spectrum recording playback");
 		threadSpectrumPlayback.start();
 	}
 
-	private void playSpectrumRecording(File file) {
+	private void playReplayFile(File file) {
 		boolean restartLive = true;
 		FrequencyRange liveFrequencyRangeBeforePlayback = getFreq();
+		int liveRbwBeforePlayback = parameterFFTBinHz.getValue();
 		try {
+			playbackType = replayTypeForFile(file);
+			parameterReplayType.setValue(playbackType.name());
+			SwingUtilities.invokeLater(() -> uiFrame.setTitle(MAIN_WINDOW_TITLE + " - " + file.getName()));
 			stopHackrfSweep();
-			setChartLiveGesturesEnabled(false);
+			setChartLiveGesturesEnabled(playbackType != ReplayType.DATA);
 			hwProcessingQueue.clear();
-			playbackDurationMillis = readSpectrumRecordingDuration(file);
 			playbackPositionMillis = 0;
 			playbackSeekRequestMillis = -1;
-
-			long startOffsetMillis = 0;
-			while (!stopSpectrumPlayback) {
-				long nextSeek = playSpectrumRecordingFrom(file, startOffsetMillis);
-				startOffsetMillis = nextSeek < 0 ? 0 : nextSeek;
+			if (playbackType == ReplayType.DATA) {
+				playbackDurationMillis = readSpectrumRecordingDuration(file);
+				long startOffsetMillis = 0;
+				while (!stopSpectrumPlayback) {
+					long nextSeek = playSpectrumRecordingFrom(file, startOffsetMillis);
+					startOffsetMillis = nextSeek < 0 ? 0 : nextSeek;
+				}
+			} else {
+				playIqRecording(file);
 			}
 		} catch (Exception e) {
 			e.printStackTrace();
+			SwingUtilities.invokeLater(() -> javax.swing.JOptionPane.showMessageDialog(uiFrame, e.getMessage(),
+					"Replay error", javax.swing.JOptionPane.ERROR_MESSAGE));
 		} finally {
+			for (IQReplayAnalyzerFeed feed : playbackIqAnalyzers) {
+				feed.close();
+			}
+			playbackIqAnalyzers.clear();
 			parameterFrequency.setValue(liveFrequencyRangeBeforePlayback);
+			parameterFFTBinHz.setValue(liveRbwBeforePlayback);
 			playbackHeader = null;
+			playbackIqFile = null;
+			playbackType = null;
+			parameterReplayType.setValue("");
+			SwingUtilities.invokeLater(() -> uiFrame.setTitle(MAIN_WINDOW_TITLE));
+			waterfallPlot.setFrequencyBounds(Double.NaN, Double.NaN);
+			persistentDisplay.setFrequencyBounds(Double.NaN, Double.NaN);
 			parameterDisplayFreqRange.setValue(parameterFreqRange.getValue());
 			resetTriggerRangeToActiveFullRange();
 			redrawFrequencySpectrumTable();
@@ -1968,6 +2239,142 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				restartHackrfSweep();
 			}
 		}
+	}
+
+	private ReplayType replayTypeForFile(File file) throws IOException {
+		String name = file.getName().toLowerCase(Locale.ROOT);
+		if (name.endsWith(".hsr"))
+			return ReplayType.DATA;
+		if (name.endsWith(".wav"))
+			return ReplayType.WAV;
+		if (name.endsWith(".pcm"))
+			return ReplayType.RAW;
+		throw new IOException("Unsupported replay file extension");
+	}
+
+	private void playIqRecording(File file) throws IOException, InterruptedException {
+		try (IQReplayFile iqFile = IQReplayFile.open(file)) {
+			playbackIqFile = iqFile;
+			playbackDurationMillis = iqFile.getDurationMillis();
+			playbackCurrentEpochMillis = file.lastModified();
+			updateFrequencySelectorForIqPlayback(iqFile);
+			resetTriggerRangeToActiveFullRange();
+			redrawFrequencySpectrumTable();
+			fireHardwareStateChanged(true);
+
+			int sampleRateHz = iqFile.getSampleRateHz();
+			double replaySpanMHz = sampleRateHz / 1_000_000d;
+			updateIqReplayRbw(replaySpanMHz);
+			int lastFftSize = 0;
+			boolean processingPrimed = false;
+			IQSpectrumFrame spectrumFrame = null;
+			byte[] iqData = new byte[0];
+			long playbackDeadlineNanos = System.nanoTime();
+			while (!stopSpectrumPlayback) {
+				long seek = takePlaybackSeekRequest();
+				if (seek >= 0) {
+					iqFile.seekMillis(seek);
+					playbackDeadlineNanos = System.nanoTime();
+				}
+				while (!stopSpectrumPlayback && parameterIsCapturingPaused.getValue()) {
+					Thread.sleep(50);
+					playbackDeadlineNanos = System.nanoTime();
+				}
+				if (stopSpectrumPlayback)
+					break;
+
+				int fftSize = IQSpectrumFrame.chooseSize(sampleRateHz, parameterIqReplayRbwHz.getValue());
+				if (fftSize != lastFftSize) {
+					spectrumFrame = new IQSpectrumFrame(fftSize);
+					restartPlaybackProcessingThread();
+					lastFftSize = fftSize;
+					processingPrimed = false;
+				}
+				int frameSamples = Math.max(fftSize, Math.max(1, sampleRateHz / IQ_REPLAY_FRAMES_PER_SECOND));
+				int frameBytes = frameSamples * 2;
+				if (iqData.length != frameBytes) {
+					iqData = new byte[frameBytes];
+				}
+				iqFile.readLoopedSigned(iqData);
+				playbackPositionMillis = iqFile.getPositionMillis();
+				playbackCurrentEpochMillis = file.lastModified() + playbackPositionMillis;
+				waterfallPlot.setPlaybackStatus(true, playbackPositionMillis, playbackDurationMillis);
+				for (IQReplayAnalyzerFeed analyzer : playbackIqAnalyzers) {
+					analyzer.accept(iqData, iqData.length);
+				}
+				playbackDeadlineNanos += Math.round(frameSamples * 1_000_000_000d / sampleRateHz);
+				if (!playbackIqAnalyzers.isEmpty()) {
+					processingPrimed = false;
+					playbackDeadlineNanos = paceIqReplay(playbackDeadlineNanos);
+					continue;
+				}
+
+				int fftOffset = iqData.length - fftSize * 2;
+				float[] spectrum = spectrumFrame.compute(iqData, fftOffset);
+				float binHz = sampleRateHz / (float) fftSize;
+				double firstBinHz = iqFile.getCenterFrequencyHz() - sampleRateHz / 2d + binHz * 0.5d;
+				double[] frequencyStart = new double[spectrum.length];
+				for (int i = 0; i < frequencyStart.length; i++) {
+					frequencyStart[i] = firstBinHz + binHz * i;
+				}
+				FFTBins bins = new FFTBins(true, frequencyStart, binHz, spectrum);
+				if (!processingPrimed) {
+					hwProcessingQueue.put(bins);
+					hwProcessingQueue.put(new FFTBins(true, frequencyStart, binHz, spectrum.clone()));
+					processingPrimed = true;
+				} else {
+					if (!hwProcessingQueue.isEmpty()) {
+						hwProcessingQueue.clear();
+					}
+					hwProcessingQueue.offer(bins);
+				}
+				playbackDeadlineNanos = paceIqReplay(playbackDeadlineNanos);
+			}
+		}
+	}
+
+	private long paceIqReplay(long deadlineNanos) throws InterruptedException {
+		long now = System.nanoTime();
+		long remaining = deadlineNanos - now;
+		if (remaining > 0) {
+			long millis = remaining / 1_000_000L;
+			int nanos = (int) (remaining % 1_000_000L);
+			Thread.sleep(millis, nanos);
+			return deadlineNanos;
+		}
+		if (remaining < -250_000_000L) {
+			return now;
+		}
+		return deadlineNanos;
+	}
+
+	private void restartPlaybackProcessingThread() throws InterruptedException {
+		hwProcessingQueue.clear();
+		Thread processing = threadProcessing;
+		if (processing != null) {
+			processing.interrupt();
+			processing.join(500);
+			threadProcessing = null;
+		}
+		ensureProcessingThreadRunning();
+	}
+
+	private void updateFrequencySelectorForIqPlayback(IQReplayFile iqFile) {
+		double halfBandwidthMHz = iqFile.getSampleRateHz() / 2_000_000d;
+		double centerMHz = iqFile.getCenterFrequencyHz() / 1_000_000d;
+		int startMHz = Math.max(0, (int) Math.floor(centerMHz - halfBandwidthMHz));
+		int stopMHz = Math.max(startMHz + 1, (int) Math.ceil(centerMHz + halfBandwidthMHz));
+		parameterFrequency.setValue(new FrequencyRange(startMHz, stopMHz));
+		parameterDisplayFreqRange.setValue(startMHz + "-" + stopMHz);
+		setIqReplayDomainRange(iqFile);
+	}
+
+	private void setIqReplayDomainRange(IQReplayFile iqFile) {
+		double halfBandwidthMHz = iqFile.getSampleRateHz() / 2_000_000d;
+		double centerMHz = iqFile.getCenterFrequencyHz() / 1_000_000d;
+		updateIqReplayAuxiliaryViews(centerMHz - halfBandwidthMHz, centerMHz + halfBandwidthMHz);
+		SwingUtilities.invokeLater(() -> chart.getXYPlot().getDomainAxis().setRange(centerMHz - halfBandwidthMHz,
+				centerMHz + halfBandwidthMHz));
 	}
 
 	private long playSpectrumRecordingFrom(File file, long startOffsetMillis) throws IOException, InterruptedException {
@@ -2043,7 +2450,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 	private void seekSpectrumPlayback(double fraction) {
 		long duration = playbackDurationMillis;
-		if (playbackHeader == null || duration <= 0)
+		if (!isReplayActive() || duration <= 0)
 			return;
 		playbackSeekRequestMillis = Math.round(duration * Math.min(1d, Math.max(0d, fraction)));
 	}
@@ -2095,8 +2502,11 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 	private String getActiveRangesForDisplay() {
 		SpectrumRecording.Header header = playbackHeader;
-		if (header == null)
+		if (header == null) {
+			if (isIqReplayActive())
+				return parameterDisplayFreqRange.getValue();
 			return parameterFreqRange.getValue();
+		}
 		if (header.ranges == null || header.ranges.trim().isEmpty())
 			return header.freqStartMHz + "-" + header.freqStopMHz;
 		return header.ranges;
@@ -2126,7 +2536,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 	private int getActiveFreqShiftForDisplay() {
 		SpectrumRecording.Header header = playbackHeader;
-		return header == null ? parameterFreqShift.getValue() : header.freqShift;
+		return header == null ? (isIqReplayActive() ? 0 : parameterFreqShift.getValue()) : header.freqShift;
 	}
 
 	private int getActiveFreqStartMHzForDisplay() {
@@ -2161,10 +2571,17 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			}
 			float binHz = bin1.fftBinWidthHz;
 			SpectrumRecording.Header activePlaybackHeader = playbackHeader;
+			ReplayType activePlaybackType = playbackType;
+			boolean playbackMode = activePlaybackType != null;
+			boolean iqPlaybackMode = activePlaybackType == ReplayType.WAV || activePlaybackType == ReplayType.RAW;
 			int activeFreqStartMHz = activePlaybackHeader == null ? getFreq().getStartMHz() : activePlaybackHeader.freqStartMHz;
 			int activeFreqStopMHz = activePlaybackHeader == null ? getFreq().getEndMHz() : activePlaybackHeader.freqStopMHz;
-			int activeFreqShift = activePlaybackHeader == null ? parameterFreqShift.getValue() : activePlaybackHeader.freqShift;
-			String activeFreqRanges = activePlaybackHeader == null ? parameterFreqRange.getValue() : activePlaybackHeader.ranges;
+			int activeFreqShift = activePlaybackHeader == null
+					? (activePlaybackType == null ? parameterFreqShift.getValue() : 0)
+					: activePlaybackHeader.freqShift;
+			String activeFreqRanges = activePlaybackHeader == null
+					? (activePlaybackType == null ? parameterFreqRange.getValue() : parameterDisplayFreqRange.getValue())
+					: activePlaybackHeader.ranges;
 
 			/**
 			 * prevents from spectrum chart from using too much CPU
@@ -2185,7 +2602,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			persistentDisplay.setRangePairs(pairs, activeFreqShift);
 			if (pairs != null && pairs.length > 2) {
 				double total = totalRangesLength(pairs);
-				chart.getXYPlot().getDomainAxis().setRange(0, total);
+				if (!iqPlaybackMode)
+					chart.getXYPlot().getDomainAxis().setRange(0, total);
 				// override tick labels to map compressed X back to original frequencies (including freqShift)
 				((NumberAxis)chart.getXYPlot().getDomainAxis()).setNumberFormatOverride(new java.text.NumberFormat() {
 					@Override
@@ -2220,8 +2638,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					}
 				});
 			} else {
-				chart.getXYPlot().getDomainAxis().setRange(activeFreqStartMHz + activeFreqShift,
-						activeFreqStopMHz + activeFreqShift);
+				if (!iqPlaybackMode)
+					chart.getXYPlot().getDomainAxis().setRange(activeFreqStartMHz + activeFreqShift,
+							activeFreqStopMHz + activeFreqShift);
 				((NumberAxis)chart.getXYPlot().getDomainAxis()).setNumberFormatOverride(new DecimalFormat(" #.### "));
 			}
 			
@@ -2244,7 +2663,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				try {
 					counter++;
 					FFTBins bins = hwProcessingQueue.take();
-					if (parameterIsCapturingPaused.getValue() && activePlaybackHeader == null)
+					if (parameterIsCapturingPaused.getValue() && !playbackMode)
 						continue;
 					
 					boolean triggerChartRefresh = bins.fullSweepDone;
@@ -2252,7 +2671,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				
 					if (bins.freqStart != null && bins.sigPowdBm != null) {
 					//	PowerCalibration.correctPower(calibration, parameterGaindB, bins);
-						if (activePlaybackHeader == null) {
+						if (activePlaybackType != ReplayType.DATA) {
 							for (int i = 0; i < bins.sigPowdBm.length; i++) {
 								bins.sigPowdBm[i] -= (30-parameterAmplitudeOffset.getValue()); //offset calibration
 							}
@@ -2262,7 +2681,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 					if ((triggerChartRefresh/* || timeDiff > 1000 */)) {
 						//						System.out.println("ctr "+counter+" dropped "+dropped);
-						if (activePlaybackHeader == null) {
+						if (!playbackMode) {
 							recordSpectrumFrame(datasetSpectrum);
 						}
 						/**
@@ -2284,7 +2703,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						if (parameterShowPeaks.getValue() || triggerUsesPeaks) {
 							datasetSpectrum.refreshPeakSpectrum();
 						}
-						evaluateTrigger(datasetSpectrum, activePlaybackHeader != null);
+						evaluateTrigger(datasetSpectrum, playbackMode);
 						if (parameterShowPeaks.getValue()) {
 							double[] spp = datasetSpectrum.calculateSpectrumPeakPower(parameterPowerFluxCal.getValue());
 							if (!parameterShowHoldMarker.getValue())
@@ -2424,7 +2843,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						 */
 						if (parameterWaterfallVisible.getValue()) {cnt++;
 							long start	= System.nanoTime();
-							if ((cnt % (11 - parameterWaterfallSpeed.getValue())) == 0) {waterfallPlot.addNewData(datasetSpectrum);}
+							int waterfallDivider = 11 - parameterWaterfallSpeed.getValue();
+							if ((cnt % waterfallDivider) == 0) {waterfallPlot.addNewData(datasetSpectrum);}
 							synchronized (perfWatch) {
 								perfWatch.waterfallUpdate.addDrawingTime(System.nanoTime()-start);	
 							}
@@ -2576,7 +2996,15 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	}
 
 	private boolean isReplayActive() {
-		return playbackHeader != null;
+		return playbackType != null;
+	}
+
+	private boolean isDataReplayActive() {
+		return playbackType == ReplayType.DATA;
+	}
+
+	private boolean isIqReplayActive() {
+		return playbackType == ReplayType.WAV || playbackType == ReplayType.RAW;
 	}
 
 	private void setChartLiveGesturesEnabled(boolean enabled) {
@@ -2767,6 +3195,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			@Override
 			public void paintOverlay(Graphics2D g2, ChartPanel chartPanel) {
 				drawIQSelectionOverlay(g2);
+				drawIqReplayZoomOverlay(g2);
 			}
 
 			@Override
@@ -2790,7 +3219,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					if(parameterDatestamp.getValue()) {
 						long playbackTime = playbackCurrentEpochMillis;
 						String text;
-						if (playbackHeader != null && playbackTime > 0) {
+						if (isReplayActive() && playbackTime > 0) {
 							text = LocalDateTime.ofInstant(Instant.ofEpochMilli(playbackTime), ZoneId.systemDefault()).format(dtFormat);
 						} else {
 							text = LocalDateTime.now().format(dtFormat);
@@ -2800,8 +3229,11 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					Rectangle2D area = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
 					int indicatorY = 15;
 					boolean paused = parameterIsCapturingPaused.getValue();
-					boolean replay = playbackHeader != null;
-					String statusText = replay ? (paused ? "REPLAY PAUSED" : "REPLAY") : (paused ? "LIVE PAUSED" : "LIVE");
+					ReplayType activeReplayType = playbackType;
+					boolean replay = activeReplayType != null;
+					String statusText = replay
+							? "REPLAY " + activeReplayType.name() + " FILE" + (paused ? " PAUSED" : "")
+							: (paused ? "LIVE PAUSED" : "LIVE");
 					boolean showLiveRecordingDot = !replay && !paused && parameterIsRecordedSpectrum.getValue();
 					int symbolWidth = replay || showLiveRecordingDot ? 16 : 0;
 					int statusWidth = g2.getFontMetrics().stringWidth(statusText);
@@ -2931,14 +3363,59 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		g2.setColor(oldColor);
 	}
 
+	private void drawIqReplayZoomOverlay(Graphics2D g2) {
+		if (Double.isNaN(dragZoomAnchorMHz) || Double.isNaN(dragZoomCurrentMHz)) {
+			return;
+		}
+		Rectangle2D area = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
+		if (area == null || area.getWidth() <= 0 || area.getHeight() <= 0) {
+			return;
+		}
+		XYPlot plot = chart.getXYPlot();
+		double lower = Math.min(dragZoomAnchorMHz, dragZoomCurrentMHz);
+		double upper = Math.max(dragZoomAnchorMHz, dragZoomCurrentMHz);
+		double x1 = plot.getDomainAxis().valueToJava2D(lower, area, plot.getDomainAxisEdge());
+		double x2 = plot.getDomainAxis().valueToJava2D(upper, area, plot.getDomainAxisEdge());
+		int x = (int) Math.round(Math.min(x1, x2));
+		int width = (int) Math.max(1, Math.round(Math.abs(x2 - x1)));
+		int y = (int) area.getY();
+		int height = (int) area.getHeight();
+
+		java.awt.Composite oldComposite = g2.getComposite();
+		java.awt.Stroke oldStroke = g2.getStroke();
+		Color oldColor = g2.getColor();
+		g2.setComposite(java.awt.AlphaComposite.SrcOver.derive(0.25f));
+		g2.setColor(new Color(0x2277cc));
+		g2.fillRect(x, y, width, height);
+		g2.setComposite(java.awt.AlphaComposite.SrcOver.derive(0.9f));
+		g2.setStroke(new BasicStroke(2f));
+		g2.drawRect(x, y, width, height);
+		g2.setComposite(oldComposite);
+		g2.setStroke(oldStroke);
+		g2.setColor(oldColor);
+	}
+
 	private boolean isInPlotArea(int mouseX, int mouseY) {
 		Rectangle2D area = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
 		return area != null && area.contains(mouseX, mouseY);
 	}
 
+	private boolean isInPlotRow(int mouseY) {
+		Rectangle2D area = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
+		return area != null && mouseY >= area.getMinY() && mouseY <= area.getMaxY();
+	}
+
+	private int clampMouseXToPlot(int mouseX) {
+		Rectangle2D area = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
+		if (area == null || area.getWidth() <= 0) {
+			return mouseX;
+		}
+		return (int) Math.round(Math.max(area.getMinX(), Math.min(area.getMaxX(), mouseX)));
+	}
+
 	private double mouseToDomainMHz(int mouseX) {
 		XYPlot plot = chart.getXYPlot();
-		return plot.getDomainAxis().java2DToValue(mouseX,
+		return plot.getDomainAxis().java2DToValue(clampMouseXToPlot(mouseX),
 				chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea(), plot.getDomainAxisEdge());
 	}
 
@@ -2946,6 +3423,42 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		if (isMultiRange(activePairs))
 			return mapCompressedToOriginal(domainMHz, activePairs);
 		return domainMHz;
+	}
+
+	private void startDragZoom(MouseEvent event) {
+		dragZoomAnchorMHz = mouseToDomainMHz(event.getX());
+		dragZoomCurrentMHz = dragZoomAnchorMHz;
+		dragZoomAnchorX = clampMouseXToPlot(event.getX());
+	}
+
+	private void clearDragZoom() {
+		dragZoomAnchorMHz = Double.NaN;
+		dragZoomCurrentMHz = Double.NaN;
+		dragZoomAnchorX = -1;
+	}
+
+	private void applyLiveDragZoom(double firstDomainMHz, double secondDomainMHz) {
+		int[] activePairs = parseRangePairs(parameterFreqRange.getValue());
+		double lowerDomain = Math.min(firstDomainMHz, secondDomainMHz);
+		double upperDomain = Math.max(firstDomainMHz, secondDomainMHz);
+		double lowerMHz = domainToSelectionMHz(lowerDomain, activePairs);
+		double upperMHz = domainToSelectionMHz(upperDomain, activePairs);
+		int newLowerX = clampFrequencyMHz((int) Math.round(Math.min(lowerMHz, upperMHz)));
+		int newUpperX = clampFrequencyMHz((int) Math.round(Math.max(lowerMHz, upperMHz)));
+		if (newUpperX - newLowerX < 1) {
+			newUpperX = Math.min(7200, newLowerX + 1);
+			if (newUpperX - newLowerX < 1) {
+				newLowerX = Math.max(0, newUpperX - 1);
+			}
+		}
+		int[] newChartParams = setupChartParams(newUpperX - newLowerX);
+		parameterFrequency.setValue(new FrequencyRange(newLowerX, newUpperX));
+		if (isMultiRange(activePairs)) {
+			parameterFreqRange.setValue(newLowerX + "-" + newUpperX);
+		}
+		parameterFFTBinHz.setValue(newChartParams[0]);
+		parameterAmplitudeOffset.setValue(newChartParams[1]);
+		restartHackrfSweep();
 	}
 
 	private double selectionToCompressedMHz(double selectionMHz, int[] activePairs) {
@@ -2957,11 +3470,20 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private IQSelection startIQSelection(MouseEvent e) {
 		int[] activePairs = parseRangePairs(getActiveRangesForDisplay());
 		double anchorMHz = domainToSelectionMHz(mouseToDomainMHz(e.getX()), activePairs);
-		int[] subRange = isMultiRange(activePairs) ? findRangeForFrequency(anchorMHz, activePairs) : null;
+		double[] subRange = null;
+		if (isIqReplayActive() && playbackIqFile != null) {
+			subRange = getIqReplaySourceBounds(playbackIqFile);
+			if (anchorMHz < subRange[0] || anchorMHz > subRange[1]) {
+				return null;
+			}
+		} else if (isMultiRange(activePairs)) {
+			int[] selectedRange = findRangeForFrequency(anchorMHz, activePairs);
+			subRange = new double[] { selectedRange[0], selectedRange[1] };
+		}
 		if (subRange == null) {
 			double lower = chart.getXYPlot().getDomainAxis().getLowerBound();
 			double upper = chart.getXYPlot().getDomainAxis().getUpperBound();
-			subRange = new int[] { (int) Math.floor(Math.min(lower, upper)), (int) Math.ceil(Math.max(lower, upper)) };
+			subRange = new double[] { Math.min(lower, upper), Math.max(lower, upper) };
 		}
 		anchorMHz = Math.max(subRange[0], Math.min(subRange[1], anchorMHz));
 		IQSelection selection = new IQSelection(anchorMHz, subRange);
@@ -2999,6 +3521,25 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		int lnaGain = parameterGainLNA.getValue();
 		int vgaGain = 32;
 		boolean rfAmp = parameterAntennaLNA.getValue();
+		IQReplayFile iqReplay = playbackIqFile;
+		if (iqReplay != null && isIqReplayActive()) {
+			long sourceCenterHz = iqReplay.getCenterFrequencyHz();
+			int sourceSampleRateHz = iqReplay.getSampleRateHz();
+			long channelOffsetHz = centerHz - sourceCenterHz;
+			int outputRateHz = chooseReplayIqOutputRate(sourceSampleRateHz, bandwidthHz);
+			SwingUtilities.invokeLater(() -> {
+				IQAnalyzerApp analyzer = new IQAnalyzerApp();
+				IQReplayAnalyzerFeed feed = new IQReplayAnalyzerFeed(analyzer, sourceSampleRateHz, channelOffsetHz,
+						bandwidthHz, outputRateHz);
+				playbackIqAnalyzers.add(feed);
+				analyzer.showExternal(centerHz, feed.outputSampleRateHz, 0, bandwidthHz,
+						() -> {
+							playbackIqAnalyzers.remove(feed);
+							feed.close();
+						});
+			});
+			return;
+		}
 
 		new Thread(() -> {
 			stopHackrfSweep();
@@ -3014,6 +3555,139 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				return rate;
 		}
 		return 20_000_000;
+	}
+
+	private int chooseReplayIqOutputRate(int sourceSampleRateHz, int bandwidthHz) {
+		int requested = Math.max(48_000, (int) Math.ceil(bandwidthHz * 1.25d));
+		if (requested >= sourceSampleRateHz) {
+			return sourceSampleRateHz;
+		}
+		int decimation = Math.max(1, sourceSampleRateHz / requested);
+		return sourceSampleRateHz / decimation;
+	}
+
+	private void updateIqReplayRbw(double visibleSpanMHz) {
+		if (!isIqReplayActive()) {
+			return;
+		}
+		int targetRbwHz;
+		if (visibleSpanMHz <= 0.05d) {
+			targetRbwHz = IQ_REPLAY_MIN_TARGET_RBW_HZ;
+		} else if (visibleSpanMHz <= 0.1d) {
+			targetRbwHz = 100;
+		} else if (visibleSpanMHz <= 0.2d) {
+			targetRbwHz = 200;
+		} else if (visibleSpanMHz <= 0.5d) {
+			targetRbwHz = 500;
+		} else if (visibleSpanMHz <= 1d) {
+			targetRbwHz = 1_000;
+		} else if (visibleSpanMHz < 6d) {
+			targetRbwHz = 3_000;
+		} else if (visibleSpanMHz <= 12d) {
+			targetRbwHz = 10_000;
+		} else {
+			targetRbwHz = 20_000;
+		}
+		if (parameterIqReplayRbwHz.getValue() != targetRbwHz) {
+			parameterIqReplayRbwHz.setValue(targetRbwHz);
+		}
+	}
+
+	private double[] getIqReplaySourceBounds(IQReplayFile iqFile) {
+		double centerMHz = iqFile.getCenterFrequencyHz() / 1_000_000d;
+		double halfSpanMHz = iqFile.getSampleRateHz() / 2_000_000d;
+		return new double[] { centerMHz - halfSpanMHz, centerMHz + halfSpanMHz };
+	}
+
+	private double[] getIqReplayViewportBounds(IQReplayFile iqFile) {
+		double centerMHz = iqFile.getCenterFrequencyHz() / 1_000_000d;
+		double halfSpanMHz = iqFile.getSampleRateHz() / 2_000_000d
+				* IQ_REPLAY_MAX_VIEW_SPAN_MULTIPLIER;
+		return new double[] { centerMHz - halfSpanMHz, centerMHz + halfSpanMHz };
+	}
+
+	private void applyIqReplayDomainRange(double requestedLower, double requestedUpper) {
+		IQReplayFile iqFile = playbackIqFile;
+		if (iqFile == null) {
+			return;
+		}
+		double[] viewportBounds = getIqReplayViewportBounds(iqFile);
+		double viewportLower = viewportBounds[0];
+		double viewportUpper = viewportBounds[1];
+		double lower = Math.max(viewportLower, Math.min(requestedLower, requestedUpper));
+		double upper = Math.min(viewportUpper, Math.max(requestedLower, requestedUpper));
+		double minimumSpan = Math.max(0.0002d, parameterIqReplayRbwHz.getValue() / 1_000_000d * 8d);
+		if (upper - lower < minimumSpan) {
+			double center = (lower + upper) * 0.5d;
+			lower = center - minimumSpan * 0.5d;
+			upper = center + minimumSpan * 0.5d;
+			if (lower < viewportLower) {
+				upper += viewportLower - lower;
+				lower = viewportLower;
+			}
+			if (upper > viewportUpper) {
+				lower -= upper - viewportUpper;
+				upper = viewportUpper;
+			}
+		}
+		chart.getXYPlot().getDomainAxis().setRange(lower, upper);
+		updateIqReplayAuxiliaryViews(lower, upper);
+		updateIqReplayRbw(upper - lower);
+	}
+
+	private void updateIqReplayAuxiliaryViews(double lowerMHz, double upperMHz) {
+		waterfallPlot.setFrequencyBounds(lowerMHz, upperMHz);
+		persistentDisplay.setFrequencyBounds(lowerMHz, upperMHz);
+	}
+
+	private void panIqReplayDomain(int currentMouseX) {
+		IQReplayFile iqFile = playbackIqFile;
+		if (iqFile == null || iqReplayPanLastX < 0) {
+			return;
+		}
+		Rectangle2D area = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
+		if (area == null || area.getWidth() <= 0) {
+			return;
+		}
+		XYPlot plot = chart.getXYPlot();
+		double lower = plot.getDomainAxis().getLowerBound();
+		double upper = plot.getDomainAxis().getUpperBound();
+		double span = upper - lower;
+		double deltaMHz = (iqReplayPanLastX - currentMouseX) * span / area.getWidth();
+		double[] viewportBounds = getIqReplayViewportBounds(iqFile);
+		double viewportLower = viewportBounds[0];
+		double viewportUpper = viewportBounds[1];
+		double nextLower = lower + deltaMHz;
+		double nextUpper = upper + deltaMHz;
+		if (nextLower < viewportLower) {
+			nextUpper += viewportLower - nextLower;
+			nextLower = viewportLower;
+		}
+		if (nextUpper > viewportUpper) {
+			nextLower -= nextUpper - viewportUpper;
+			nextUpper = viewportUpper;
+		}
+		plot.getDomainAxis().setRange(nextLower, nextUpper);
+		iqReplayPanLastX = currentMouseX;
+	}
+
+	private void zoomIqReplayDomain(MouseWheelEvent event) {
+		IQReplayFile iqFile = playbackIqFile;
+		if (iqFile == null)
+			return;
+		XYPlot plot = chart.getXYPlot();
+		double lower = plot.getDomainAxis().getLowerBound();
+		double upper = plot.getDomainAxis().getUpperBound();
+		double cursor = mouseToDomainMHz(event.getX());
+		double factor = event.getWheelRotation() < 0 ? 0.65d : 1d / 0.65d;
+		double newLower = cursor - (cursor - lower) * factor;
+		double newUpper = cursor + (upper - cursor) * factor;
+		double minimumSpan = Math.max(0.0002d, parameterIqReplayRbwHz.getValue() / 1_000_000d * 8d);
+		if (newUpper - newLower < minimumSpan) {
+			newLower = cursor - minimumSpan / 2d;
+			newUpper = cursor + minimumSpan / 2d;
+		}
+		applyIqReplayDomainRange(newLower, newUpper);
 	}
 	
 	/**
@@ -3109,11 +3783,11 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			
             @Override
             public void mousePressed(MouseEvent e) {
-                if (isReplayActive()) {
+                if (isDataReplayActive()) {
                     chartPanel.requestFocus();
                     return;
                 }
-                if (SwingUtilities.isRightMouseButton(e) && isInPlotArea(e.getX(), e.getY())) {
+                if (SwingUtilities.isRightMouseButton(e) && isInPlotRow(e.getY())) {
                 	iqSelection = startIQSelection(e);
                 	dragging = false;
                 	chartPanel.setDomainZoomable(false);
@@ -3121,7 +3795,27 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                 	e.consume();
                 	return;
                 }
+                if (isIqReplayActive()) {
+					if (SwingUtilities.isLeftMouseButton(e) && isInPlotRow(e.getY())) {
+						startDragZoom(e);
+						chartPanel.setDomainZoomable(false);
+						chartPanel.repaint();
+					} else if (SwingUtilities.isLeftMouseButton(e) && isInAxisArea(e.getX(), e.getY())) {
+						dragging = true;
+						iqReplayPanLastX = e.getX();
+						chartPanel.setDomainZoomable(false);
+					}
+                    chartPanel.requestFocus();
+                    return;
+                }
                 draggingStartedInMultiRange = false;
+                if (SwingUtilities.isLeftMouseButton(e) && isInPlotRow(e.getY())) {
+					startDragZoom(e);
+					chartPanel.setDomainZoomable(false);
+					chartPanel.requestFocus();
+					e.consume();
+					return;
+				}
                 if (SwingUtilities.isLeftMouseButton(e) && isInAxisArea(e.getX(), e.getY())) {
                     dragging = true;
                     int[] activePairs = parseRangePairs(parameterFreqRange.getValue());
@@ -3139,7 +3833,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			
             @Override
             public void mouseReleased(MouseEvent e) {
-            	if (isReplayActive()) {
+                if (isDataReplayActive()) {
             		dragging = false;
             		iqSelection = null;
             		chartPanel.repaint();
@@ -3154,7 +3848,49 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
             		openIQAnalyzerForSelection(finishedSelection);
             		e.consume();
             		return;
-            	}
+                }
+                if (isIqReplayActive()) {
+					if (!Double.isNaN(dragZoomAnchorMHz)) {
+						final double zoomStart = dragZoomAnchorMHz;
+						final double zoomStop = mouseToDomainMHz(e.getX());
+						final boolean applyZoom = Math.abs(clampMouseXToPlot(e.getX()) - dragZoomAnchorX) >= 4;
+						clearDragZoom();
+						dragging = false;
+						iqReplayPanLastX = -1;
+						chartPanel.repaint();
+						e.consume();
+						SwingUtilities.invokeLater(() -> {
+							if (applyZoom && isIqReplayActive()) {
+								applyIqReplayDomainRange(zoomStart, zoomStop);
+							}
+							chartPanel.setDomainZoomable(true);
+							chartPanel.repaint();
+						});
+						return;
+					}
+					if (dragging) {
+						XYPlot plot = chart.getXYPlot();
+						updateIqReplayAuxiliaryViews(plot.getDomainAxis().getLowerBound(),
+								plot.getDomainAxis().getUpperBound());
+					}
+                    dragging = false;
+					iqReplayPanLastX = -1;
+					SwingUtilities.invokeLater(() -> chartPanel.setDomainZoomable(true));
+                    chartPanel.repaint();
+                    return;
+                }
+				if (!Double.isNaN(dragZoomAnchorMHz)) {
+					dragZoomCurrentMHz = mouseToDomainMHz(e.getX());
+					if (Math.abs(clampMouseXToPlot(e.getX()) - dragZoomAnchorX) >= 4) {
+						applyLiveDragZoom(dragZoomAnchorMHz, dragZoomCurrentMHz);
+					}
+					clearDragZoom();
+					dragging = false;
+					chartPanel.setDomainZoomable(true);
+					chartPanel.repaint();
+					e.consume();
+					return;
+				}
                 boolean releasedAxisDrag = dragging;
             	dragging = false;
             	chartPanel.setDomainZoomable(true);
@@ -3198,8 +3934,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		chartPanel.addMouseWheelListener(new MouseWheelListener() {
             @Override
             public void mouseWheelMoved(MouseWheelEvent e) {
-                if (isReplayActive())
+                if (isDataReplayActive())
                     return;
+                if (isIqReplayActive()) {
+                    zoomIqReplayDomain(e);
+                    return;
+                }
                 int notches = e.getWheelRotation();
                 // Get current domain and range
                 double lowerX = chart.getXYPlot().getDomainAxis().getLowerBound();
@@ -3262,7 +4002,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
         chartPanel.addMouseMotionListener(new MouseAdapter() {
             @Override
             public void mouseDragged(MouseEvent e) {
-                if (isReplayActive()) {
+                if (isDataReplayActive()) {
                 	dragging = false;
                 	iqSelection = null;
                 	return;
@@ -3272,6 +4012,21 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                 	e.consume();
                 	return;
                 }
+                if (isIqReplayActive()) {
+					if (!Double.isNaN(dragZoomAnchorMHz)) {
+						dragZoomCurrentMHz = mouseToDomainMHz(e.getX());
+						chartPanel.repaint();
+					} else if (dragging && iqReplayPanLastX >= 0) {
+						panIqReplayDomain(e.getX());
+					}
+                    return;
+                }
+				if (!Double.isNaN(dragZoomAnchorMHz)) {
+					dragZoomCurrentMHz = mouseToDomainMHz(e.getX());
+					chartPanel.repaint();
+					e.consume();
+					return;
+				}
                 if (dragging) {
                 	double lowerX = chart.getXYPlot().getDomainAxis().getLowerBound();
                 	double upperX = chart.getXYPlot().getDomainAxis().getUpperBound();
@@ -3906,7 +4661,15 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			String activeRanges = getActiveRangesForDisplay();
 			int activeShift = getActiveFreqShiftForDisplay();
 			int[] pairs = parseRangePairs(activeRanges);
-			if (pairs != null && pairs.length > 2) {
+			if (isIqReplayActive()) {
+				double lowerMHz = chart.getXYPlot().getDomainAxis().getLowerBound();
+				double upperMHz = chart.getXYPlot().getDomainAxis().getUpperBound();
+				imageFrequencyAllocationTableBands = activeTable.drawAllocationTable(width, height,
+						alphaFreqAllocationTableBandsImage,
+						Math.round(Math.min(lowerMHz, upperMHz) * 1000000d),
+						Math.round(Math.max(lowerMHz, upperMHz) * 1000000d),
+						Color.white, Color.green);
+			} else if (pairs != null && pairs.length > 2) {
 				double totalLen = totalRangesLength(pairs);
 				BufferedImage out = GraphicsToolkit.createAcceleratedImageTransparent(width, height);
 				Graphics2D g = out.createGraphics();

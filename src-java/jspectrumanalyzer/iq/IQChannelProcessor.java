@@ -1,11 +1,11 @@
 package jspectrumanalyzer.iq;
 
-public class IQChannelProcessor {
+public class IQChannelProcessor implements IQSampleProcessor {
 	private static final int TAPS = 65;
 
 	private final float[] taps = new float[TAPS];
-	private final double[] historyI = new double[TAPS];
-	private final double[] historyQ = new double[TAPS];
+	private final float[] historyI = new float[TAPS * 2];
+	private final float[] historyQ = new float[TAPS * 2];
 	private int sampleRateHz;
 	private int outputRateHz;
 	private int bandwidthHz;
@@ -43,46 +43,69 @@ public class IQChannelProcessor {
 		double stepSin = Math.sin(phaseStep);
 		double oscCos = oscillatorCos;
 		double oscSin = oscillatorSin;
+		boolean mixRequired = offsetHz != 0;
 		int maxOutputSamples = output.length / 2;
 
 		for (int sample = 0; sample < inputSamples; sample++) {
-			double i = input[sample * 2] / 128d;
-			double q = input[sample * 2 + 1] / 128d;
-			historyI[historyIndex] = i * oscCos - q * oscSin;
-			historyQ[historyIndex] = i * oscSin + q * oscCos;
-			historyIndex = (historyIndex + 1) % TAPS;
+			float i = input[sample * 2] * (1f / 128f);
+			float q = input[sample * 2 + 1] * (1f / 128f);
+			float mixedI;
+			float mixedQ;
+			if (mixRequired) {
+				mixedI = (float) (i * oscCos - q * oscSin);
+				mixedQ = (float) (i * oscSin + q * oscCos);
+			} else {
+				mixedI = i;
+				mixedQ = q;
+			}
+			historyI[historyIndex] = mixedI;
+			historyI[historyIndex + TAPS] = mixedI;
+			historyQ[historyIndex] = mixedQ;
+			historyQ[historyIndex + TAPS] = mixedQ;
+			historyIndex++;
+			if (historyIndex == TAPS) {
+				historyIndex = 0;
+			}
 			if (historyFilled < TAPS) {
 				historyFilled++;
 			}
 
-			double nextCos = oscCos * stepCos - oscSin * stepSin;
-			oscSin = oscSin * stepCos + oscCos * stepSin;
-			oscCos = nextCos;
-			if ((sample & 0x0fff) == 0) {
-				double norm = Math.sqrt(oscCos * oscCos + oscSin * oscSin);
-				if (norm > 0) {
-					oscCos /= norm;
-					oscSin /= norm;
+			if (mixRequired) {
+				double nextCos = oscCos * stepCos - oscSin * stepSin;
+				oscSin = oscSin * stepCos + oscCos * stepSin;
+				oscCos = nextCos;
+				if ((sample & 0x0fff) == 0) {
+					double norm = Math.sqrt(oscCos * oscCos + oscSin * oscSin);
+					if (norm > 0) {
+						oscCos /= norm;
+						oscSin /= norm;
+					}
 				}
 			}
 
 			if (historyFilled < TAPS) {
 				continue;
 			}
-			if (decimationCounter++ % decimation != 0) {
+			if (decimationCounter > 0) {
+				decimationCounter--;
 				continue;
 			}
+			decimationCounter = decimation - 1;
 			if (outputIndex >= maxOutputSamples) {
 				break;
 			}
 
 			double accI = 0;
 			double accQ = 0;
-			for (int tap = 0; tap < TAPS; tap++) {
-				int idx = (historyIndex + tap) % TAPS;
-				accI += historyI[idx] * taps[tap];
-				accQ += historyQ[idx] * taps[tap];
+			for (int tap = 0; tap < TAPS / 2; tap++) {
+				int first = historyIndex + tap;
+				int last = historyIndex + TAPS - 1 - tap;
+				accI += (historyI[first] + historyI[last]) * taps[tap];
+				accQ += (historyQ[first] + historyQ[last]) * taps[tap];
 			}
+			int middle = historyIndex + TAPS / 2;
+			accI += historyI[middle] * taps[TAPS / 2];
+			accQ += historyQ[middle] * taps[TAPS / 2];
 			output[outputIndex * 2] = clampToByte(accI * 128d);
 			output[outputIndex * 2 + 1] = clampToByte(accQ * 128d);
 			outputIndex++;
@@ -123,7 +146,7 @@ public class IQChannelProcessor {
 	}
 
 	private void resetState() {
-		for (int i = 0; i < TAPS; i++) {
+		for (int i = 0; i < historyI.length; i++) {
 			historyI[i] = 0;
 			historyQ[i] = 0;
 		}

@@ -12,7 +12,6 @@ import java.awt.event.ActionEvent;
 import java.beans.PropertyChangeEvent;
 import java.io.FileNotFoundException;
 import java.math.BigDecimal;
-import java.util.Optional;
 import java.util.Vector;
 import java.util.function.Consumer;
 import javax.swing.BorderFactory;
@@ -86,6 +85,7 @@ public class HackRFSweepSettingsUI extends JPanel
 	private JButton button_plus;
 	private JButton button_minus;
 	private SpinnerListModel spinnerModelFFTBinHz;
+	private boolean updatingRbwSpinner;
 	private FrequencySelectorRangeBinder frequencyRangeSelector;
 	private JCheckBox chckbxFilterSpectrum;
 	private JSpinner spinnerPeakFallSpeed;
@@ -535,7 +535,8 @@ public class HackRFSweepSettingsUI extends JPanel
 
 			spinnerFFTBinHz = new JSpinner();
 			spinnerFFTBinHz.setFont(new Font("Monospaced", Font.BOLD, 14));
-			spinnerModelFFTBinHz = new SpinnerListModel(new String[] { "3", "10", "20", 
+			spinnerModelFFTBinHz = new SpinnerListModel(new String[] { "0.05", "0.1", "0.2", "0.5", "1",
+					"3", "10", "20",
 					"50", "100", "200", "500", "1000", "2000" });
 			spinnerFFTBinHz.setModel(spinnerModelFFTBinHz);
 			tab1.add(spinnerFFTBinHz, "flowx, cell 0 13,alignx right");
@@ -954,15 +955,11 @@ public class HackRFSweepSettingsUI extends JPanel
 	private void bindViewToModel() {
 		frequencyRangeSelector = new FrequencySelectorRangeBinder(frequencySelectorStart, frequencySelectorEnd);
 
-		new MVCController(spinnerFFTBinHz, hRF.getFFTBinHz(), 
-				viewValue -> Integer.parseInt(viewValue.toString().replaceAll("\\s", "")), 
-				modelValue -> {
-					Optional<?> val = spinnerModelFFTBinHz.getList().stream().filter(value -> modelValue <= Integer.parseInt(value.toString().replaceAll("\\s", ""))).findFirst();
-					if (val.isPresent())
-						return val.get();
-					else
-						return spinnerModelFFTBinHz.getList().get(0);
-				});
+		spinnerFFTBinHz.addChangeListener(e -> applyRbwSpinnerValue());
+		hRF.getFFTBinHz().addListener(value -> SwingUtilities.invokeLater(this::updateRbwSpinnerValue));
+		hRF.getIqReplayRbwHz().addListener(value -> SwingUtilities.invokeLater(this::updateRbwSpinnerValue));
+		hRF.getReplayType().addListener(value -> SwingUtilities.invokeLater(this::updateRbwSpinnerValue));
+		updateRbwSpinnerValue();
 		new MVCController(sliderGain, hRF.getGain());
 		//new MVCController(spinner_numberOfSamples, hRF.getSamples(), val -> Integer.parseInt(val.toString()), val -> val.toString());
 		new MVCController(spinner_FrequencyShift, hRF.getFreqShift(), val -> Integer.parseInt(val.toString()), val -> val.toString());
@@ -1124,6 +1121,7 @@ public class HackRFSweepSettingsUI extends JPanel
 		});;
 
 		hRF.isPlayingSpectrum().addListener((playing) -> SwingUtilities.invokeLater(this::updateReplayControlState));
+		hRF.getReplayType().addListener((type) -> SwingUtilities.invokeLater(this::updateReplayControlState));
 		hRF.isRecordedSpectrum().addListener((recording) -> SwingUtilities.invokeLater(this::updateReplayControlState));
 		updateReplayControlState();
 		
@@ -1132,7 +1130,81 @@ public class HackRFSweepSettingsUI extends JPanel
 	private void updateReplayControlState() {
 		boolean playingSpectrum = hRF.isPlayingSpectrum().getValue();
 		setLiveControlsEnabled(!playingSpectrum);
+		if (playingSpectrum) {
+			String replayType = hRF.getReplayType().getValue();
+			if ("WAV".equals(replayType) || "RAW".equals(replayType)) {
+				setIqReplayControlsEnabled(true);
+			}
+		}
 		btnPlaySpectrum.setEnabled(playingSpectrum || !hRF.isRecordedSpectrum().getValue());
+	}
+
+	private void applyRbwSpinnerValue() {
+		if (updatingRbwSpinner) {
+			return;
+		}
+		double rbwKhz;
+		try {
+			rbwKhz = Double.parseDouble(spinnerFFTBinHz.getValue().toString().trim());
+		} catch (NumberFormatException e) {
+			updateRbwSpinnerValue();
+			return;
+		}
+		if (isIqReplay()) {
+			hRF.getIqReplayRbwHz().setValue(Math.max(20, (int) Math.round(rbwKhz * 1000d)));
+		} else {
+			hRF.getFFTBinHz().setValue(Math.max(1, (int) Math.round(rbwKhz)));
+		}
+	}
+
+	private void updateRbwSpinnerValue() {
+		if (spinnerFFTBinHz == null) {
+			return;
+		}
+		double rbwKhz = isIqReplay() ? hRF.getIqReplayRbwHz().getValue() / 1000d
+				: hRF.getFFTBinHz().getValue();
+		String value = formatRbwKhz(rbwKhz);
+		if (!spinnerModelFFTBinHz.getList().contains(value)) {
+			value = spinnerModelFFTBinHz.getList().get(spinnerModelFFTBinHz.getList().size() - 1).toString();
+			for (Object candidate : spinnerModelFFTBinHz.getList()) {
+				if (Double.parseDouble(candidate.toString()) >= rbwKhz) {
+					value = candidate.toString();
+					break;
+				}
+			}
+		}
+		updatingRbwSpinner = true;
+		try {
+			spinnerFFTBinHz.setValue(value);
+		} finally {
+			updatingRbwSpinner = false;
+		}
+	}
+
+	private boolean isIqReplay() {
+		String replayType = hRF.getReplayType().getValue();
+		return "WAV".equals(replayType) || "RAW".equals(replayType);
+	}
+
+	private String formatRbwKhz(double rbwKhz) {
+		if (rbwKhz >= 1d) {
+			return Integer.toString((int) Math.round(rbwKhz));
+		}
+		return BigDecimal.valueOf(rbwKhz).stripTrailingZeros().toPlainString();
+	}
+
+	private void setIqReplayControlsEnabled(boolean enabled) {
+		Component[] iqReplayControls = {
+				spinnerFFTBinHz,
+				slider_AmplitudeOffset,
+				slider_PowerFluxCal,
+				spinnerAvgIterations,
+				sliderAvgOffset,
+				chckbxFilterSpectrum
+		};
+		for (Component component : iqReplayControls) {
+			setComponentTreeEnabled(component, enabled);
+		}
 	}
 
 	private void setLiveControlsEnabled(boolean enabled) {
