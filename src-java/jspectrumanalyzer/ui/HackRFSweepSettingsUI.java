@@ -116,6 +116,11 @@ public class HackRFSweepSettingsUI extends JPanel
 	private JSpinner spinnerSpectrumRecordFrameRate;
 	private JSpinner spinnerVideoArea;
 	private JSlider sliderAvgOffset;
+	private JSeparator separatorIqReplayAudio;
+	private JPanel panelIqReplayAudio;
+	private JCheckBox checkBoxIqReplayAudio;
+	private JSlider sliderIqReplayAudioVolume;
+	private JComboBox<String> comboBoxIqReplayAudioMode;
 	private JLabel lblPeakFall;
 	private JLabel lblPeakFallTrs;
 	private JLabel lblPeakHoldTime;
@@ -924,6 +929,32 @@ public class HackRFSweepSettingsUI extends JPanel
 			((ListEditor) spinnerVideoFormat.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
 			((ListEditor) spinnerVideoFormat.getEditor()).getTextField().setColumns(3);
 			tab3.add(spinnerVideoFormat, "cell 0 13, alignx right");
+
+			separatorIqReplayAudio = new JSeparator();
+			tab3.add(separatorIqReplayAudio, "cell 0 14,growx,hidemode 3");
+
+			panelIqReplayAudio = new JPanel(new BorderLayout(3, 0));
+			panelIqReplayAudio.setBackground(Color.BLACK);
+			checkBoxIqReplayAudio = new JCheckBox("Audio");
+			checkBoxIqReplayAudio.setForeground(Color.WHITE);
+			checkBoxIqReplayAudio.setBackground(Color.BLACK);
+			checkBoxIqReplayAudio.setMargin(new java.awt.Insets(0, 0, 0, 0));
+			sliderIqReplayAudioVolume = new JSlider(0, 100, 80);
+			sliderIqReplayAudioVolume.setForeground(Color.WHITE);
+			sliderIqReplayAudioVolume.setBackground(Color.BLACK);
+			compactSlider(sliderIqReplayAudioVolume, new Dimension(44, 16));
+			sliderIqReplayAudioVolume.setMinimumSize(new Dimension(32, 16));
+			sliderIqReplayAudioVolume.setMaximumSize(new Dimension(48, 16));
+			comboBoxIqReplayAudioMode = new JComboBox<>(new String[] { "AM", "FM" });
+			comboBoxIqReplayAudioMode.setPreferredSize(new Dimension(48, 22));
+			comboBoxIqReplayAudioMode.setMinimumSize(new Dimension(48, 22));
+			comboBoxIqReplayAudioMode.setMaximumSize(new Dimension(48, 22));
+			panelIqReplayAudio.add(checkBoxIqReplayAudio, BorderLayout.WEST);
+			panelIqReplayAudio.add(sliderIqReplayAudioVolume, BorderLayout.CENTER);
+			panelIqReplayAudio.add(comboBoxIqReplayAudioMode, BorderLayout.EAST);
+			tab3.add(panelIqReplayAudio, "cell 0 15,growx,hidemode 3");
+			separatorIqReplayAudio.setVisible(false);
+			panelIqReplayAudio.setVisible(false);
 		}
 		compactSliders();
 		bindViewToModel();
@@ -1078,6 +1109,9 @@ public class HackRFSweepSettingsUI extends JPanel
 		new MVCController(spinnerVideoResolution, hRF.getVideoResolution(), val -> Integer.parseInt(val.toString()), val -> val.toString());
 		new MVCController(spinnerVideoFrameRate, hRF.getVideoFrameRate(), val -> Integer.parseInt(val.toString()), val -> val.toString());
 		new MVCController(spinnerSpectrumRecordFrameRate, hRF.getSpectrumRecordFrameRate(), val -> new String (val.toString()), val -> val.toString());
+		new MVCController(checkBoxIqReplayAudio, hRF.isIqReplayAudioEnabled());
+		new MVCController(sliderIqReplayAudioVolume, hRF.getIqReplayAudioVolume());
+		new MVCController(comboBoxIqReplayAudioMode, hRF.getIqReplayAudioMode());
 		
 		
 		new MVCController(chckbxDatestamp, hRF.isDatestampVisible());
@@ -1130,8 +1164,13 @@ public class HackRFSweepSettingsUI extends JPanel
 	private void updateReplayControlState() {
 		boolean playingSpectrum = hRF.isPlayingSpectrum().getValue();
 		setLiveControlsEnabled(!playingSpectrum);
+		String replayType = hRF.getReplayType().getValue();
+		boolean iqReplay = playingSpectrum && ("WAV".equals(replayType) || "RAW".equals(replayType));
+		separatorIqReplayAudio.setVisible(iqReplay);
+		panelIqReplayAudio.setVisible(iqReplay);
+		revalidate();
+		repaint();
 		if (playingSpectrum) {
-			String replayType = hRF.getReplayType().getValue();
 			if ("WAV".equals(replayType) || "RAW".equals(replayType)) {
 				setIqReplayControlsEnabled(true);
 			}

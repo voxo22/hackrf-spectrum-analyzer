@@ -109,6 +109,12 @@ public interface HackRFSettings {
 	public ModelValueBoolean isPlayingSpectrum();
 
 	public ModelValue<String> getReplayType();
+
+	public ModelValueBoolean isIqReplayAudioEnabled();
+
+	public ModelValueInt getIqReplayAudioVolume();
+
+	public ModelValue<String> getIqReplayAudioMode();
 	
 	public ModelValueBoolean isChartsRealtimeVisible();
 	

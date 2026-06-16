@@ -569,8 +569,18 @@ public class WaterfallPlot extends JPanel {
 				g.drawLine(markerX, y - 4, markerX, y + h + 4);
 			}
 		}
+		String timeText = "PLAY " + formatMillis(position) + " / " + formatMillis(duration);
+		int textX = x;
+		int baseline = y + h + 14;
+		int paddingX = 4;
+		int paddingY = 2;
+		int textWidth = g.getFontMetrics().stringWidth(timeText);
+		int textHeight = g.getFontMetrics().getHeight();
+		int boxY = baseline - g.getFontMetrics().getAscent() - paddingY;
+		g.setColor(new Color(0, 0, 0, 150));
+		g.fillRoundRect(textX - paddingX, boxY, textWidth + paddingX * 2, textHeight + paddingY * 2, 6, 6);
 		g.setColor(Color.WHITE);
-		g.drawString("PLAY " + formatMillis(position) + " / " + formatMillis(duration), x, y + h + 14);
+		g.drawString(timeText, textX, baseline);
 	}
 
 	private String formatMillis(long millis) {
