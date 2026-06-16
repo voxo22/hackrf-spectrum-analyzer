@@ -358,6 +358,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	}
 
 	private static class IQReplaySpectrumFeed {
+		private static final int MAX_BURST_WINDOWS_PER_BLOCK = 12;
+		private static final int MAX_ENERGY_GUIDED_WINDOWS_PER_BLOCK = 4;
+
 		private static class InputBlock {
 			final byte[] data;
 
@@ -370,20 +373,32 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		final IQSpectrumFrame spectrumFrame;
 		final double[] frequencyStart;
 		final float binHz;
+		final boolean burstCapture;
+		final int energyScanWindowBytes;
+		final int burstHopBytes;
 		final ArrayBlockingQueue<FFTBins> outputQueue;
-		final ArrayBlockingQueue<InputBlock> pending = new ArrayBlockingQueue<>(2);
-		final ArrayBlockingQueue<InputBlock> available = new ArrayBlockingQueue<>(3);
+		final ArrayBlockingQueue<InputBlock> pending;
+		final ArrayBlockingQueue<InputBlock> available;
 		volatile boolean running = true;
 		boolean processingPrimed;
+		byte[] burstCarry = new byte[0];
+		float[] burstPeakSpectrum;
+		long lastBurstEmitNanos;
 		Thread worker;
 
 		IQReplaySpectrumFeed(int sampleRateHz, long centerFrequencyHz, int fftSize,
-				ArrayBlockingQueue<FFTBins> outputQueue) {
+				ArrayBlockingQueue<FFTBins> outputQueue, boolean burstCapture) {
 			this.fftSize = fftSize;
 			this.spectrumFrame = new IQSpectrumFrame(fftSize);
 			this.binHz = sampleRateHz / (float) fftSize;
 			this.frequencyStart = new double[fftSize];
 			this.outputQueue = outputQueue;
+			this.burstCapture = burstCapture;
+			int energyScanSamples = Math.max(32, Math.min(256, sampleRateHz / 250000));
+			this.energyScanWindowBytes = energyScanSamples * 2;
+			this.burstHopBytes = Math.max(2, Math.max(fftSize / 2, sampleRateHz / 1000) * 2);
+			this.pending = new ArrayBlockingQueue<>(burstCapture ? 48 : 2);
+			this.available = new ArrayBlockingQueue<>(burstCapture ? 49 : 3);
 			double firstBinHz = centerFrequencyHz - sampleRateHz / 2d + binHz * 0.5d;
 			for (int i = 0; i < frequencyStart.length; i++) {
 				frequencyStart[i] = firstBinHz + binHz * i;
@@ -398,11 +413,112 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			if (!running || iqData == null || iqData.length < fftSize * 2) {
 				return;
 			}
+			int fftBytes = fftSize * 2;
+			if (!burstCapture) {
+				enqueueWindow(iqData, iqData.length - fftBytes, fftBytes);
+				return;
+			}
+			acceptBurstWindows(iqData, fftBytes);
+		}
+
+		private void acceptBurstWindows(byte[] iqData, int fftBytes) {
+			byte[] combined;
+			if (burstCarry.length == 0) {
+				combined = iqData;
+			} else {
+				combined = new byte[burstCarry.length + iqData.length];
+				System.arraycopy(burstCarry, 0, combined, 0, burstCarry.length);
+				System.arraycopy(iqData, 0, combined, burstCarry.length, iqData.length);
+			}
+			int windows = 0;
+			int uniformWindowLimit = Math.max(1, MAX_BURST_WINDOWS_PER_BLOCK - MAX_ENERGY_GUIDED_WINDOWS_PER_BLOCK);
+			for (int start = 0; start + fftBytes <= combined.length && windows < uniformWindowLimit;
+					start += burstHopBytes) {
+				enqueueWindow(combined, start, fftBytes);
+				windows++;
+			}
+			windows += enqueueEnergyGuidedWindows(combined, fftBytes, MAX_BURST_WINDOWS_PER_BLOCK - windows);
+			int keep = Math.max(0, fftBytes - burstHopBytes);
+			if (keep > 0 && combined.length >= keep) {
+				burstCarry = new byte[keep];
+				System.arraycopy(combined, combined.length - keep, burstCarry, 0, keep);
+			} else {
+				burstCarry = new byte[0];
+			}
+		}
+
+		private int enqueueEnergyGuidedWindows(byte[] iqData, int fftBytes, int maxWindows) {
+			if (maxWindows <= 0 || iqData.length < fftBytes || energyScanWindowBytes <= 0) {
+				return 0;
+			}
+			int scanStep = Math.max(2, energyScanWindowBytes / 2);
+			int[] bestCenters = new int[maxWindows];
+			long[] bestEnergy = new long[maxWindows];
+			java.util.Arrays.fill(bestCenters, -1);
+			for (int offset = 0; offset + energyScanWindowBytes <= iqData.length; offset += scanStep) {
+				long energy = 0;
+				for (int i = offset; i < offset + energyScanWindowBytes; i += 2) {
+					int inPhase = iqData[i];
+					int quadrature = iqData[i + 1];
+					energy += inPhase * inPhase + quadrature * quadrature;
+				}
+				int center = offset + energyScanWindowBytes / 2;
+				insertEnergyCandidate(center, energy, bestCenters, bestEnergy);
+			}
+			int added = 0;
+			for (int center : bestCenters) {
+				if (center < 0) {
+					continue;
+				}
+				int start = center - fftBytes / 2;
+				if (start < 0) {
+					start = 0;
+				}
+				if (start + fftBytes > iqData.length) {
+					start = iqData.length - fftBytes;
+				}
+				start &= ~1;
+				enqueueWindow(iqData, start, fftBytes);
+				added++;
+			}
+			return added;
+		}
+
+		private void insertEnergyCandidate(int center, long energy, int[] bestCenters, long[] bestEnergy) {
+			for (int i = 0; i < bestCenters.length; i++) {
+				if (bestCenters[i] >= 0 && Math.abs(center - bestCenters[i]) < burstHopBytes / 2) {
+					if (energy <= bestEnergy[i]) {
+						return;
+					}
+					for (int j = i; j < bestEnergy.length - 1; j++) {
+						bestEnergy[j] = bestEnergy[j + 1];
+						bestCenters[j] = bestCenters[j + 1];
+					}
+					bestEnergy[bestEnergy.length - 1] = 0;
+					bestCenters[bestCenters.length - 1] = -1;
+					break;
+				}
+			}
+			for (int i = 0; i < bestEnergy.length; i++) {
+				if (energy <= bestEnergy[i]) {
+					continue;
+				}
+				for (int j = bestEnergy.length - 1; j > i; j--) {
+					bestEnergy[j] = bestEnergy[j - 1];
+					bestCenters[j] = bestCenters[j - 1];
+				}
+				bestEnergy[i] = energy;
+				bestCenters[i] = center;
+				return;
+			}
+		}
+
+		private void enqueueWindow(byte[] iqData, int offset, int length) {
 			InputBlock block = available.poll();
 			if (block == null) {
-				block = new InputBlock(fftSize * 2);
+				block = new InputBlock(length);
 			}
-			System.arraycopy(iqData, iqData.length - block.data.length, block.data, 0, block.data.length);
+			System.arraycopy(iqData, offset, block.data, 0, block.data.length);
 			if (!pending.offer(block)) {
 				InputBlock discarded = pending.poll();
 				if (discarded != null) {
@@ -420,6 +536,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				available.offer(block);
 			}
 			processingPrimed = false;
+			burstCarry = new byte[0];
+			burstPeakSpectrum = null;
+			lastBurstEmitNanos = 0;
 		}
 
 		private void processLoop() {
@@ -435,25 +554,52 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				}
 				float[] spectrum = spectrumFrame.compute(block.data, 0);
 				available.offer(block);
-				FFTBins bins = new FFTBins(true, frequencyStart, binHz, spectrum);
-				if (!processingPrimed) {
-					try {
-						outputQueue.put(bins);
-						outputQueue.put(new FFTBins(true, frequencyStart, binHz, spectrum.clone()));
-						processingPrimed = true;
-					} catch (InterruptedException e) {
-						if (!running) {
-							return;
-						}
-						Thread.currentThread().interrupt();
+				if (burstCapture) {
+					acceptBurstSpectrum(spectrum);
+				} else {
+					emitSpectrum(spectrum);
+				}
+			}
+		}
+
+		private void acceptBurstSpectrum(float[] spectrum) {
+			if (burstPeakSpectrum == null || burstPeakSpectrum.length != spectrum.length) {
+				burstPeakSpectrum = spectrum.clone();
+			} else {
+				for (int i = 0; i < spectrum.length; i++) {
+					if (spectrum[i] > burstPeakSpectrum[i]) {
+						burstPeakSpectrum[i] = spectrum[i];
+					}
+				}
+			}
+			long now = System.nanoTime();
+			if (lastBurstEmitNanos == 0 || now - lastBurstEmitNanos >= 33_000_000L) {
+				float[] peak = burstPeakSpectrum;
+				burstPeakSpectrum = null;
+				lastBurstEmitNanos = now;
+				emitSpectrum(peak);
+			}
+		}
+
+		private void emitSpectrum(float[] spectrum) {
+			FFTBins bins = new FFTBins(true, frequencyStart, binHz, spectrum);
+			if (!processingPrimed) {
+				try {
+					outputQueue.put(bins);
+					outputQueue.put(new FFTBins(true, frequencyStart, binHz, spectrum.clone()));
+					processingPrimed = true;
+				} catch (InterruptedException e) {
+					if (!running) {
 						return;
 					}
-				} else {
-					if (!outputQueue.isEmpty()) {
-						outputQueue.clear();
-					}
-					outputQueue.offer(bins);
+					Thread.currentThread().interrupt();
+					return;
 				}
+			} else {
+				if (!outputQueue.isEmpty()) {
+					outputQueue.clear();
+				}
+				outputQueue.offer(bins);
 			}
 		}
 
@@ -705,7 +851,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		new HackRFSweepSpectrumAnalyzer();
 	}
 
-	public boolean									flagIsHWSendingData					= false;
+	public volatile boolean						flagIsHWSendingData					= false;
 	private float									alphaFreqAllocationTableBandsImage	= 0.5f;
 	private float									alphaPersistentDisplayImage			= 1.0f;
 	// set to true when settings were successfully loaded from disk
@@ -730,6 +876,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private ModelValueBoolean						parameterIqReplayAudioEnabled		= new ModelValueBoolean("IQ Replay Audio", false);
 	private ModelValueInt							parameterIqReplayAudioVolume		= new ModelValueInt("IQ Replay Audio Volume", 80, 1, 0, 100);
 	private ModelValue<String>						parameterIqReplayAudioMode			= new ModelValue<>("IQ Replay Audio Mode", "AM");
+	private ModelValueBoolean						parameterIqReplayBurstCapture		= new ModelValueBoolean("IQ Replay Burst Capture", false);
 	private ArrayList<HackRFEventListener>			hRFlisteners						= new ArrayList<>();
 	private ArrayBlockingQueue<FFTBins>				hwProcessingQueue					= new ArrayBlockingQueue<>(1000);
 	private BufferedImage							imageFrequencyAllocationTableBands	= null;
@@ -1106,6 +1253,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						Math.min(100, Integer.parseInt(p.getProperty("IqReplayAudioVolume")))));
 			if ("AM".equals(p.getProperty("IqReplayAudioMode")) || "FM".equals(p.getProperty("IqReplayAudioMode")))
 				parameterIqReplayAudioMode.setValue(p.getProperty("IqReplayAudioMode"));
+			if (p.getProperty("IqReplayBurstCapture") != null)
+				parameterIqReplayBurstCapture.setValue(Boolean.parseBoolean(p.getProperty("IqReplayBurstCapture")));
 			if (p.getProperty("Samples") != null) parameterSamples.setValue(Integer.parseInt(p.getProperty("Samples")));
 			if (p.getProperty("GainTotal") != null) parameterGainTotal.setValue(Integer.parseInt(p.getProperty("GainTotal")));
 			if (p.getProperty("GainLNA") != null) parameterGainLNA.setValue(Integer.parseInt(p.getProperty("GainLNA")));
@@ -1189,6 +1338,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			p.setProperty("IqReplayAudioEnabled", Boolean.toString(parameterIqReplayAudioEnabled.getValue()));
 			p.setProperty("IqReplayAudioVolume", Integer.toString(parameterIqReplayAudioVolume.getValue()));
 			p.setProperty("IqReplayAudioMode", parameterIqReplayAudioMode.getValue());
+			p.setProperty("IqReplayBurstCapture", Boolean.toString(parameterIqReplayBurstCapture.getValue()));
 			p.setProperty("Samples", Integer.toString(parameterSamples.getValue()));
 			p.setProperty("GainTotal", Integer.toString(parameterGainTotal.getValue()));
 			p.setProperty("GainLNA", Integer.toString(parameterGainLNA.getValue()));
@@ -1419,6 +1569,11 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	}
 
 	@Override
+	public ModelValueBoolean isIqReplayBurstCaptureEnabled() {
+		return parameterIqReplayBurstCapture;
+	}
+
+	@Override
 	public ModelValueBoolean isChartsRealtimeVisible() {
 		return parameterShowRealtime;
 	}
@@ -1593,6 +1748,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		if (this.flagIsHWSendingData != sendingData) {
 			this.flagIsHWSendingData = sendingData;
 			SwingUtilities.invokeLater(() -> {
+				if (chartPanel != null) {
+					chartPanel.repaint();
+				}
 				synchronized (hRFlisteners) {
 					for (HackRFEventListener hackRFEventListener : hRFlisteners) {
 						try {
@@ -2563,6 +2721,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			double replaySpanMHz = sampleRateHz / 1_000_000d;
 			updateIqReplayRbw(replaySpanMHz);
 			int lastFftSize = 0;
+			boolean lastBurstCapture = false;
 			IQReplaySpectrumFeed spectrumFeed = null;
 			byte[] iqData = new byte[0];
 			long playbackDeadlineNanos = System.nanoTime();
@@ -2590,14 +2749,16 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						appliedAudioConfiguration = requestedAudioConfiguration;
 					}
 					int fftSize = IQSpectrumFrame.chooseSize(sampleRateHz, parameterIqReplayRbwHz.getValue());
-					if (fftSize != lastFftSize) {
+					boolean burstCapture = parameterIqReplayBurstCapture.getValue();
+					if (fftSize != lastFftSize || burstCapture != lastBurstCapture) {
 						if (spectrumFeed != null) {
 							spectrumFeed.close();
 						}
 						restartPlaybackProcessingThread();
 						spectrumFeed = new IQReplaySpectrumFeed(sampleRateHz, iqFile.getCenterFrequencyHz(), fftSize,
-								hwProcessingQueue);
+								hwProcessingQueue, burstCapture);
 						lastFftSize = fftSize;
+						lastBurstCapture = burstCapture;
 					}
 					int frameSamples = Math.max(fftSize, Math.max(1, sampleRateHz / IQ_REPLAY_FRAMES_PER_SECOND));
 					int frameBytes = frameSamples * 2;
@@ -3589,9 +3750,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					boolean paused = parameterIsCapturingPaused.getValue();
 					ReplayType activeReplayType = playbackType;
 					boolean replay = activeReplayType != null;
+					boolean liveConnected = flagIsHWSendingData;
 					String statusText = replay
 							? "REPLAY " + activeReplayType.name() + " FILE" + (paused ? " PAUSED" : "")
-							: (paused ? "LIVE PAUSED" : "LIVE");
+							: (liveConnected ? (paused ? "LIVE PAUSED" : "LIVE") : "HW disconnected");
 					boolean showLiveRecordingDot = !replay && !paused && parameterIsRecordedSpectrum.getValue();
 					int symbolWidth = replay || showLiveRecordingDot ? 16 : 0;
 					int statusWidth = g2.getFontMetrics().stringWidth(statusText);

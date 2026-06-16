@@ -54,7 +54,6 @@ public class HackRFSweepSettingsUI extends JPanel
 	private HackRFSettings hRF;
 	private static final long serialVersionUID = 7721079457485020637L;
 	private FrequencyRange FrequencyRange;
-	private JLabel txtHackrfConnected;
 	private FrequencySelectorPanel frequencySelectorStart;
 	private FrequencySelectorPanel frequencySelectorEnd;
 	private JSpinner spinnerFFTBinHz;
@@ -116,11 +115,15 @@ public class HackRFSweepSettingsUI extends JPanel
 	private JSpinner spinnerSpectrumRecordFrameRate;
 	private JSpinner spinnerVideoArea;
 	private JSlider sliderAvgOffset;
-	private JSeparator separatorIqReplayAudio;
 	private JPanel panelIqReplayAudio;
 	private JCheckBox checkBoxIqReplayAudio;
 	private JSlider sliderIqReplayAudioVolume;
 	private JComboBox<String> comboBoxIqReplayAudioMode;
+	private JCheckBox checkBoxIqReplayBurstCapture;
+	private JLabel lblGain;
+	private JLabel lblGainValue;
+	private JLabel lblLnaGain;
+	private JLabel lblVgaGain;
 	private JLabel lblPeakFall;
 	private JLabel lblPeakFallTrs;
 	private JLabel lblPeakHoldTime;
@@ -151,14 +154,14 @@ public class HackRFSweepSettingsUI extends JPanel
 		panelMainSettings.add(lblNewLabel, "cell 0 0,growx,aligny center");
 
 		frequencySelectorStart = new FrequencySelectorPanel(minFreq, maxFreq, freqStep, minFreq);
-		panelMainSettings.add(frequencySelectorStart, "cell 0 1,grow");
+		panelMainSettings.add(frequencySelectorStart, "cell 0 1,alignx center");
 
 		JLabel lblFrequencyEndmhz = new JLabel("Frequency stop [MHz]");
 		lblFrequencyEndmhz.setForeground(Color.WHITE);
 		panelMainSettings.add(lblFrequencyEndmhz, "cell 0 3,alignx left,aligny center");
 
 		frequencySelectorEnd = new FrequencySelectorPanel(minFreq, maxFreq, freqStep, maxFreq);
-		panelMainSettings.add(frequencySelectorEnd, "cell 0 4,grow");
+		panelMainSettings.add(frequencySelectorEnd, "cell 0 4,alignx center");
 		
 		button_minus = new JButton("<---");
 		button_minus.setBackground(Color.BLACK);
@@ -333,13 +336,10 @@ public class HackRFSweepSettingsUI extends JPanel
 
 		});
 		panelMainSettings.add(comboBoxFrequencyPresets, "cell 0 8,growx,alignx right");
-		
-		txtHackrfConnected = new JLabel();
-		txtHackrfConnected.setText("HW disconnected");
-		txtHackrfConnected.setForeground(Color.WHITE);
-		txtHackrfConnected.setBackground(Color.BLACK);
-		panelMainSettings.add(txtHackrfConnected, "cell 0 23,growx");
-		txtHackrfConnected.setBorder(null);
+
+		JPanel spacerMainControls = new JPanel();
+		spacerMainControls.setBackground(Color.BLACK);
+		panelMainSettings.add(spacerMainControls, "cell 0 23,growx,h 8!");
 		
 		btnPause = new JButton("PAUSE");
 		panelMainSettings.add(btnPause, "cell 0 25,growx,alignx left");
@@ -418,39 +418,39 @@ public class HackRFSweepSettingsUI extends JPanel
 		
 		//tab1
 		{
-			JLabel lblGain = new JLabel("Gain");
+			lblGain = new JLabel("Gain");
 			lblGain.setForeground(Color.WHITE);
-			tab1.add(lblGain, "cell 0 0");
+			tab1.add(lblGain, "cell 0 0,hidemode 3");
 			
-			JLabel lbl_gainValue = new JLabel(hackRFSettings.getGain() + "dB");
-			lbl_gainValue.setForeground(Color.WHITE);
-			tab1.add(lbl_gainValue, "flowx,cell 0 0,alignx right");
+			lblGainValue = new JLabel(hackRFSettings.getGain() + "dB");
+			lblGainValue.setForeground(Color.WHITE);
+			tab1.add(lblGainValue, "flowx,cell 0 0,alignx right,hidemode 3");
 
 			sliderGain = new JSlider(JSlider.HORIZONTAL, 0, 100, 2);
 			sliderGain.setFont(new Font("Monospaced", Font.BOLD, 14));
 			sliderGain.setBackground(Color.BLACK);
 			sliderGain.setForeground(Color.WHITE);
-			tab1.add(sliderGain, "flowx,cell 0 1,growx");
+			tab1.add(sliderGain, "flowx,cell 0 1,growx,hidemode 3");
 
-			JLabel lblNewLabel_2 = new JLabel("LNA Gain");
-			lblNewLabel_2.setForeground(Color.WHITE);
-			tab1.add(lblNewLabel_2, "cell 0 2");
+			lblLnaGain = new JLabel("LNA Gain");
+			lblLnaGain.setForeground(Color.WHITE);
+			tab1.add(lblLnaGain, "cell 0 2,hidemode 3");
 			
 			sliderGainLNA = new JSlider(SwingConstants.HORIZONTAL, 0, 100, 2);
 			sliderGainLNA.setForeground(Color.WHITE);
 			sliderGainLNA.setFont(new Font("Monospaced", Font.BOLD, 14));
 			sliderGainLNA.setBackground(Color.BLACK);
-			tab1.add(sliderGainLNA, "cell 0 2,growx");
+			tab1.add(sliderGainLNA, "cell 0 2,growx,hidemode 3");
 			
-			JLabel lblVgfaGaindb = new JLabel("VGA Gain");
-			lblVgfaGaindb.setForeground(Color.WHITE);
-			tab1.add(lblVgfaGaindb, "cell 0 4");
+			lblVgaGain = new JLabel("VGA Gain");
+			lblVgaGain.setForeground(Color.WHITE);
+			tab1.add(lblVgaGain, "cell 0 4,hidemode 3");
 			
 			sliderGainVGA = new JSlider(SwingConstants.HORIZONTAL, 0, 100, 2);
 			sliderGainVGA.setForeground(Color.WHITE);
 			sliderGainVGA.setFont(new Font("Monospaced", Font.BOLD, 14));
 			sliderGainVGA.setBackground(Color.BLACK);
-			tab1.add(sliderGainVGA, "cell 0 4,growx");
+			tab1.add(sliderGainVGA, "cell 0 4,growx,hidemode 3");
 			/*
 			JLabel lblHW = new JLabel("HW");
 			lblHW.setForeground(Color.WHITE);
@@ -477,7 +477,7 @@ public class HackRFSweepSettingsUI extends JPanel
 			JSeparator separator2 = new JSeparator();
 			tab1.add(separator2,"cell 0 8,growx");
 			
-			JLabel lblCALC = new JLabel("SPECTR");
+			JLabel lblCALC = new JLabel("CHART");
 			lblCALC.setForeground(Color.WHITE);
 			tab1.add(lblCALC, "growx,cell 0 9");
 			
@@ -549,7 +549,7 @@ public class HackRFSweepSettingsUI extends JPanel
 			((ListEditor) spinnerFFTBinHz.getEditor()).getTextField().setColumns(5);
 			
 
-			hackRFSettings.getGain().addListener((gain) -> lbl_gainValue.setText(String.format("%d dB (LNA: %d dB  VGA: %d dB)", 
+			hackRFSettings.getGain().addListener((gain) -> lblGainValue.setText(String.format("%d dB (LNA: %d dB  VGA: %d dB)",
 					gain, hackRFSettings.getGainLNA().getValue(), hackRFSettings.getGainVGA().getValue())));
 			
 			JLabel lblDisplayFrequencyShift = new JLabel("Shift [MHz] ");
@@ -600,6 +600,35 @@ public class HackRFSweepSettingsUI extends JPanel
 			tab1.add(lblPowerFluxCal2, "cell 0 16, alignx right");
 			
 			hackRFSettings.getPowerFluxCal().addListener((fluxcal) -> lblPowerFluxCal2.setText(String.format("%d", fluxcal)));
+
+			panelIqReplayAudio = new JPanel(new BorderLayout(3, 0));
+			panelIqReplayAudio.setBackground(Color.BLACK);
+			checkBoxIqReplayAudio = new JCheckBox("Audio");
+			checkBoxIqReplayAudio.setForeground(Color.WHITE);
+			checkBoxIqReplayAudio.setBackground(Color.BLACK);
+			checkBoxIqReplayAudio.setMargin(new java.awt.Insets(0, 0, 0, 0));
+			sliderIqReplayAudioVolume = new JSlider(0, 100, 80);
+			sliderIqReplayAudioVolume.setForeground(Color.WHITE);
+			sliderIqReplayAudioVolume.setBackground(Color.BLACK);
+			compactSlider(sliderIqReplayAudioVolume, new Dimension(44, 16));
+			sliderIqReplayAudioVolume.setMinimumSize(new Dimension(32, 16));
+			sliderIqReplayAudioVolume.setMaximumSize(new Dimension(48, 16));
+			comboBoxIqReplayAudioMode = new JComboBox<>(new String[] { "AM", "FM" });
+			comboBoxIqReplayAudioMode.setPreferredSize(new Dimension(48, 22));
+			comboBoxIqReplayAudioMode.setMinimumSize(new Dimension(48, 22));
+			comboBoxIqReplayAudioMode.setMaximumSize(new Dimension(48, 22));
+			panelIqReplayAudio.add(checkBoxIqReplayAudio, BorderLayout.WEST);
+			panelIqReplayAudio.add(sliderIqReplayAudioVolume, BorderLayout.CENTER);
+			panelIqReplayAudio.add(comboBoxIqReplayAudioMode, BorderLayout.EAST);
+			tab1.add(panelIqReplayAudio, "cell 0 2,growx,pushx,hidemode 3");
+			panelIqReplayAudio.setVisible(false);
+
+			checkBoxIqReplayBurstCapture = new JCheckBox(" Burst capture");
+			checkBoxIqReplayBurstCapture.setHorizontalTextPosition(SwingConstants.TRAILING);
+			checkBoxIqReplayBurstCapture.setForeground(Color.WHITE);
+			checkBoxIqReplayBurstCapture.setBackground(Color.BLACK);
+			tab1.add(checkBoxIqReplayBurstCapture, "cell 0 4,growx,pushx,alignx left,hidemode 3");
+			checkBoxIqReplayBurstCapture.setVisible(false);
 		}
 		//tab2
 		{
@@ -930,31 +959,6 @@ public class HackRFSweepSettingsUI extends JPanel
 			((ListEditor) spinnerVideoFormat.getEditor()).getTextField().setColumns(3);
 			tab3.add(spinnerVideoFormat, "cell 0 13, alignx right");
 
-			separatorIqReplayAudio = new JSeparator();
-			tab3.add(separatorIqReplayAudio, "cell 0 14,growx,hidemode 3");
-
-			panelIqReplayAudio = new JPanel(new BorderLayout(3, 0));
-			panelIqReplayAudio.setBackground(Color.BLACK);
-			checkBoxIqReplayAudio = new JCheckBox("Audio");
-			checkBoxIqReplayAudio.setForeground(Color.WHITE);
-			checkBoxIqReplayAudio.setBackground(Color.BLACK);
-			checkBoxIqReplayAudio.setMargin(new java.awt.Insets(0, 0, 0, 0));
-			sliderIqReplayAudioVolume = new JSlider(0, 100, 80);
-			sliderIqReplayAudioVolume.setForeground(Color.WHITE);
-			sliderIqReplayAudioVolume.setBackground(Color.BLACK);
-			compactSlider(sliderIqReplayAudioVolume, new Dimension(44, 16));
-			sliderIqReplayAudioVolume.setMinimumSize(new Dimension(32, 16));
-			sliderIqReplayAudioVolume.setMaximumSize(new Dimension(48, 16));
-			comboBoxIqReplayAudioMode = new JComboBox<>(new String[] { "AM", "FM" });
-			comboBoxIqReplayAudioMode.setPreferredSize(new Dimension(48, 22));
-			comboBoxIqReplayAudioMode.setMinimumSize(new Dimension(48, 22));
-			comboBoxIqReplayAudioMode.setMaximumSize(new Dimension(48, 22));
-			panelIqReplayAudio.add(checkBoxIqReplayAudio, BorderLayout.WEST);
-			panelIqReplayAudio.add(sliderIqReplayAudioVolume, BorderLayout.CENTER);
-			panelIqReplayAudio.add(comboBoxIqReplayAudioMode, BorderLayout.EAST);
-			tab3.add(panelIqReplayAudio, "cell 0 15,growx,hidemode 3");
-			separatorIqReplayAudio.setVisible(false);
-			panelIqReplayAudio.setVisible(false);
 		}
 		compactSliders();
 		bindViewToModel();
@@ -1112,6 +1116,7 @@ public class HackRFSweepSettingsUI extends JPanel
 		new MVCController(checkBoxIqReplayAudio, hRF.isIqReplayAudioEnabled());
 		new MVCController(sliderIqReplayAudioVolume, hRF.getIqReplayAudioVolume());
 		new MVCController(comboBoxIqReplayAudioMode, hRF.getIqReplayAudioMode());
+		new MVCController(checkBoxIqReplayBurstCapture, hRF.isIqReplayBurstCaptureEnabled());
 		
 		
 		new MVCController(chckbxDatestamp, hRF.isDatestampVisible());
@@ -1150,7 +1155,6 @@ public class HackRFSweepSettingsUI extends JPanel
 			}
 			@Override public void hardwareStatusChanged(boolean hardwareSendingData)
 			{
-				txtHackrfConnected.setText("HW "+(hardwareSendingData ? "connected":"disconnected"));
 			}
 		});;
 
@@ -1166,8 +1170,21 @@ public class HackRFSweepSettingsUI extends JPanel
 		setLiveControlsEnabled(!playingSpectrum);
 		String replayType = hRF.getReplayType().getValue();
 		boolean iqReplay = playingSpectrum && ("WAV".equals(replayType) || "RAW".equals(replayType));
-		separatorIqReplayAudio.setVisible(iqReplay);
+		lblGain.setVisible(!iqReplay);
+		lblGainValue.setVisible(!iqReplay);
+		sliderGain.setVisible(!iqReplay);
+		lblLnaGain.setVisible(!iqReplay);
+		sliderGainLNA.setVisible(!iqReplay);
+		lblVgaGain.setVisible(!iqReplay);
+		sliderGainVGA.setVisible(!iqReplay);
+		chckbxAntennaLNA.setVisible(true);
+		chckbxAntennaPower.setVisible(true);
+		chckbxRemoveSpurs.setVisible(true);
+		chckbxAntennaLNA.setEnabled(!iqReplay && !playingSpectrum);
+		chckbxAntennaPower.setEnabled(!iqReplay && !playingSpectrum);
+		chckbxRemoveSpurs.setEnabled(true);
 		panelIqReplayAudio.setVisible(iqReplay);
+		checkBoxIqReplayBurstCapture.setVisible(iqReplay);
 		revalidate();
 		repaint();
 		if (playingSpectrum) {
