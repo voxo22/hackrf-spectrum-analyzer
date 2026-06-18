@@ -3208,7 +3208,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						 */
 						if (parameterSpurRemoval.getValue()) {
 							long start	= System.nanoTime();
-							spurFilter.filterDataset();
+							IQReplayFile activeIqFile = playbackIqFile;
+							if (iqPlaybackMode && activeIqFile != null) {
+								spurFilter.filterCenterSpikeHz(activeIqFile.getCenterFrequencyHz());
+							} else {
+								spurFilter.filterDataset();
+							}
 							synchronized (perfWatch) {
 								perfWatch.spurFilter.addDrawingTime(System.nanoTime()-start);
 							}
