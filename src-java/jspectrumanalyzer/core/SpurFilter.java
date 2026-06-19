@@ -11,12 +11,13 @@ import java.util.LinkedList;
 public class SpurFilter
 {
 	private static final float			SPUR_MASK_EPSILON_DB		= 0.1f;
-	private static final float			SPUR_CLAMP_HEADROOM_DB		= 0.75f;
 	private static final float			SPUR_CLAMP_THRESHOLD_DB		= 1.0f;
 	private static final float			SPUR_EDGE_THRESHOLD_RATIO	= 0.5f;
 	private static final int				REFERENCE_MIN_BINS		= 4;
+	private static final int				CALIBRATION_WARMUP_SWEEPS	= 3;
 	private final DatasetSpectrum		avgSpectrum;
 	private boolean						calibrated		= false;
+	private int							calibrationWarmupRemaining = CALIBRATION_WARMUP_SWEEPS;
 	private int							debug			= 0;
 	/**
 	 * contains spur correction power values 
@@ -95,6 +96,7 @@ public class SpurFilter
 	public void recalibrate()
 	{
 		calibrated = false;
+		calibrationWarmupRemaining = CALIBRATION_WARMUP_SWEEPS;
 		filterInputs.clear();
 	}
 
@@ -163,6 +165,11 @@ public class SpurFilter
 	{
 		if (calibrated)
 			return;
+		if (calibrationWarmupRemaining > 0)
+		{
+			calibrationWarmupRemaining--;
+			return;
+		}
 		filterInputs.add(input.cloneMe());
 
 		//int validIterations	= 20;
@@ -213,31 +220,7 @@ public class SpurFilter
 			{
 				float currAvgVal = avgSpectrArray[i];
 
-				boolean triggered1 = false;
-				for (int j = i - maxPeakBins; j < i && triggered1 == false; j++)
-				{
-					//					if (currAvgVal - avgSpectrArray[j] >= peakThresholdAboveNoise)
-					if (currAvgVal - emaNoiseFloor >= peakThresholdAboveNoise)
-						triggered1 = true;
-				}
-
-				boolean triggered2 = false;
-				for (int j = i + 1; j <= i + maxPeakBins && triggered2 == false; j++)
-				{
-					//					if (currAvgVal - avgSpectrArray[j] >= peakThresholdAboveNoise)
-					if (currAvgVal - emaNoiseFloor >= peakThresholdAboveNoise)
-						triggered2 = true;
-				}
-
-				if (triggered1 && triggered2)
-				{
-					spurIndexes.add(i);
-				}
-				else
-				{
-					//update only with not spur values
-					emaNoiseFloor = EMA.calculate(currAvgVal, emaNoiseFloor, emaNoiseFloorOrder);
-				}
+				emaNoiseFloor = EMA.calculate(currAvgVal, emaNoiseFloor, emaNoiseFloorOrder);
 				noiseFloorArr[i] = (float) emaNoiseFloor;
 			}
 			Arrays.fill(noiseFloorArr, end, noiseFloorArr.length, (float) emaNoiseFloor);
@@ -268,6 +251,12 @@ public class SpurFilter
 				}
 			}
 			expandSpurIndexes(spurIndexes, avgSpectrArray, noiseFloorArr);
+			if (spurIndexes.isEmpty())
+			{
+				filterInputs.clear();
+				calibrated = false;
+				return;
+			}
 
 			Arrays.fill(filter.getSpectrumArray(), 0);
 			for (Integer s : spurIndexes)
@@ -286,16 +275,36 @@ public class SpurFilter
 	{
 		boolean[] spurMask = createSpurMask(spurIndexes, spectrum.length);
 		int guardBins = Math.max(1, maxPeakBins);
-		int referenceBins = Math.max(REFERENCE_MIN_BINS, maxPeakBins * 4);
+		int referenceBins = Math.max(REFERENCE_MIN_BINS, maxPeakBins * 2);
 		int end = spectrum.length - guardBins;
 		for (int i = guardBins; i < end; i++)
 		{
-			float localFloor = collectReferenceMedian(spectrum, spurMask, i, guardBins, referenceBins);
-			if (!Float.isNaN(localFloor) && spectrum[i] - localFloor >= peakThresholdAboveNoise)
+			float leftFloor = collectReferenceMedian(spectrum, (float[]) null,
+					i - guardBins - 1, -1, referenceBins);
+			float rightFloor = collectReferenceMedian(spectrum, (float[]) null,
+					i + guardBins + 1, 1, referenceBins);
+			float localFloor = Math.max(leftFloor, rightFloor);
+			if (!Float.isNaN(localFloor)
+					&& spectrum[i] - localFloor >= peakThresholdAboveNoise
+					&& isLocalMaximum(spectrum, i, maxPeakBins))
 			{
 				addSpurIndex(spurIndexes, spurMask, i);
 			}
 		}
+	}
+
+	private boolean isLocalMaximum(float[] spectrum, int index, int radius)
+	{
+		int start = Math.max(0, index - radius);
+		int end = Math.min(spectrum.length - 1, index + radius);
+		for (int i = start; i <= end; i++)
+		{
+			if (spectrum[i] > spectrum[index])
+			{
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private void expandSpurIndexes(LinkedList<Integer> spurIndexes, float[] avgSpectrArray, float[] noiseFloorArr)
@@ -445,10 +454,8 @@ public class SpurFilter
 
 	private void smoothSpurGroup(float[] input, float[] filterSpectrum, int start, int end)
 	{
-		int guardBins = Math.max(1, maxPeakBins / 2);
-		int referenceBins = Math.max(REFERENCE_MIN_BINS, maxPeakBins * 4);
-		float leftFloor = collectReferenceMedian(input, filterSpectrum, start - guardBins - 1, -1, referenceBins);
-		float rightFloor = collectReferenceMedian(input, filterSpectrum, end + guardBins + 1, 1, referenceBins);
+		float leftFloor = collectNearestReference(input, filterSpectrum, start - 1, -1);
+		float rightFloor = collectNearestReference(input, filterSpectrum, end + 1, 1);
 
 		if (Float.isNaN(leftFloor) && Float.isNaN(rightFloor))
 		{
@@ -468,12 +475,20 @@ public class SpurFilter
 		{
 			float fraction = (index - start + 1) / (float) (width + 1);
 			float localFloor = leftFloor + (rightFloor - leftFloor) * fraction;
-			float clampLevel = localFloor + SPUR_CLAMP_HEADROOM_DB;
-			if (input[index] > clampLevel + SPUR_CLAMP_THRESHOLD_DB)
+			input[index] = localFloor;
+		}
+	}
+
+	private float collectNearestReference(float[] input, float[] filterSpectrum, int start, int direction)
+	{
+		for (int index = start; index >= 0 && index < input.length; index += direction)
+		{
+			if (!isSpurBin(filterSpectrum, index) && !Float.isNaN(input[index]) && !Float.isInfinite(input[index]))
 			{
-				input[index] = clampLevel;
+				return input[index];
 			}
 		}
+		return Float.NaN;
 	}
 
 	private boolean isSpurBin(float[] filterSpectrum, int index)
