@@ -8,11 +8,11 @@ import com.sun.jna.Pointer;
 
 import hackrfiq.HackRFIQLibrary;
 import hackrfiq.HackRFIQLibrary.hackrf_iq_callback;
+import hackrfiq.HackRFIQLibrary.hackrf_iq_tx_callback;
 
 public class HackRFIQNativeBridge {
 	public static final String JNA_LIBRARY_NAME = "hackrf-iq";
 	public static final NativeLibrary JNA_NATIVE_LIB;
-
 	static {
 		String pathPrefix = "./" + Platform.RESOURCE_PREFIX + "/";
 		System.setProperty("jna.boot.library.path", pathPrefix);
@@ -43,5 +43,43 @@ public class HackRFIQNativeBridge {
 
 	public static void stop() {
 		HackRFIQLibrary.hackrf_iq_lib_stop();
+	}
+
+	public static synchronized int startTx(HackRFIQTxDataProvider dataProvider, long centerFreqHz, int sampleRateHz,
+			int basebandFilterHz, int txVgaGain, boolean ampEnable) {
+		hackrf_iq_tx_callback callback = new hackrf_iq_tx_callback() {
+			private byte[] buffer = new byte[0];
+
+			@Override
+			public int apply(int requestedLength, Pointer iqData) {
+				try {
+					if (requestedLength <= 0 || iqData == null) {
+						return -1;
+					}
+				if (buffer.length < requestedLength) {
+					buffer = new byte[requestedLength];
+				}
+					int copied = dataProvider.fillTxBuffer(buffer, requestedLength);
+					if (copied <= 0) {
+						return -1;
+					}
+					iqData.write(0, buffer, 0, Math.min(copied, requestedLength));
+					return copied;
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					return -1;
+				} catch (RuntimeException e) {
+					return -1;
+				}
+			}
+		};
+		Native.setCallbackThreadInitializer(callback, new CallbackThreadInitializer(true));
+
+		return HackRFIQLibrary.hackrf_iq_lib_start_tx(callback, centerFreqHz, sampleRateHz, basebandFilterHz,
+				txVgaGain, ampEnable ? 1 : 0);
+	}
+
+	public static void stopTx() {
+		HackRFIQLibrary.hackrf_iq_lib_stop_tx();
 	}
 }

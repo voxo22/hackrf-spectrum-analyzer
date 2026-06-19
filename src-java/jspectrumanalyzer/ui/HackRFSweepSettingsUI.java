@@ -119,7 +119,14 @@ public class HackRFSweepSettingsUI extends JPanel
 	private JCheckBox checkBoxIqReplayAudio;
 	private JSlider sliderIqReplayAudioVolume;
 	private JComboBox<String> comboBoxIqReplayAudioMode;
+	private JPanel panelIqReplayOptions;
 	private JCheckBox checkBoxIqReplayBurstCapture;
+	private JCheckBox checkBoxIqReplayTxCustomFrequency;
+	private JPanel panelIqReplayTx;
+	private JCheckBox checkBoxIqReplayTx;
+	private JTextField textFieldIqReplayTxCenter;
+	private JSlider sliderIqReplayTxPower;
+	private JLabel labelIqReplayTxPower;
 	private JLabel lblGain;
 	private JLabel lblGainValue;
 	private JLabel lblLnaGain;
@@ -623,12 +630,49 @@ public class HackRFSweepSettingsUI extends JPanel
 			tab1.add(panelIqReplayAudio, "cell 0 2,growx,pushx,hidemode 3");
 			panelIqReplayAudio.setVisible(false);
 
-			checkBoxIqReplayBurstCapture = new JCheckBox(" Burst capture");
+			panelIqReplayOptions = new JPanel(new BorderLayout(3, 0));
+			panelIqReplayOptions.setBackground(Color.BLACK);
+			checkBoxIqReplayBurstCapture = new JCheckBox(" Burst det");
 			checkBoxIqReplayBurstCapture.setHorizontalTextPosition(SwingConstants.TRAILING);
 			checkBoxIqReplayBurstCapture.setForeground(Color.WHITE);
 			checkBoxIqReplayBurstCapture.setBackground(Color.BLACK);
-			tab1.add(checkBoxIqReplayBurstCapture, "cell 0 4,growx,pushx,alignx left,hidemode 3");
-			checkBoxIqReplayBurstCapture.setVisible(false);
+			checkBoxIqReplayTxCustomFrequency = new JCheckBox(" Custom freq");
+			checkBoxIqReplayTxCustomFrequency.setHorizontalTextPosition(SwingConstants.TRAILING);
+			checkBoxIqReplayTxCustomFrequency.setForeground(Color.WHITE);
+			checkBoxIqReplayTxCustomFrequency.setBackground(Color.BLACK);
+			panelIqReplayOptions.add(checkBoxIqReplayBurstCapture, BorderLayout.WEST);
+			panelIqReplayOptions.add(checkBoxIqReplayTxCustomFrequency, BorderLayout.EAST);
+			tab1.add(panelIqReplayOptions, "cell 0 4,growx,pushx,hidemode 3");
+			panelIqReplayOptions.setVisible(false);
+
+			panelIqReplayTx = new JPanel(new BorderLayout(3, 0));
+			panelIqReplayTx.setBackground(Color.BLACK);
+			checkBoxIqReplayTx = new JCheckBox("TX");
+			checkBoxIqReplayTx.setForeground(Color.WHITE);
+			checkBoxIqReplayTx.setBackground(Color.BLACK);
+			checkBoxIqReplayTx.setMargin(new java.awt.Insets(0, 0, 0, 0));
+			textFieldIqReplayTxCenter = new JTextField("", 7);
+			textFieldIqReplayTxCenter.setFont(new Font("Monospaced", Font.BOLD, 14));
+			textFieldIqReplayTxCenter.setForeground(Color.WHITE);
+			textFieldIqReplayTxCenter.setBackground(Color.BLACK);
+			textFieldIqReplayTxCenter.setCaretColor(Color.WHITE);
+			textFieldIqReplayTxCenter.setHorizontalAlignment(JTextField.RIGHT);
+			sliderIqReplayTxPower = new JSlider(0, 47, 0);
+			sliderIqReplayTxPower.setForeground(Color.WHITE);
+			sliderIqReplayTxPower.setBackground(Color.BLACK);
+			compactSlider(sliderIqReplayTxPower, new Dimension(40, 16));
+			labelIqReplayTxPower = new JLabel("0");
+			labelIqReplayTxPower.setForeground(Color.WHITE);
+			labelIqReplayTxPower.setPreferredSize(new Dimension(18, 18));
+			JPanel panelIqReplayTxPower = new JPanel(new BorderLayout(2, 0));
+			panelIqReplayTxPower.setBackground(Color.BLACK);
+			panelIqReplayTxPower.add(sliderIqReplayTxPower, BorderLayout.CENTER);
+			panelIqReplayTxPower.add(labelIqReplayTxPower, BorderLayout.EAST);
+			panelIqReplayTx.add(checkBoxIqReplayTx, BorderLayout.WEST);
+			panelIqReplayTx.add(panelIqReplayTxPower, BorderLayout.CENTER);
+			panelIqReplayTx.add(textFieldIqReplayTxCenter, BorderLayout.EAST);
+			tab1.add(panelIqReplayTx, "cell 0 5,growx,pushx,hidemode 3");
+			panelIqReplayTx.setVisible(false);
 		}
 		//tab2
 		{
@@ -1117,6 +1161,13 @@ public class HackRFSweepSettingsUI extends JPanel
 		new MVCController(sliderIqReplayAudioVolume, hRF.getIqReplayAudioVolume());
 		new MVCController(comboBoxIqReplayAudioMode, hRF.getIqReplayAudioMode());
 		new MVCController(checkBoxIqReplayBurstCapture, hRF.isIqReplayBurstCaptureEnabled());
+		new MVCController(checkBoxIqReplayTxCustomFrequency, hRF.isIqReplayTxCustomFrequencyEnabled());
+		new MVCController(checkBoxIqReplayTx, hRF.isIqReplayTxEnabled());
+		new MVCController(textFieldIqReplayTxCenter, hRF.getIqReplayTxCenter());
+		new MVCController(sliderIqReplayTxPower, hRF.getIqReplayTxPower());
+		hRF.getIqReplayTxPower().addListener((power) -> SwingUtilities.invokeLater(() ->
+				labelIqReplayTxPower.setText(Integer.toString(power))));
+		hRF.getIqReplayTxPower().callObservers();
 		
 		
 		new MVCController(chckbxDatestamp, hRF.isDatestampVisible());
@@ -1180,11 +1231,12 @@ public class HackRFSweepSettingsUI extends JPanel
 		chckbxAntennaLNA.setVisible(true);
 		chckbxAntennaPower.setVisible(true);
 		chckbxRemoveSpurs.setVisible(true);
-		chckbxAntennaLNA.setEnabled(!iqReplay && !playingSpectrum);
+		chckbxAntennaLNA.setEnabled(iqReplay || !playingSpectrum);
 		chckbxAntennaPower.setEnabled(!iqReplay && !playingSpectrum);
 		chckbxRemoveSpurs.setEnabled(true);
 		panelIqReplayAudio.setVisible(iqReplay);
-		checkBoxIqReplayBurstCapture.setVisible(iqReplay);
+		panelIqReplayOptions.setVisible(iqReplay);
+		panelIqReplayTx.setVisible(iqReplay);
 		revalidate();
 		repaint();
 		if (playingSpectrum) {
@@ -1256,7 +1308,15 @@ public class HackRFSweepSettingsUI extends JPanel
 				slider_PowerFluxCal,
 				spinnerAvgIterations,
 				sliderAvgOffset,
-				chckbxFilterSpectrum
+				chckbxFilterSpectrum,
+				checkBoxIqReplayAudio,
+				sliderIqReplayAudioVolume,
+				comboBoxIqReplayAudioMode,
+				checkBoxIqReplayBurstCapture,
+				checkBoxIqReplayTxCustomFrequency,
+				checkBoxIqReplayTx,
+				textFieldIqReplayTxCenter,
+				sliderIqReplayTxPower
 		};
 		for (Component component : iqReplayControls) {
 			setComponentTreeEnabled(component, enabled);

@@ -101,6 +101,8 @@ import jspectrumanalyzer.core.SpectrumRecording;
 import jspectrumanalyzer.core.SpurFilter;
 import jspectrumanalyzer.core.jfc.XYSeriesCollectionImmutable;
 import jspectrumanalyzer.core.jfc.XYSeriesImmutable;
+import jspectrumanalyzer.iq.HackRFIQNativeBridge;
+import jspectrumanalyzer.iq.HackRFIQTxDataProvider;
 import jspectrumanalyzer.iq.IQAnalyzerApp;
 import jspectrumanalyzer.iq.IQAudioOutput;
 import jspectrumanalyzer.iq.IQChannelProcessor;
@@ -123,6 +125,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private static final int IQ_REPLAY_FRAMES_PER_SECOND = 100;
 	private static final double IQ_REPLAY_MAX_VIEW_SPAN_MULTIPLIER = 10d;
 	private static final int IQ_REPLAY_MIN_TARGET_RBW_HZ = 50;
+	private static final int IQ_REPLAY_TX_MIN_SAMPLE_RATE_HZ = 2_000_000;
 
 	private enum ReplayType {
 		DATA, WAV, RAW
@@ -353,6 +356,227 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					((AutoCloseable) processor).close();
 				} catch (Exception ignored) {
 				}
+			}
+		}
+	}
+
+	private static class IQReplayTxFeed implements HackRFIQTxDataProvider, AutoCloseable {
+		private static final int SOURCE_BUFFER_BYTES = 262_144;
+		private static final int PREFETCH_BLOCKS = 24;
+		private static final int PREFETCH_START_BLOCKS = 8;
+
+		private static class InputBlock {
+			final byte[] data = new byte[SOURCE_BUFFER_BYTES];
+			int length;
+			long generation;
+		}
+
+		final IQReplayFile txFile;
+		final int sourceSampleRateHz;
+		final int txSampleRateHz;
+		final ArrayBlockingQueue<InputBlock> sourceQueue = new ArrayBlockingQueue<>(PREFETCH_BLOCKS);
+		final ArrayBlockingQueue<InputBlock> availableBlocks = new ArrayBlockingQueue<>(PREFETCH_BLOCKS + 1);
+		volatile boolean running = true;
+		volatile long streamGeneration;
+		InputBlock activeBlock;
+		int sourceOffset;
+		int currentI;
+		int currentQ;
+		boolean haveCurrentSample;
+		long resamplePhase;
+		Thread readerWorker;
+		Thread worker;
+
+		IQReplayTxFeed(File sourceFile, long startMillis, long centerFrequencyHz, int txVgaGain, boolean ampEnable)
+				throws IOException {
+			this.txFile = IQReplayFile.open(sourceFile);
+			this.sourceSampleRateHz = Math.max(1, txFile.getSampleRateHz());
+			this.txSampleRateHz = Math.max(IQ_REPLAY_TX_MIN_SAMPLE_RATE_HZ, this.sourceSampleRateHz);
+			txFile.seekMillis(startMillis);
+			readerWorker = new Thread(this::prefetchLoop, "iq-replay-tx-reader");
+			readerWorker.setDaemon(true);
+			readerWorker.start();
+			worker = new Thread(() -> {
+				try {
+					while (running && sourceQueue.size() < PREFETCH_START_BLOCKS) {
+						Thread.sleep(2);
+					}
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					return;
+				}
+				if (!running) {
+					return;
+				}
+				int result = HackRFIQNativeBridge.startTx(this, centerFrequencyHz, txSampleRateHz, 0, txVgaGain,
+						ampEnable);
+				if (result != 0 && running) {
+					System.err.println("IQ replay TX failed: native error " + result);
+				}
+				running = false;
+			}, "iq-replay-tx");
+			worker.setDaemon(true);
+			worker.start();
+		}
+
+		private void prefetchLoop() {
+			while (running) {
+				InputBlock block = availableBlocks.poll();
+				if (block == null) {
+					block = new InputBlock();
+				}
+				long generation = streamGeneration;
+				try {
+					block.length = txFile.readLoopedSigned(block.data);
+					block.generation = generation;
+					if (generation != streamGeneration) {
+						availableBlocks.offer(block);
+						continue;
+					}
+					sourceQueue.put(block);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					return;
+				} catch (IOException e) {
+					System.err.println("IQ replay TX prefetch failed: " + e.getMessage());
+					running = false;
+					return;
+				}
+			}
+		}
+
+		synchronized void seekMillis(long positionMillis) {
+			try {
+				streamGeneration++;
+				txFile.seekMillis(positionMillis);
+				InputBlock queued;
+				while ((queued = sourceQueue.poll()) != null) {
+					availableBlocks.offer(queued);
+				}
+				if (activeBlock != null) {
+					availableBlocks.offer(activeBlock);
+					activeBlock = null;
+				}
+				sourceOffset = 0;
+				haveCurrentSample = false;
+				resamplePhase = 0;
+			} catch (IOException e) {
+				System.err.println("IQ replay TX seek failed: " + e.getMessage());
+			}
+		}
+
+		@Override
+		public synchronized int fillTxBuffer(byte[] output, int requestedLength) throws InterruptedException {
+			return fillTxBufferInternal(output, requestedLength);
+		}
+
+		private int fillTxBufferInternal(byte[] output, int requestedLength) throws InterruptedException {
+			if (!running || output == null || requestedLength <= 0) {
+				return -1;
+			}
+			int requestedEvenLength = Math.min(output.length, requestedLength) & ~1;
+			if (sourceSampleRateHz == txSampleRateHz) {
+				return fillPassthroughBuffer(output, requestedEvenLength);
+			}
+			int copied = 0;
+			if (!haveCurrentSample && !loadNextInputSample()) {
+				return -1;
+			}
+			while (copied + 1 < requestedEvenLength && running) {
+				output[copied++] = (byte) currentI;
+				output[copied++] = (byte) currentQ;
+				resamplePhase += sourceSampleRateHz;
+				while (resamplePhase >= txSampleRateHz) {
+					resamplePhase -= txSampleRateHz;
+					if (!loadNextInputSample()) {
+						return copied;
+					}
+				}
+			}
+			return copied;
+		}
+
+		private int fillPassthroughBuffer(byte[] output, int requestedLength) throws InterruptedException {
+			int copied = 0;
+			while (copied < requestedLength && running) {
+				if (!ensureActiveBlock()) {
+					return copied > 0 ? copied : -1;
+				}
+				int chunk = Math.min(requestedLength - copied, activeBlock.length - sourceOffset);
+				System.arraycopy(activeBlock.data, sourceOffset, output, copied, chunk);
+				sourceOffset += chunk;
+				copied += chunk;
+			}
+			return copied;
+		}
+
+		private boolean ensureActiveBlock() throws InterruptedException {
+			while (running) {
+				if (activeBlock != null && sourceOffset < activeBlock.length) {
+					return true;
+				}
+				if (activeBlock != null) {
+					availableBlocks.offer(activeBlock);
+					activeBlock = null;
+				}
+				InputBlock block = sourceQueue.take();
+				if (block.generation != streamGeneration) {
+					availableBlocks.offer(block);
+					continue;
+				}
+				activeBlock = block;
+				sourceOffset = 0;
+				return activeBlock.length >= 2;
+			}
+			return false;
+		}
+
+		private boolean loadNextInputSample() throws InterruptedException {
+			if (!ensureActiveBlock()) {
+				return false;
+			}
+			if (sourceOffset + 1 < activeBlock.length) {
+				currentI = activeBlock.data[sourceOffset++];
+				currentQ = activeBlock.data[sourceOffset++];
+				haveCurrentSample = true;
+				return true;
+			}
+			return false;
+		}
+
+		@Override
+		public void close() {
+			running = false;
+			sourceQueue.clear();
+			InputBlock stopBlock = new InputBlock();
+			stopBlock.generation = streamGeneration;
+			sourceQueue.offer(stopBlock);
+			Thread activeReader = readerWorker;
+			readerWorker = null;
+			if (activeReader != null) {
+				activeReader.interrupt();
+			}
+			HackRFIQNativeBridge.stopTx();
+			Thread activeWorker = worker;
+			worker = null;
+			if (activeWorker != null) {
+				try {
+					activeWorker.join(1000);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+			}
+			if (activeReader != null) {
+				try {
+					activeReader.join(1000);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+			}
+			try {
+				txFile.close();
+			} catch (IOException e) {
+				System.err.println("IQ replay TX close failed: " + e.getMessage());
 			}
 		}
 	}
@@ -877,6 +1101,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private ModelValueInt							parameterIqReplayAudioVolume		= new ModelValueInt("IQ Replay Audio Volume", 80, 1, 0, 100);
 	private ModelValue<String>						parameterIqReplayAudioMode			= new ModelValue<>("IQ Replay Audio Mode", "AM");
 	private ModelValueBoolean						parameterIqReplayBurstCapture		= new ModelValueBoolean("IQ Replay Burst Capture", false);
+	private ModelValueBoolean						parameterIqReplayTxEnabled			= new ModelValueBoolean("IQ Replay TX", false);
+	private ModelValueInt							parameterIqReplayTxPower			= new ModelValueInt("IQ Replay TX Power", 0, 1, 0, 47);
+	private ModelValue<String>						parameterIqReplayTxCenter			= new ModelValue<>("IQ Replay TX Center", "");
+	private ModelValueBoolean						parameterIqReplayTxCustomFrequency	= new ModelValueBoolean("IQ Replay TX Custom Frequency", false);
 	private ArrayList<HackRFEventListener>			hRFlisteners						= new ArrayList<>();
 	private ArrayBlockingQueue<FFTBins>				hwProcessingQueue					= new ArrayBlockingQueue<>(1000);
 	private BufferedImage							imageFrequencyAllocationTableBands	= null;
@@ -966,6 +1194,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private final AtomicInteger						playbackIqAnalyzerWindows			= new AtomicInteger();
 	private final IQAudioOutput						playbackIqAudio					= new IQAudioOutput();
 	private final AtomicLong						playbackIqAudioConfiguration		= new AtomicLong();
+	private final AtomicLong						playbackIqTxConfiguration			= new AtomicLong();
 	private volatile IQReplayAudioFeed				playbackIqAudioFeed;
 	private volatile IQAudioOutput.Mode				playbackIqAudioMode				= IQAudioOutput.Mode.OFF;
 	private volatile int							playbackIqAudioSampleRateHz		= 0;
@@ -1255,6 +1484,14 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				parameterIqReplayAudioMode.setValue(p.getProperty("IqReplayAudioMode"));
 			if (p.getProperty("IqReplayBurstCapture") != null)
 				parameterIqReplayBurstCapture.setValue(Boolean.parseBoolean(p.getProperty("IqReplayBurstCapture")));
+			if (p.getProperty("IqReplayTxPower") != null)
+				parameterIqReplayTxPower.setValue(Math.max(0,
+						Math.min(47, Integer.parseInt(p.getProperty("IqReplayTxPower")))));
+			if (p.getProperty("IqReplayTxCenter") != null)
+				parameterIqReplayTxCenter.setValue(p.getProperty("IqReplayTxCenter"));
+			if (p.getProperty("IqReplayTxCustomFrequency") != null)
+				parameterIqReplayTxCustomFrequency.setValue(Boolean.parseBoolean(
+						p.getProperty("IqReplayTxCustomFrequency")));
 			if (p.getProperty("Samples") != null) parameterSamples.setValue(Integer.parseInt(p.getProperty("Samples")));
 			if (p.getProperty("GainTotal") != null) parameterGainTotal.setValue(Integer.parseInt(p.getProperty("GainTotal")));
 			if (p.getProperty("GainLNA") != null) parameterGainLNA.setValue(Integer.parseInt(p.getProperty("GainLNA")));
@@ -1339,6 +1576,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			p.setProperty("IqReplayAudioVolume", Integer.toString(parameterIqReplayAudioVolume.getValue()));
 			p.setProperty("IqReplayAudioMode", parameterIqReplayAudioMode.getValue());
 			p.setProperty("IqReplayBurstCapture", Boolean.toString(parameterIqReplayBurstCapture.getValue()));
+			p.setProperty("IqReplayTxPower", Integer.toString(parameterIqReplayTxPower.getValue()));
+			p.setProperty("IqReplayTxCenter", parameterIqReplayTxCenter.getValue());
+			p.setProperty("IqReplayTxCustomFrequency",
+					Boolean.toString(parameterIqReplayTxCustomFrequency.getValue()));
 			p.setProperty("Samples", Integer.toString(parameterSamples.getValue()));
 			p.setProperty("GainTotal", Integer.toString(parameterGainTotal.getValue()));
 			p.setProperty("GainLNA", Integer.toString(parameterGainLNA.getValue()));
@@ -1571,6 +1812,26 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	@Override
 	public ModelValueBoolean isIqReplayBurstCaptureEnabled() {
 		return parameterIqReplayBurstCapture;
+	}
+
+	@Override
+	public ModelValueBoolean isIqReplayTxEnabled() {
+		return parameterIqReplayTxEnabled;
+	}
+
+	@Override
+	public ModelValueInt getIqReplayTxPower() {
+		return parameterIqReplayTxPower;
+	}
+
+	@Override
+	public ModelValue<String> getIqReplayTxCenter() {
+		return parameterIqReplayTxCenter;
+	}
+
+	@Override
+	public ModelValueBoolean isIqReplayTxCustomFrequencyEnabled() {
+		return parameterIqReplayTxCustomFrequency;
 	}
 
 	@Override
@@ -2452,6 +2713,69 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		return String.format(new Locale("sk", "SK"), "%.2f", frequencyMHz);
 	}
 
+	private long parseFrequencyHz(String value) {
+		if (value == null) {
+			throw new NumberFormatException("Missing frequency");
+		}
+		String text = value.trim().toLowerCase(Locale.ROOT).replace(" ", "");
+		if (text.isEmpty()) {
+			throw new NumberFormatException("Missing frequency");
+		}
+		double multiplier = 1_000_000d;
+		if (text.endsWith("ghz")) {
+			multiplier = 1_000_000_000d;
+			text = text.substring(0, text.length() - 3);
+		} else if (text.endsWith("mhz")) {
+			multiplier = 1_000_000d;
+			text = text.substring(0, text.length() - 3);
+		} else if (text.endsWith("khz")) {
+			multiplier = 1_000d;
+			text = text.substring(0, text.length() - 3);
+		} else if (text.endsWith("hz")) {
+			multiplier = 1d;
+			text = text.substring(0, text.length() - 2);
+		} else if (text.endsWith("g")) {
+			multiplier = 1_000_000_000d;
+			text = text.substring(0, text.length() - 1);
+		} else if (text.endsWith("m")) {
+			multiplier = 1_000_000d;
+			text = text.substring(0, text.length() - 1);
+		} else if (text.endsWith("k")) {
+			multiplier = 1_000d;
+			text = text.substring(0, text.length() - 1);
+		}
+		return Math.max(0L, Math.round(Double.parseDouble(text) * multiplier));
+	}
+
+	private String formatFrequencyMHz(long frequencyHz) {
+		return String.format(Locale.US, "%.1f", frequencyHz / 1_000_000d);
+	}
+
+	private void handleIqReplayTxCenterChanged(String center) {
+		IQReplayFile iqFile = playbackIqFile;
+		if (iqFile != null && isIqReplayActive() && isZeroFrequencyText(center)) {
+			parameterIqReplayTxCenter.setValue(formatFrequencyMHz(iqFile.getCenterFrequencyHz()));
+			return;
+		}
+		playbackIqTxConfiguration.incrementAndGet();
+	}
+
+	private void handleIqReplayTxCustomFrequencyChanged(boolean customFrequency) {
+		IQReplayFile iqFile = playbackIqFile;
+		if (!customFrequency && iqFile != null && isIqReplayActive()) {
+			parameterIqReplayTxCenter.setValue(formatFrequencyMHz(iqFile.getCenterFrequencyHz()));
+		}
+		playbackIqTxConfiguration.incrementAndGet();
+	}
+
+	private boolean isZeroFrequencyText(String value) {
+		try {
+			return parseFrequencyHz(value) == 0;
+		} catch (RuntimeException e) {
+			return false;
+		}
+	}
+
 	private void addTriggerEvent(TriggerEvent event, TriggerSettings settings) {
 		addTriggerEvent(event, settings, true, true);
 	}
@@ -2590,6 +2914,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			stopSpectrumPlayback = true;
 			return;
 		}
+		parameterIqReplayTxEnabled.setValue(false);
 		if (parameterIsRecordedSpectrum.getValue()) {
 			parameterIsPlayingSpectrum.setValue(false);
 			return;
@@ -2711,6 +3036,11 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			playbackIqFile = iqFile;
 			playbackDurationMillis = iqFile.getDurationMillis();
 			playbackCurrentEpochMillis = file.lastModified();
+			if (!parameterIqReplayTxCustomFrequency.getValue()
+					|| parameterIqReplayTxCenter.getValue() == null || parameterIqReplayTxCenter.getValue().trim().isEmpty()
+					|| isZeroFrequencyText(parameterIqReplayTxCenter.getValue())) {
+				parameterIqReplayTxCenter.setValue(formatFrequencyMHz(iqFile.getCenterFrequencyHz()));
+			}
 			updateFrequencySelectorForIqPlayback(iqFile);
 			resetTriggerRangeToActiveFullRange();
 			redrawFrequencySpectrumTable();
@@ -2723,14 +3053,19 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			int lastFftSize = 0;
 			boolean lastBurstCapture = false;
 			IQReplaySpectrumFeed spectrumFeed = null;
+			IQReplayTxFeed txFeed = null;
 			byte[] iqData = new byte[0];
 			long playbackDeadlineNanos = System.nanoTime();
 			long appliedAudioConfiguration = -1;
+			long appliedTxConfiguration = -1;
 			try {
 				while (!stopSpectrumPlayback) {
 					long seek = takePlaybackSeekRequest();
 					if (seek >= 0) {
 						iqFile.seekMillis(seek);
+						if (txFeed != null) {
+							txFeed.seekMillis(seek);
+						}
 						if (spectrumFeed != null) {
 							spectrumFeed.clearPending();
 						}
@@ -2747,6 +3082,29 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					if (requestedAudioConfiguration != appliedAudioConfiguration) {
 						configureIqReplayAudio(iqFile);
 						appliedAudioConfiguration = requestedAudioConfiguration;
+					}
+					long requestedTxConfiguration = playbackIqTxConfiguration.get();
+					if (requestedTxConfiguration != appliedTxConfiguration) {
+						if (txFeed != null) {
+							txFeed.close();
+							txFeed = null;
+						}
+						if (parameterIqReplayTxEnabled.getValue()) {
+							try {
+								long txCenterHz = parseFrequencyHz(parameterIqReplayTxCenter.getValue());
+								if (txCenterHz <= 0) {
+									throw new NumberFormatException("TX center must be non-zero");
+								}
+								txFeed = new IQReplayTxFeed(file, playbackPositionMillis, txCenterHz,
+										parameterIqReplayTxPower.getValue(), parameterAntennaLNA.getValue());
+							} catch (IOException | RuntimeException e) {
+								parameterIqReplayTxEnabled.setValue(false);
+								if (labelMessages != null) {
+									labelMessages.setText("IQ TX invalid center");
+								}
+							}
+						}
+						appliedTxConfiguration = playbackIqTxConfiguration.get();
 					}
 					int fftSize = IQSpectrumFrame.chooseSize(sampleRateHz, parameterIqReplayRbwHz.getValue());
 					boolean burstCapture = parameterIqReplayBurstCapture.getValue();
@@ -2790,6 +3148,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				if (spectrumFeed != null) {
 					spectrumFeed.close();
 				}
+				if (txFeed != null) {
+					txFeed.close();
+				}
 			}
 		}
 	}
@@ -2797,10 +3158,24 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private synchronized void applyIqReplayAudioSettings() {
 		IQReplayFile iqFile = playbackIqFile;
 		boolean enabled = parameterIqReplayAudioEnabled.getValue();
+		ensureIqReplayTxProcessingLoad();
 		playbackIqAudio.setVolumePercent(parameterIqReplayAudioVolume.getValue());
 		playbackIqAudioConfiguration.incrementAndGet();
 		if (!enabled || iqFile == null || !isIqReplayActive() || playbackIqAnalyzerWindows.get() > 0) {
 			stopIqReplayAudio();
+		}
+	}
+
+	private void applyIqReplayTxEnabled() {
+		ensureIqReplayTxProcessingLoad();
+		playbackIqTxConfiguration.incrementAndGet();
+	}
+
+	private void ensureIqReplayTxProcessingLoad() {
+		if (parameterIqReplayTxEnabled.getValue()
+				&& !parameterIqReplayAudioEnabled.getValue()
+				&& !parameterIqReplayBurstCapture.getValue()) {
+			parameterIqReplayBurstCapture.setValue(true);
 		}
 	}
 
@@ -4961,6 +5336,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		parameterIqReplayAudioEnabled.addListener(this::applyIqReplayAudioSettings);
 		parameterIqReplayAudioMode.addListener(this::applyIqReplayAudioSettings);
 		parameterIqReplayAudioVolume.addListener((volume) -> playbackIqAudio.setVolumePercent(volume));
+		parameterIqReplayBurstCapture.addListener(this::ensureIqReplayTxProcessingLoad);
+		parameterIqReplayTxEnabled.addListener(this::applyIqReplayTxEnabled);
+		parameterIqReplayTxPower.addListener((power) -> playbackIqTxConfiguration.incrementAndGet());
+		parameterIqReplayTxCenter.addListener(this::handleIqReplayTxCenterChanged);
+		parameterIqReplayTxCustomFrequency.addListener(this::handleIqReplayTxCustomFrequencyChanged);
+		parameterAntennaLNA.addListener(() -> playbackIqTxConfiguration.incrementAndGet());
 
 		parameterGainTotal.addListener((gainTotal) -> {
 			if (flagManualGain) //flag is being adjusted manually by LNA or VGA, do not recalculate the gains

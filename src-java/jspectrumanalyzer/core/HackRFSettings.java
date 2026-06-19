@@ -117,6 +117,14 @@ public interface HackRFSettings {
 	public ModelValue<String> getIqReplayAudioMode();
 
 	public ModelValueBoolean isIqReplayBurstCaptureEnabled();
+
+	public ModelValueBoolean isIqReplayTxEnabled();
+
+	public ModelValueInt getIqReplayTxPower();
+
+	public ModelValue<String> getIqReplayTxCenter();
+
+	public ModelValueBoolean isIqReplayTxCustomFrequencyEnabled();
 	
 	public ModelValueBoolean isChartsRealtimeVisible();
 	
