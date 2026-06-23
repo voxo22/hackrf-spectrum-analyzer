@@ -17,10 +17,13 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 import javax.swing.JButton;
 import javax.swing.BoxLayout;
@@ -130,6 +133,7 @@ public class IQAnalyzerApp {
 	private volatile long externalCenterFreqHz = DEFAULT_CENTER_FREQ_HZ;
 	private volatile int externalSampleRateHz = DEFAULT_SAMPLE_RATE_HZ;
 	private volatile int externalContentBandwidthHz = DEFAULT_SAMPLE_RATE_HZ;
+	private volatile LongSupplier recordingTimeMillisSupplier;
 	private boolean singleTriggerArmed = false;
 	private Long spectrumDragBaseOffsetHz = null;
 
@@ -224,7 +228,13 @@ public class IQAnalyzerApp {
 
 	public JFrame showExternal(long centerFreqHz, int sampleRateHz, long channelOffsetHz, int channelBandwidthHz,
 			Runnable closedCallback) {
+		return showExternal(centerFreqHz, sampleRateHz, channelOffsetHz, channelBandwidthHz, null, closedCallback);
+	}
+
+	public JFrame showExternal(long centerFreqHz, int sampleRateHz, long channelOffsetHz, int channelBandwidthHz,
+			LongSupplier recordingTimeMillisSupplier, Runnable closedCallback) {
 		externalSource = true;
+		this.recordingTimeMillisSupplier = recordingTimeMillisSupplier;
 		externalCenterFreqHz = centerFreqHz;
 		externalSampleRateHz = sampleRateHz;
 		externalContentBandwidthHz = channelBandwidthHz <= 0 ? sampleRateHz
@@ -1037,7 +1047,12 @@ public class IQAnalyzerApp {
 	private File createRecordingFile(String prefix, int bandwidthHz) {
 		long centerHz = getSelectedRecordingCenterFreqHz();
 		bandwidthHz = Math.max(1, bandwidthHz);
-		String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss"));
+		LongSupplier timeSupplier = recordingTimeMillisSupplier;
+		long timestampMillis = timeSupplier == null ? System.currentTimeMillis() : timeSupplier.getAsLong();
+		LocalDateTime recordingTime = timestampMillis > 0
+				? LocalDateTime.ofInstant(Instant.ofEpochMilli(timestampMillis), ZoneId.systemDefault())
+				: LocalDateTime.now();
+		String timestamp = recordingTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss"));
 		return new File(String.format(Locale.US, "# %s %dHz BW-%s %s.wav", prefix, centerHz,
 				formatRecordingBandwidth(bandwidthHz), timestamp));
 	}

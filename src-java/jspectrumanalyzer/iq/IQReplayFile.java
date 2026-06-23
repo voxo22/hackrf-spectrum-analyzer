@@ -4,6 +4,9 @@ import java.io.EOFException;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -18,6 +21,10 @@ public final class IQReplayFile implements AutoCloseable {
 	private static final Pattern RAW_CENTER_PATTERN = Pattern.compile("(?i)(\\d+(?:\\.\\d+)?)(kHz|Hz)");
 	private static final Pattern RAW_CENTER_PREFIX_PATTERN = Pattern.compile("^([0-9]+(?:\\.[0-9]+)?)_");
 	private static final Pattern RAW_BANDWIDTH_PATTERN = Pattern.compile("(?i)_([0-9]+(?:\\.[0-9]+)?)(k)?\\.pcm$");
+	private static final Pattern RECORDING_TIMESTAMP_PATTERN = Pattern.compile(
+			"(\\d{4}-\\d{2}-\\d{2} \\d{2}-\\d{2}-\\d{2})(?=\\.[^.]+$)");
+	private static final DateTimeFormatter RECORDING_TIMESTAMP_FORMAT =
+			DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss");
 
 	private final File file;
 	private final RandomAccessFile input;
@@ -58,6 +65,19 @@ public final class IQReplayFile implements AutoCloseable {
 			return openRaw(file);
 		}
 		throw new IOException("Unsupported IQ file extension");
+	}
+
+	public static long getRecordingStartEpochMillis(File file) {
+		Matcher matcher = RECORDING_TIMESTAMP_PATTERN.matcher(file.getName());
+		if (matcher.find()) {
+			try {
+				return LocalDateTime.parse(matcher.group(1), RECORDING_TIMESTAMP_FORMAT)
+						.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+			} catch (RuntimeException ignored) {
+				// Fall back to the file timestamp for recordings with an invalid date in their name.
+			}
+		}
+		return file.lastModified();
 	}
 
 	private static IQReplayFile openWav(File file) throws IOException {

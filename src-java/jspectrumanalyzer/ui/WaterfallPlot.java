@@ -1,6 +1,7 @@
 package jspectrumanalyzer.ui;
 
 import java.awt.Color;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
@@ -85,6 +86,9 @@ public class WaterfallPlot extends JPanel {
 			@Override
 			public void mouseMoved(MouseEvent e) {
 				displayMarker = false;
+				setCursor(isPlaybackSeekArea(e.getX(), e.getY())
+						? Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+						: Cursor.getDefaultCursor());
 				int x = e.getX();
 				if (x < chartXOffset || x > chartXOffset + chartWidth) {
 					return;
@@ -101,11 +105,7 @@ public class WaterfallPlot extends JPanel {
 		addMouseListener(new MouseAdapter() {
 			@Override
 			public void mouseClicked(MouseEvent e) {
-				if (!playbackVisible || playbackSeekListener == null)
-					return;
-				if (e.getX() < chartXOffset || e.getX() > chartXOffset + chartWidth)
-					return;
-				if (e.getY() < 0 || e.getY() > 32)
+				if (!isPlaybackSeekArea(e.getX(), e.getY()))
 					return;
 				double fraction = (e.getX() - chartXOffset) / (double) chartWidth;
 				playbackSeekListener.accept(Math.min(1d, Math.max(0d, fraction)));
@@ -114,8 +114,18 @@ public class WaterfallPlot extends JPanel {
 			@Override
 			public void mouseExited(MouseEvent e) {
 				displayMarker = false;
+				setCursor(Cursor.getDefaultCursor());
 			}
 		});
+	}
+
+	private boolean isPlaybackSeekArea(int x, int y) {
+		return playbackVisible
+				&& playbackSeekListener != null
+				&& x >= chartXOffset
+				&& x <= chartXOffset + chartWidth
+				&& y >= 0
+				&& y <= 32;
 	}
 
 	private EMA newDataTimeEMA =	 new EMA(100);

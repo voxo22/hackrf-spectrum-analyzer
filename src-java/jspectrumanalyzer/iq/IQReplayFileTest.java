@@ -3,6 +3,8 @@ package jspectrumanalyzer.iq;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 
 public final class IQReplayFileTest {
 	private IQReplayFileTest() {
@@ -14,6 +16,7 @@ public final class IQReplayFileTest {
 			throw new IOException("Cannot create test directory");
 		}
 		try {
+			testRecordingStartTime(directory);
 			testWav(directory);
 			testWav16(directory);
 			testRaw(directory);
@@ -29,6 +32,19 @@ public final class IQReplayFileTest {
 			deleteChildren(directory);
 			directory.delete();
 		}
+	}
+
+	private static void testRecordingStartTime(File directory) {
+		File timestamped = new File(directory, "# IQ 951800000Hz BW-2M 2026-06-21 14-25-36.wav");
+		long expected = LocalDateTime.of(2026, 6, 21, 14, 25, 36)
+				.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+		assertEquals(expected, IQReplayFile.getRecordingStartEpochMillis(timestamped),
+				"recording start parsed from filename");
+
+		File fallback = new File(directory, "capture.wav");
+		fallback.setLastModified(1_234_567_890L);
+		assertEquals(fallback.lastModified(), IQReplayFile.getRecordingStartEpochMillis(fallback),
+				"recording start falls back to file timestamp");
 	}
 
 	private static void testChannelProcessorContinuity() {

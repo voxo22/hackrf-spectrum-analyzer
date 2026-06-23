@@ -3033,9 +3033,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 	private void playIqRecording(File file) throws IOException, InterruptedException {
 		try (IQReplayFile iqFile = IQReplayFile.open(file)) {
+			long recordingStartEpochMillis = IQReplayFile.getRecordingStartEpochMillis(file);
 			playbackIqFile = iqFile;
 			playbackDurationMillis = iqFile.getDurationMillis();
-			playbackCurrentEpochMillis = file.lastModified();
+			playbackCurrentEpochMillis = recordingStartEpochMillis;
 			if (!parameterIqReplayTxCustomFrequency.getValue()
 					|| parameterIqReplayTxCenter.getValue() == null || parameterIqReplayTxCenter.getValue().trim().isEmpty()
 					|| isZeroFrequencyText(parameterIqReplayTxCenter.getValue())) {
@@ -3125,7 +3126,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					}
 					iqFile.readLoopedSigned(iqData);
 					playbackPositionMillis = iqFile.getPositionMillis();
-					playbackCurrentEpochMillis = file.lastModified() + playbackPositionMillis;
+					playbackCurrentEpochMillis = recordingStartEpochMillis + playbackPositionMillis;
 					waterfallPlot.setPlaybackStatus(true, playbackPositionMillis, playbackDurationMillis);
 					IQReplayAudioFeed audioFeed = playbackIqAudioFeed;
 					if (audioFeed != null) {
@@ -4435,6 +4436,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						bandwidthHz, outputRateHz);
 				playbackIqAnalyzers.add(feed);
 				analyzer.showExternal(centerHz, feed.outputSampleRateHz, 0, bandwidthHz,
+						() -> playbackCurrentEpochMillis,
 						() -> {
 							playbackIqAnalyzers.remove(feed);
 							feed.close();
