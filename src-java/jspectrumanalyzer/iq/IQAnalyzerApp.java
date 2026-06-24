@@ -43,7 +43,22 @@ import javax.swing.BorderFactory;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.TitledBorder;
 
+import jspectrumanalyzer.capture.ScreenCapture;
+import jspectrumanalyzer.capture.ScreenCaptureH264;
+
 public class IQAnalyzerApp {
+	public static final class VideoRecordingSettings {
+		public final String format;
+		public final int resolution;
+		public final int frameRate;
+
+		public VideoRecordingSettings(String format, int resolution, int frameRate) {
+			this.format = format == null ? "GIF" : format;
+			this.resolution = resolution <= 0 ? 540 : resolution;
+			this.frameRate = frameRate <= 0 ? 15 : frameRate;
+		}
+	}
+
 	private static final Color PANEL_BG = Color.BLACK;
 	private static final Color CONTROL_BG = Color.BLACK;
 	private static final Color TEXT_FG = Color.WHITE;
@@ -99,6 +114,7 @@ public class IQAnalyzerApp {
 	private JSlider audioToneSlider;
 	private JLabel audioToneValueLabel;
 	private JButton audioRecordButton;
+	private JButton videoRecordButton;
 	private JButton iqRecordButton;
 	private JLabel recordStatusLabel;
 	private JCheckBox triggerCheck;
@@ -116,6 +132,8 @@ public class IQAnalyzerApp {
 	private IQAutoLevel autoLevel = new IQAutoLevel();
 	private volatile WavFileWriter audioRecorder;
 	private volatile WavFileWriter iqRecorder;
+	private volatile ScreenCapture videoGifRecorder;
+	private volatile ScreenCaptureH264 videoH264Recorder;
 	private volatile int iqRecorderSampleRateHz = DEFAULT_SAMPLE_RATE_HZ;
 	private byte[] channelOutput = new byte[MAX_BLOCK_BYTES];
 	private byte[] iqRecordBuffer = new byte[MAX_BLOCK_BYTES];
@@ -134,6 +152,7 @@ public class IQAnalyzerApp {
 	private volatile int externalSampleRateHz = DEFAULT_SAMPLE_RATE_HZ;
 	private volatile int externalContentBandwidthHz = DEFAULT_SAMPLE_RATE_HZ;
 	private volatile LongSupplier recordingTimeMillisSupplier;
+	private volatile VideoRecordingSettings videoRecordingSettings = new VideoRecordingSettings("GIF", 540, 15);
 	private boolean singleTriggerArmed = false;
 	private Long spectrumDragBaseOffsetHz = null;
 
@@ -153,6 +172,13 @@ public class IQAnalyzerApp {
 
 	public JFrame show(long centerFreqHz, int sampleRateHz, int lnaGain, int vgaGain) {
 		return show(centerFreqHz, sampleRateHz, lnaGain, vgaGain, false, 0, 0, null);
+	}
+
+	public IQAnalyzerApp withVideoRecordingSettings(VideoRecordingSettings settings) {
+		if (settings != null) {
+			this.videoRecordingSettings = settings;
+		}
+		return this;
 	}
 
 	public JFrame show(long centerFreqHz, int sampleRateHz, int lnaGain, int vgaGain, boolean rfAmp,
@@ -197,6 +223,7 @@ public class IQAnalyzerApp {
 			styleSingleTriggerButton();
 			timeDomainPanel.repaint();
 			spectrumPanel.repaint();
+			captureVideoFrameIfRecording();
 		});
 
 		frame.addWindowListener(new WindowAdapter() {
@@ -565,14 +592,17 @@ public class IQAnalyzerApp {
 		audioToneSlider.addChangeListener(e -> applyAudioToneCutoff());
 		applyAudioToneCutoff();
 		audioRecordButton = new JButton("Audio REC");
+		videoRecordButton = new JButton("Video REC");
 		iqRecordButton = new JButton("IQ REC");
 		recordStatusLabel = new JLabel("");
 		styleButton(audioRecordButton, Color.RED, Color.BLACK);
+		styleButton(videoRecordButton, Color.RED, Color.BLACK);
 		styleButton(iqRecordButton, Color.RED, Color.BLACK);
 		recordStatusLabel.setForeground(MUTED_FG);
 		recordStatusLabel.setPreferredSize(new java.awt.Dimension(180, 22));
 		recordStatusLabel.setMinimumSize(new java.awt.Dimension(180, 22));
 		audioRecordButton.addActionListener(e -> toggleAudioRecording());
+		videoRecordButton.addActionListener(e -> toggleVideoRecording());
 		iqRecordButton.addActionListener(e -> toggleIqRecording());
 		triggerCheck = new JCheckBox("Trigger");
 		triggerCheck.addActionListener(e -> timeDomainPanel.clearSingleTriggerHold());
@@ -630,7 +660,7 @@ public class IQAnalyzerApp {
 		addInline(audioSection, audioEnableCheck, createAudioToneRow());
 		addLabeled(audioSection, "Demod", audioModeCombo);
 		addLabeled(audioSection, "Volume", audioVolumeSlider);
-		addInline(audioSection, audioRecordButton, iqRecordButton);
+		addInline(audioSection, audioRecordButton, videoRecordButton, iqRecordButton);
 		addWide(audioSection, recordStatusLabel);
 		java.awt.Dimension audioPreferredSize = audioSection.getPreferredSize();
 		audioSection.setMinimumSize(new java.awt.Dimension(220, audioPreferredSize.height));
@@ -943,6 +973,11 @@ public class IQAnalyzerApp {
 			styleButton(audioRecordButton, audioRecorder == null ? Color.RED : STOP_BG, Color.BLACK);
 			audioRecordButton.setText(audioRecorder == null ? "Audio REC" : "STOP Audio");
 		}
+		if (videoRecordButton != null) {
+			boolean videoRecording = isVideoRecording();
+			styleButton(videoRecordButton, videoRecording ? STOP_BG : Color.RED, Color.BLACK);
+			videoRecordButton.setText(videoRecording ? "STOP Video" : "Video REC");
+		}
 		if (iqRecordButton != null) {
 			styleButton(iqRecordButton, iqRecorder == null ? Color.RED : STOP_BG, Color.BLACK);
 			iqRecordButton.setText(iqRecorder == null ? "IQ REC" : "STOP IQ");
@@ -988,11 +1023,37 @@ public class IQAnalyzerApp {
 		try {
 			WavFileWriter recorder = new WavFileWriter(createRecordingFile("AUDIO", getSelectedRecordingBandwidthHz()), 48_000, 2, 16);
 			audioRecorder = recorder;
-			audioOutput.setRecorder(recorder);
+			updateAudioRecorderSink();
 			styleRecordButtons();
 			updateRecordingStatus();
 		} catch (IOException e) {
 			setStatus("Audio REC failed", true);
+		}
+	}
+
+	private void toggleVideoRecording() {
+		if (isVideoRecording()) {
+			stopVideoRecording();
+			return;
+		}
+		try {
+			VideoRecordingSettings settings = videoRecordingSettings;
+			int[] size = getVideoRecordingSize(settings.resolution);
+			boolean mp4 = "MP4".equalsIgnoreCase(settings.format);
+			if (mp4) {
+				ScreenCaptureH264 recorder = new ScreenCaptureH264(timeDomainPanel, 0, 0, settings.frameRate,
+						size[0], size[1], createVideoRecordingFile("mp4").getPath(),
+						audioEnableCheck != null && audioEnableCheck.isSelected());
+				videoH264Recorder = recorder;
+				updateAudioRecorderSink();
+			} else {
+				videoGifRecorder = new ScreenCapture(timeDomainPanel, 0, 0, settings.frameRate,
+						size[0], size[1], createVideoRecordingFile("gif"));
+			}
+			styleRecordButtons();
+			updateRecordingStatus();
+		} catch (IOException | RuntimeException e) {
+			setStatus("Video REC failed", true);
 		}
 	}
 
@@ -1013,16 +1074,102 @@ public class IQAnalyzerApp {
 
 	private void stopRecordings() {
 		stopAudioRecording();
+		stopVideoRecording();
 		stopIqRecording();
 	}
 
 	private void stopAudioRecording() {
 		WavFileWriter recorder = audioRecorder;
 		audioRecorder = null;
-		audioOutput.setRecorder(null);
+		updateAudioRecorderSink();
 		closeRecorder(recorder);
 		styleRecordButtons();
 		updateRecordingStatus();
+	}
+
+	private void stopVideoRecording() {
+		ScreenCapture activeGifRecorder = videoGifRecorder;
+		ScreenCaptureH264 activeH264Recorder = videoH264Recorder;
+		videoGifRecorder = null;
+		videoH264Recorder = null;
+		updateAudioRecorderSink();
+		if (activeGifRecorder != null) {
+			activeGifRecorder.captureFrame(false);
+		}
+		if (activeH264Recorder != null) {
+			activeH264Recorder.captureFrame(false);
+		}
+		styleRecordButtons();
+		updateRecordingStatus();
+	}
+
+	private boolean isVideoRecording() {
+		return videoGifRecorder != null || videoH264Recorder != null;
+	}
+
+	private void captureVideoFrameIfRecording() {
+		ScreenCapture activeGifRecorder = videoGifRecorder;
+		ScreenCaptureH264 activeH264Recorder = videoH264Recorder;
+		if (activeGifRecorder == null && activeH264Recorder == null) {
+			return;
+		}
+		timeDomainPanel.setRecordingPaintMode(true);
+		try {
+			if (activeGifRecorder != null) {
+				activeGifRecorder.captureFrame(true);
+			}
+			if (activeH264Recorder != null) {
+				activeH264Recorder.captureFrame(true);
+			}
+		} finally {
+			timeDomainPanel.setRecordingPaintMode(false);
+		}
+	}
+
+	private int[] getVideoRecordingSize(int resolution) {
+		switch (resolution) {
+		case 360:
+			return new int[] { 640, 360 };
+		case 720:
+			return new int[] { 1280, 720 };
+		case 1080:
+			return new int[] { 1920, 1080 };
+		case 540:
+		default:
+			return new int[] { 960, 540 };
+		}
+	}
+
+	private void updateAudioRecorderSink() {
+		WavFileWriter activeAudioRecorder = audioRecorder;
+		ScreenCaptureH264 activeVideoRecorder = videoH264Recorder;
+		boolean videoAudio = activeVideoRecorder != null && activeVideoRecorder.isAudioEnabled();
+		if (activeAudioRecorder == null && !videoAudio) {
+			audioOutput.setRecorder(null);
+			return;
+		}
+		audioOutput.setRecorder((data, offset, length) -> {
+			IOException failure = null;
+			if (activeAudioRecorder != null) {
+				try {
+					activeAudioRecorder.writePcm16(data, offset, length);
+				} catch (IOException e) {
+					failure = e;
+				}
+			}
+			if (videoAudio) {
+				try {
+					activeVideoRecorder.writePcm16(data, offset, length);
+				} catch (IOException e) {
+					if (failure == null) {
+						failure = e;
+					}
+				}
+			}
+			if (failure != null) {
+				throw failure;
+			}
+		});
 	}
 
 	private void stopIqRecording() {
@@ -1053,8 +1200,38 @@ public class IQAnalyzerApp {
 				? LocalDateTime.ofInstant(Instant.ofEpochMilli(timestampMillis), ZoneId.systemDefault())
 				: LocalDateTime.now();
 		String timestamp = recordingTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss"));
-		return new File(String.format(Locale.US, "# %s %dHz BW-%s %s.wav", prefix, centerHz,
+		return uniqueFile(String.format(Locale.US, "# %s %dHz BW-%s %s.wav", prefix, centerHz,
 				formatRecordingBandwidth(bandwidthHz), timestamp));
+	}
+
+	private File createVideoRecordingFile(String extension) {
+		long centerHz = getSelectedRecordingCenterFreqHz();
+		int bandwidthHz = getSelectedRecordingBandwidthHz();
+		LongSupplier timeSupplier = recordingTimeMillisSupplier;
+		long timestampMillis = timeSupplier == null ? System.currentTimeMillis() : timeSupplier.getAsLong();
+		LocalDateTime recordingTime = timestampMillis > 0
+				? LocalDateTime.ofInstant(Instant.ofEpochMilli(timestampMillis), ZoneId.systemDefault())
+				: LocalDateTime.now();
+		String timestamp = recordingTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss"));
+		return uniqueFile(String.format(Locale.US, "# VIDEO %dHz BW-%s %s.%s", centerHz,
+				formatRecordingBandwidth(bandwidthHz), timestamp, extension));
+	}
+
+	private File uniqueFile(String fileName) {
+		File file = new File(fileName);
+		if (!file.exists()) {
+			return file;
+		}
+		int dot = fileName.lastIndexOf('.');
+		String base = dot <= 0 ? fileName : fileName.substring(0, dot);
+		String extension = dot <= 0 ? "" : fileName.substring(dot);
+		for (int i = 2; i < 10_000; i++) {
+			File candidate = new File(base + " (" + i + ")" + extension);
+			if (!candidate.exists()) {
+				return candidate;
+			}
+		}
+		return new File(base + " (" + System.currentTimeMillis() + ")" + extension);
 	}
 
 	private long getSelectedRecordingCenterFreqHz() {
@@ -1094,8 +1271,15 @@ public class IQAnalyzerApp {
 		StringBuilder text = new StringBuilder();
 		WavFileWriter audio = audioRecorder;
 		WavFileWriter iq = iqRecorder;
+		boolean video = isVideoRecording();
 		if (audio != null) {
 			text.append("Audio ").append(formatBytes(audio.getDataBytes()));
+		}
+		if (video) {
+			if (text.length() > 0) {
+				text.append("   ");
+			}
+			text.append("Video REC");
 		}
 		if (iq != null) {
 			if (text.length() > 0) {

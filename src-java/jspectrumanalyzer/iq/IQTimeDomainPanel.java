@@ -56,6 +56,7 @@ public class IQTimeDomainPanel extends JPanel {
 	private volatile boolean deviationView = false;
 	private volatile boolean burstDetectorEnabled = false;
 	private volatile double deviationScaleHz = 1_000d;
+	private volatile boolean recordingPaintMode = false;
 	private volatile int measureStartX = -1;
 	private volatile int measureEndX = -1;
 	private volatile BurstStats burstStats = BurstStats.empty();
@@ -191,6 +192,10 @@ public class IQTimeDomainPanel extends JPanel {
 		this.deviationView = deviationView;
 	}
 
+	public void setRecordingPaintMode(boolean recordingPaintMode) {
+		this.recordingPaintMode = recordingPaintMode;
+	}
+
 	public void setBurstDetectorEnabled(boolean burstDetectorEnabled) {
 		this.burstDetectorEnabled = burstDetectorEnabled;
 	}
@@ -229,7 +234,9 @@ public class IQTimeDomainPanel extends JPanel {
 			drawHeader(g, read);
 			g.setColor(new Color(0xaaaaaa));
 			g.drawString("Waiting for IQ samples...", 16, mid);
-			drawZoomButtons(g);
+			if (!recordingPaintMode) {
+				drawZoomButtons(g);
+			}
 			return;
 		}
 
@@ -268,7 +275,9 @@ public class IQTimeDomainPanel extends JPanel {
 		drawTriggerThreshold(g, width, mid, plotHeight);
 		drawTriggerMarker(g, top, bottom);
 		drawMeasurement(g, top, bottom);
-		drawZoomButtons(g);
+		if (!recordingPaintMode) {
+			drawZoomButtons(g);
+		}
 	}
 
 	private int readSnapshot(IQRingBuffer activeRingBuffer) {
@@ -477,7 +486,7 @@ public class IQTimeDomainPanel extends JPanel {
 	}
 
 	private void drawAxes(Graphics2D g, int width, int top, int bottom, int mid) {
-		g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 11));
+		g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
 		g.setColor(new Color(0x999999));
 		g.drawString("+1", 4, top + 12);
 		g.drawString("0", 4, mid - 4);
@@ -523,10 +532,6 @@ public class IQTimeDomainPanel extends JPanel {
 				triggerText = triggerFound ? "Triggered" : "Armed";
 			}
 			g.drawString(triggerText, Math.max(12, getWidth() - 110), 34);
-		}
-		if (deviationView) {
-			g.setColor(COLOR_DEVIATION);
-			g.drawString("FSK deviation", Math.max(12, getWidth() - 182), 34);
 		}
 		if (burstDetectorEnabled) {
 			drawBurstStats(g);
@@ -626,7 +631,7 @@ public class IQTimeDomainPanel extends JPanel {
 		int x = Math.max(12, getWidth() - 220);
 		int y = 22;
 		if (deviationView) {
-			drawLegendItem(g, x, y, COLOR_DEVIATION, "Deviation");
+			drawLegendItem(g, x, y, COLOR_DEVIATION, "FSK deviation");
 			return;
 		}
 		if (!envelopeOnly) {

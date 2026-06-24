@@ -26,7 +26,7 @@ public class IQAudioOutput {
 		}
 	}
 
-	private static final int TARGET_AUDIO_RATE_HZ = 48_000;
+	public static final int TARGET_AUDIO_RATE_HZ = 48_000;
 	private static final int MAX_DEMOD_INPUT_RATE_HZ = 192_000;
 	private static final int MAX_QUEUE_BLOCKS = 48;
 	private static final double START_FADE_SECONDS = 0.35d;
@@ -41,7 +41,7 @@ public class IQAudioOutput {
 	private Thread audioThread;
 	private volatile boolean running = false;
 	private volatile Mode mode = Mode.OFF;
-	private volatile WavFileWriter recorder;
+	private volatile Pcm16AudioSink recorder;
 	private int inputRateHz = 1;
 	private int demodInputRateHz = 1;
 	private int demodInputStride = 1;
@@ -145,7 +145,7 @@ public class IQAudioOutput {
 		return toneCutoffHz;
 	}
 
-	public void setRecorder(WavFileWriter recorder) {
+	public void setRecorder(Pcm16AudioSink recorder) {
 		this.recorder = recorder;
 	}
 
@@ -167,19 +167,20 @@ public class IQAudioOutput {
 		}
 
 		if (out > 0) {
-			WavFileWriter activeRecorder = recorder;
-			if (activeRecorder != null) {
-				try {
-					activeRecorder.write(pcm, 0, out);
-				} catch (IOException e) {
-					System.err.println("Audio recording failed: " + e.getMessage());
-					recorder = null;
-				}
-			}
 			if (out < pcm.length) {
 				byte[] trimmed = new byte[out];
 				System.arraycopy(pcm, 0, trimmed, 0, out);
 				pcm = trimmed;
+			}
+			applyPlaybackVolumeAndFade(pcm, 0, pcm.length);
+			Pcm16AudioSink activeRecorder = recorder;
+			if (activeRecorder != null) {
+				try {
+					activeRecorder.writePcm16(pcm, 0, pcm.length);
+				} catch (IOException e) {
+					System.err.println("Audio recording failed: " + e.getMessage());
+					recorder = null;
+				}
 			}
 			if (!queue.offer(pcm)) {
 				queue.poll();
@@ -275,12 +276,6 @@ public class IQAudioOutput {
 		if (out + 3 >= pcm.length) {
 			return out;
 		}
-		audio *= volume;
-		if (fadeSamplesRemaining > 0) {
-			double fade = (fadeTotalSamples - fadeSamplesRemaining) / (double) fadeTotalSamples;
-			audio *= fade;
-			fadeSamplesRemaining--;
-		}
 		if (audio > 1) {
 			audio = 1;
 		} else if (audio < -1) {
@@ -292,6 +287,30 @@ public class IQAudioOutput {
 		pcm[out++] = (byte) (value & 0xff);
 		pcm[out++] = (byte) ((value >> 8) & 0xff);
 		return out;
+	}
+
+	private void applyPlaybackVolumeAndFade(byte[] pcm, int offset, int length) {
+		double activeVolume = volume;
+		int end = Math.min(pcm.length, offset + length);
+		for (int pos = offset; pos + 3 < end; pos += 4) {
+			short value = (short) ((pcm[pos] & 0xff) | (pcm[pos + 1] << 8));
+			double gain = activeVolume;
+			if (fadeSamplesRemaining > 0) {
+				double fade = (fadeTotalSamples - fadeSamplesRemaining) / (double) fadeTotalSamples;
+				gain *= fade;
+				fadeSamplesRemaining--;
+			}
+			int scaled = (int) Math.round(value * gain);
+			if (scaled > Short.MAX_VALUE) {
+				scaled = Short.MAX_VALUE;
+			} else if (scaled < Short.MIN_VALUE) {
+				scaled = Short.MIN_VALUE;
+			}
+			pcm[pos] = (byte) (scaled & 0xff);
+			pcm[pos + 1] = (byte) ((scaled >> 8) & 0xff);
+			pcm[pos + 2] = pcm[pos];
+			pcm[pos + 3] = pcm[pos + 1];
+		}
 	}
 
 	private void audioLoop() {

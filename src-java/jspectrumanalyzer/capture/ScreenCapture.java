@@ -1,5 +1,6 @@
 package jspectrumanalyzer.capture;
 
+import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
@@ -18,7 +19,8 @@ import javax.swing.SwingUtilities;
  * Class to capture a video of the whole JFrame into the animated GIF, while capturing only when the view updates with the new data
  */
 public class ScreenCapture {
-	private final JFrame frame;
+	private final Component component;
+	private final boolean componentCapture;
 	private final int width, height;
 	private final ImageOutputStream output;
 	private final GifSequenceWriter gif;
@@ -34,15 +36,26 @@ public class ScreenCapture {
 	private boolean rec;
 	
 	public ScreenCapture(JFrame frame, int initSecs, int captureSecs, int fps, int width, int height, String area, File outputFile) throws FileNotFoundException, IOException {
+		this(frame, frame, initSecs, captureSecs, fps, width, height, area, outputFile, true);
+	}
+
+	public ScreenCapture(Component component, int initSecs, int captureSecs, int fps, int width, int height,
+			File outputFile) throws FileNotFoundException, IOException {
+		this(null, component, initSecs, captureSecs, fps, width, height, "COMPONENT", outputFile, false);
+	}
+
+	private ScreenCapture(JFrame frame, Component component, int initSecs, int captureSecs, int fps, int width,
+			int height, String area, File outputFile, boolean resizeFrame) throws FileNotFoundException, IOException {
 		this.captureMillis	= captureSecs*1000L;
-		this.frame	= frame;
+		this.component	= component;
+		this.componentCapture = !resizeFrame;
 		this.width	= width;
 		this.height	= height;
 		this.outputFile	= outputFile;
 
 		this.startCaptureTS	= System.currentTimeMillis()+initSecs*1000L;
 		frameIIntervalMS = 1000/fps;
-		if(area.equals("SPECTR")) //record video of spectrum
+		if(resizeFrame && area.equals("SPECTR")) //record video of spectrum
 		{
 			switch(height) {
 			case 360: fheight = 570; break;
@@ -51,15 +64,17 @@ public class ScreenCapture {
 			}
 			frame.setMinimumSize(new Dimension(width + 230, fheight));			
 		}
-		else if(area.equals("SPEC+WF")) //record video of spectrum & waterfall
+		else if(resizeFrame && area.equals("SPEC+WF")) //record video of spectrum & waterfall
 		{
 			frame.setMinimumSize(new Dimension(width + 230, height - 50));
 		}
-		else //record full spectrum analyzer screen
+		else if(resizeFrame) //record full spectrum analyzer screen
 		{
 			frame.setMinimumSize(new Dimension(width, height));
 		}
-		frame.setSize(width, height);
+		if (resizeFrame) {
+			frame.setSize(width, height);
+		}
 		
 		outputFile.delete();
 		
@@ -75,17 +90,8 @@ public class ScreenCapture {
 		
 		long start	= System.currentTimeMillis();
 		
-		if (start-lastFrameTS < frameIIntervalMS || start < startCaptureTS) {
-			return;
-		}
-		lastFrameTS	= start;
-		
 		if (framesCaptured == -1)
 			return;
-		if (framesCaptured == 0) {
-			startedCapture	= System.currentTimeMillis();
-			System.out.println("Capture started...");
-		}
 
 		if (!rec) { /*System.currentTimeMillis() - startedCapture >= captureMillis*/ 
 			System.out.println("Capture finished... frames captured: "+framesCaptured);
@@ -102,9 +108,19 @@ public class ScreenCapture {
 			} catch (IOException e) {
 				e.printStackTrace();
 			}
+			saveThread.shutdown();
 			});
 			//System.exit(0);
 			return;
+		}
+
+		if (start-lastFrameTS < frameIIntervalMS || start < startCaptureTS) {
+			return;
+		}
+		lastFrameTS	= start;
+		if (framesCaptured == 0) {
+			startedCapture	= System.currentTimeMillis();
+			System.out.println("Capture started...");
 		}
 		
 		framesCaptured++;
@@ -114,7 +130,14 @@ public class ScreenCapture {
 		g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
 		g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
 		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);					
-		frame.paint(g);
+		if (componentCapture) {
+			double scaleX = width / Math.max(1d, component.getWidth());
+			double scaleY = height / Math.max(1d, component.getHeight());
+			g.scale(scaleX, scaleY);
+			component.printAll(g);
+		} else {
+			component.paint(g);
+		}
 		g.dispose();
 
 		/**

@@ -2042,7 +2042,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			uiFrame.setVisible(true);
 			uiFrame.pack();
 			DateTimeFormatter dStampFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm");
-			LocalDateTime dateStamp = LocalDateTime.now();
+			String dateStamp = formatRecordingDateStamp(dStampFormat);
 			switch (parameterVideoResolution.getValue())
 			{
 				case 360: videoWidth = 640; videoHeight = 360; break;
@@ -2057,10 +2057,11 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 			if(parameterVideoFormat.getValue().equals("GIF"))
 			{
+				playbackIqAudio.setRecorder(null);
 				gifCap = new ScreenCapture(uiFrame, 1, 0, parameterVideoFrameRate.getValue(), videoWidth, videoHeight,
 					parameterVideoArea.getValue(), new File(formatVideoRecordingFilePrefix()
 							+ formatRecordingRangeName() + " MHz "
-							+ dateStamp.format(dStampFormat) + ".gif")
+							+ dateStamp + ".gif")
 					);
 			}
 			else
@@ -2068,14 +2069,17 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				h264Cap = new ScreenCaptureH264(uiFrame, 1, 0, parameterVideoFrameRate.getValue(), videoWidth, videoHeight,
 					parameterVideoArea.getValue(), new String(formatVideoRecordingFilePrefix()
 							+ formatRecordingRangeName() + " MHz "
-							+ dateStamp.format(dStampFormat) + ".mp4")
+							+ dateStamp + ".mp4"),
+						isIqReplayActive() && parameterIqReplayAudioEnabled.getValue()
 					);
+				updateIqReplayVideoAudioRecorder();
 			}
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
 		else
 		{
+			playbackIqAudio.setRecorder(null);
 			uiFrame.dispose();
 			uiFrame.setVisible(false);
 			uiFrame.setUndecorated(false);
@@ -2084,14 +2088,27 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		}
 	}
 
+	private void updateIqReplayVideoAudioRecorder() {
+		ScreenCaptureH264 activeH264Cap = h264Cap;
+		if (activeH264Cap != null
+				&& parameterIsRecordedVideo.getValue()
+				&& activeH264Cap.isAudioEnabled()
+				&& isIqReplayActive()
+				&& parameterIqReplayAudioEnabled.getValue()) {
+			playbackIqAudio.setRecorder(activeH264Cap);
+		} else {
+			playbackIqAudio.setRecorder(null);
+		}
+	}
+
 	private void startCaptureData() {
 		if(parameterIsRecordedData.getValue())
 		try {
 			DateTimeFormatter dStampFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm");
-			LocalDateTime dateStamp = LocalDateTime.now();
+			String dateStamp = formatRecordingDateStamp(dStampFormat);
 			//System.out.println(frequencyStart+" "+fftBinWidthHz+" "+signalPowerdBm);
 			dataCap = new FileWriter("# STATS " + formatRecordingRangeName() + " MHz "
-					+ dateStamp.format(dStampFormat) + ".csv");
+					+ dateStamp + ".csv");
 			dataCap.write("Timestamp,Total Spectrum Power [dBm],Power Flux Density [µW/m²],Max Amplitude [dBm],Frequency [MHz]\r\n");
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -2117,6 +2134,14 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			break;
 		}
 		DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd " + pattern);
+		long replayTime = playbackCurrentEpochMillis;
+		if (isReplayActive() && replayTime > 0) {
+			return LocalDateTime.ofInstant(Instant.ofEpochMilli(replayTime), ZoneId.systemDefault()).format(formatter);
+		}
+		return LocalDateTime.now().format(formatter);
+	}
+
+	private String formatRecordingDateStamp(DateTimeFormatter formatter) {
 		long replayTime = playbackCurrentEpochMillis;
 		if (isReplayActive() && replayTime > 0) {
 			return LocalDateTime.ofInstant(Instant.ofEpochMilli(replayTime), ZoneId.systemDefault()).format(formatter);
@@ -2165,9 +2190,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		try {
 			if (spectrumCap == null) {
 				DateTimeFormatter dStampFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss");
-				LocalDateTime dateStamp = LocalDateTime.now();
+				String dateStamp = formatRecordingDateStamp(dStampFormat);
 				File file = new File("# DATA " + formatRecordingRangeName(spectrum) + " MHz "
-						+ dateStamp.format(dStampFormat) + ".hsr");
+						+ dateStamp + ".hsr");
 				spectrumCap = new SpectrumRecording(file, spectrum, parameterFreqRange.getValue());
 			}
 			spectrumCap.writeFrame(spectrum);
@@ -2820,7 +2845,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			if (triggerLogWriter == null) {
 				DateTimeFormatter dStampFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss");
 				triggerLogWriter = new FileWriter("# TRIGGER " + formatRecordingRangeName() + " MHz "
-						+ LocalDateTime.now().format(dStampFormat) + ".csv");
+						+ (event.playback && event.epochMillis > 0
+								? LocalDateTime.ofInstant(Instant.ofEpochMilli(event.epochMillis), ZoneId.systemDefault()).format(dStampFormat)
+								: formatRecordingDateStamp(dStampFormat)) + ".csv");
 				triggerLogWriter.write("Mode,Timestamp,Playback Offset,Frequency [MHz],Max Level [dBm],Total Power [dBm]\r\n");
 			}
 			triggerLogWriter.write((event.playback ? "REPLAY" : "LIVE") + ","
@@ -3167,6 +3194,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		boolean enabled = parameterIqReplayAudioEnabled.getValue();
 		ensureIqReplayTxProcessingLoad();
 		playbackIqAudio.setVolumePercent(parameterIqReplayAudioVolume.getValue());
+		updateIqReplayVideoAudioRecorder();
 		playbackIqAudioConfiguration.incrementAndGet();
 		if (!enabled || iqFile == null || !isIqReplayActive() || playbackIqAnalyzerWindows.get() > 0) {
 			stopIqReplayAudio();
@@ -4520,7 +4548,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			playbackIqAnalyzerWindows.incrementAndGet();
 			stopIqReplayAudio();
 			SwingUtilities.invokeLater(() -> {
-				IQAnalyzerApp analyzer = new IQAnalyzerApp();
+				IQAnalyzerApp analyzer = new IQAnalyzerApp().withVideoRecordingSettings(createIqAnalyzerVideoSettings());
 				IQReplayAnalyzerFeed feed = new IQReplayAnalyzerFeed(analyzer, sourceSampleRateHz, channelOffsetHz,
 						bandwidthHz, outputRateHz);
 				playbackIqAnalyzers.add(feed);
@@ -4539,9 +4567,14 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 		new Thread(() -> {
 			stopHackrfSweep();
-			SwingUtilities.invokeLater(() -> new IQAnalyzerApp().show(centerHz, sampleRateHz, lnaGain, vgaGain, rfAmp,
-					0, bandwidthHz, this::restartHackrfSweep));
+			SwingUtilities.invokeLater(() -> new IQAnalyzerApp().withVideoRecordingSettings(createIqAnalyzerVideoSettings())
+					.show(centerHz, sampleRateHz, lnaGain, vgaGain, rfAmp, 0, bandwidthHz, this::restartHackrfSweep));
 		}, "open-iq-analyzer").start();
+	}
+
+	private IQAnalyzerApp.VideoRecordingSettings createIqAnalyzerVideoSettings() {
+		return new IQAnalyzerApp.VideoRecordingSettings(parameterVideoFormat.getValue(),
+				parameterVideoResolution.getValue(), parameterVideoFrameRate.getValue());
 	}
 
 	private int chooseIQSampleRateHz(int bandwidthHz) {

@@ -4,7 +4,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 
-class WavFileWriter implements AutoCloseable {
+class WavFileWriter implements Pcm16AudioSink, AutoCloseable {
 	private final RandomAccessFile file;
 	private final int channels;
 	private final int sampleRateHz;
@@ -22,6 +22,11 @@ class WavFileWriter implements AutoCloseable {
 	}
 
 	synchronized void write(byte[] data, int offset, int length) throws IOException {
+		writePcm16(data, offset, length);
+	}
+
+	@Override
+	public synchronized void writePcm16(byte[] data, int offset, int length) throws IOException {
 		if (closed || data == null || length <= 0) {
 			return;
 		}
