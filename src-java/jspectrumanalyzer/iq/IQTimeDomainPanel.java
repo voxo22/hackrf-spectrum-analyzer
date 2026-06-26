@@ -57,6 +57,8 @@ public class IQTimeDomainPanel extends JPanel {
 	private volatile boolean burstDetectorEnabled = false;
 	private volatile double deviationScaleHz = 1_000d;
 	private volatile boolean recordingPaintMode = false;
+	private volatile float lineThickness = 1f;
+	private volatile int currentDisplaySamples = 0;
 	private volatile int measureStartX = -1;
 	private volatile int measureEndX = -1;
 	private volatile BurstStats burstStats = BurstStats.empty();
@@ -200,6 +202,14 @@ public class IQTimeDomainPanel extends JPanel {
 		this.burstDetectorEnabled = burstDetectorEnabled;
 	}
 
+	public void setLineThickness(float lineThickness) {
+		if (Float.isNaN(lineThickness) || Float.isInfinite(lineThickness)) {
+			return;
+		}
+		this.lineThickness = Math.max(0.1f, lineThickness);
+		repaint();
+	}
+
 	@Override
 	protected void paintComponent(Graphics graphics) {
 		super.paintComponent(graphics);
@@ -227,11 +237,12 @@ public class IQTimeDomainPanel extends JPanel {
 		g.setColor(new Color(0x0f0f0f));
 		g.fillRect(0, 0, width, height);
 		if (read < 4) {
+			currentDisplaySamples = visibleSamples;
 			burstStats = BurstStats.empty();
 			burstMarks = new BurstMark[0];
-			drawGrid(g, width, top, bottom, mid);
+			drawGrid(g, width, top, bottom, mid, currentDisplaySamples);
 			drawTriggerThreshold(g, width, mid, plotHeight);
-			drawHeader(g, read);
+			drawHeader(g, read, currentDisplaySamples);
 			g.setColor(new Color(0xaaaaaa));
 			g.drawString("Waiting for IQ samples...", 16, mid);
 			if (!recordingPaintMode) {
@@ -241,13 +252,14 @@ public class IQTimeDomainPanel extends JPanel {
 		}
 
 		int samples = overviewMode ? overviewSamplesRead : read / 2;
+		currentDisplaySamples = Math.max(1, samples);
 		if (!overviewMode && deviationView) {
 			updateDeviationScale(samples);
 		}
 		if (burstDetectorEnabled) {
 			if (overviewMode) {
 				updateBurstStatsFromEnvelope(overviewEnvelope, Math.min(width, overviewEnvelope.length),
-						visibleSamples / (double) sampleRateHz / Math.max(1, width));
+						currentDisplaySamples / (double) sampleRateHz / Math.max(1, width));
 			} else {
 				updateBurstStats(samples);
 			}
@@ -255,8 +267,8 @@ public class IQTimeDomainPanel extends JPanel {
 			burstStats = BurstStats.empty();
 			burstMarks = new BurstMark[0];
 		}
-		drawGrid(g, width, top, bottom, mid);
-		drawHeader(g, read);
+		drawGrid(g, width, top, bottom, mid, currentDisplaySamples);
+		drawHeader(g, read, currentDisplaySamples);
 
 		if (overviewMode) {
 			drawOverviewEnvelope(g, overviewEnvelope, width, mid, plotHeight);
@@ -437,6 +449,7 @@ public class IQTimeDomainPanel extends JPanel {
 			return 0;
 		}
 		System.arraycopy(source, read - available, snapshot, 0, available);
+		triggerSampleInView = available / 2 * triggerPrePercent / 100;
 		return available;
 	}
 
@@ -469,7 +482,7 @@ public class IQTimeDomainPanel extends JPanel {
 		return -1;
 	}
 
-	private void drawGrid(Graphics2D g, int width, int top, int bottom, int mid) {
+	private void drawGrid(Graphics2D g, int width, int top, int bottom, int mid, int axisSamples) {
 		g.setStroke(new BasicStroke(1f));
 		g.setColor(new Color(0x505050));
 		for (int i = 0; i <= 10; i++) {
@@ -482,17 +495,17 @@ public class IQTimeDomainPanel extends JPanel {
 		}
 		g.setColor(new Color(0x686868));
 		g.drawLine(0, mid, width, mid);
-		drawAxes(g, width, top, bottom, mid);
+		drawAxes(g, width, top, bottom, mid, axisSamples);
 	}
 
-	private void drawAxes(Graphics2D g, int width, int top, int bottom, int mid) {
+	private void drawAxes(Graphics2D g, int width, int top, int bottom, int mid, int axisSamples) {
 		g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
 		g.setColor(new Color(0x999999));
 		g.drawString("+1", 4, top + 12);
 		g.drawString("0", 4, mid - 4);
 		g.drawString("-1", 4, bottom - 4);
 
-		double visibleSeconds = sampleRateHz <= 0 ? 0 : visibleSamples / (double) sampleRateHz;
+		double visibleSeconds = sampleRateHz <= 0 ? 0 : Math.max(1, axisSamples) / (double) sampleRateHz;
 		String left = "0";
 		String middle = formatTime(visibleSeconds / 2d);
 		String right = formatTime(visibleSeconds);
@@ -506,10 +519,10 @@ public class IQTimeDomainPanel extends JPanel {
 		}
 	}
 
-	private void drawHeader(Graphics2D g, int read) {
+	private void drawHeader(Graphics2D g, int read, int displaySamples) {
 		double elapsedSeconds = startedNanos == 0 ? 0 : (System.nanoTime() - startedNanos) / 1_000_000_000d;
 		double mibPerSecond = elapsedSeconds <= 0 ? 0 : bytes / elapsedSeconds / (1024d * 1024d);
-		double visibleMicros = sampleRateHz <= 0 ? 0 : visibleSamples * 1_000_000d / sampleRateHz;
+		double visibleMicros = sampleRateHz <= 0 ? 0 : Math.max(1, displaySamples) * 1_000_000d / sampleRateHz;
 
 		g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
 		g.setColor(new Color(0xdddddd));
@@ -593,7 +606,7 @@ public class IQTimeDomainPanel extends JPanel {
 		}
 		int high = triggerEnabled ? triggerThreshold : min + Math.round((max - min) * 0.45f);
 		g.setColor(new Color(0xfca311));
-		g.setStroke(new BasicStroke(1.4f));
+		g.setStroke(scaledStroke(1.4f));
 		boolean inside = false;
 		int startX = 0;
 		int peak = 0;
@@ -808,7 +821,7 @@ public class IQTimeDomainPanel extends JPanel {
 		int x2 = clampX(measureEndX);
 		int triggerX = triggerEnabled ? sampleToX(triggerSampleInView) : 0;
 
-		g.setStroke(new BasicStroke(1f));
+		g.setStroke(scaledStroke(1f));
 		g.setColor(new Color(0xf0f0f0));
 		g.drawLine(x1, top, x1, bottom);
 		if (x2 != x1) {
@@ -868,6 +881,7 @@ public class IQTimeDomainPanel extends JPanel {
 		}
 		int x = sampleToX(triggerSampleInView);
 		g.setColor(triggerFound ? new Color(0x75ff7a) : new Color(0x777777));
+		g.setStroke(dashedStroke(1.2f, 8f, 6f));
 		g.drawLine(x, top, x, bottom);
 	}
 
@@ -877,8 +891,7 @@ public class IQTimeDomainPanel extends JPanel {
 		}
 		int y = envelopeToY(triggerThreshold, mid, plotHeight);
 		g.setColor(new Color(0xff9f1c));
-		g.setStroke(new BasicStroke(1.2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_BEVEL, 0,
-				new float[] { 8f, 6f }, 0));
+		g.setStroke(dashedStroke(1.2f, 8f, 6f));
 		g.drawLine(0, y, width, y);
 
 		String label = "TH " + triggerThreshold + " |IQ|";
@@ -899,19 +912,25 @@ public class IQTimeDomainPanel extends JPanel {
 	}
 
 	private int sampleToX(int sample) {
-		if (visibleSamples <= 1 || getWidth() <= 1) {
+		int displaySamples = getCurrentDisplaySamples();
+		if (displaySamples <= 1 || getWidth() <= 1) {
 			return 0;
 		}
-		int safeSample = Math.max(0, Math.min(sample, visibleSamples - 1));
-		return (int) Math.round(safeSample * (getWidth() - 1) / (double) (visibleSamples - 1));
+		int safeSample = Math.max(0, Math.min(sample, displaySamples - 1));
+		return (int) Math.round(safeSample * (getWidth() - 1) / (double) (displaySamples - 1));
 	}
 
 	private int xToSample(int x) {
-		if (visibleSamples <= 1 || getWidth() <= 1) {
+		int displaySamples = getCurrentDisplaySamples();
+		if (displaySamples <= 1 || getWidth() <= 1) {
 			return 0;
 		}
 		int safeX = clampX(x);
-		return (int) Math.round(safeX * (visibleSamples - 1) / (double) (getWidth() - 1));
+		return (int) Math.round(safeX * (displaySamples - 1) / (double) (getWidth() - 1));
+	}
+
+	private int getCurrentDisplaySamples() {
+		return currentDisplaySamples > 0 ? currentDisplaySamples : visibleSamples;
 	}
 
 	private void drawWave(Graphics2D g, int samples, int componentOffset, Color color, int mid, int plotHeight,
@@ -922,7 +941,7 @@ public class IQTimeDomainPanel extends JPanel {
 		}
 
 		g.setColor(color);
-		g.setStroke(new BasicStroke(magnitude ? 1.3f : 1f));
+		g.setStroke(scaledStroke(magnitude ? 1.3f : 1f));
 
 		int previousX = 0;
 		int previousY = sampleToY(0, componentOffset, mid, plotHeight, magnitude);
@@ -1021,7 +1040,7 @@ public class IQTimeDomainPanel extends JPanel {
 			return;
 		}
 		g.setColor(COLOR_ENVELOPE);
-		g.setStroke(new BasicStroke(1.3f));
+		g.setStroke(scaledStroke(1.3f));
 		int previousY = envelopeToY(envelope[0], mid, plotHeight);
 		for (int x = 1; x < width && x < envelope.length; x++) {
 			int y = envelopeToY(envelope[x], mid, plotHeight);
@@ -1042,7 +1061,7 @@ public class IQTimeDomainPanel extends JPanel {
 		}
 
 		g.setColor(color);
-		g.setStroke(new BasicStroke(1.2f));
+		g.setStroke(scaledStroke(1.2f));
 
 		int previousX = -1;
 		int previousY = 0;
@@ -1113,6 +1132,20 @@ public class IQTimeDomainPanel extends JPanel {
 			return Double.NaN;
 		}
 		return Math.atan2(crossSum, dotSum) * sampleRateHz / (2d * Math.PI);
+	}
+
+	private BasicStroke scaledStroke(float baseWidth) {
+		return new BasicStroke(Math.max(0.1f, baseWidth * lineThickness));
+	}
+
+	private BasicStroke dashedStroke(float baseWidth, float... dashPattern) {
+		float width = Math.max(0.1f, baseWidth * lineThickness);
+		float dashScale = Math.max(1f, lineThickness);
+		float[] scaledDash = new float[dashPattern.length];
+		for (int i = 0; i < dashPattern.length; i++) {
+			scaledDash[i] = Math.max(0.1f, dashPattern[i] * dashScale);
+		}
+		return new BasicStroke(width, BasicStroke.CAP_BUTT, BasicStroke.JOIN_BEVEL, 0, scaledDash, 0);
 	}
 
 	private double deviationHz(int sample) {

@@ -153,6 +153,7 @@ public class IQAnalyzerApp {
 	private volatile int externalContentBandwidthHz = DEFAULT_SAMPLE_RATE_HZ;
 	private volatile LongSupplier recordingTimeMillisSupplier;
 	private volatile VideoRecordingSettings videoRecordingSettings = new VideoRecordingSettings("GIF", 540, 15);
+	private volatile float lineThickness = 1f;
 	private boolean singleTriggerArmed = false;
 	private Long spectrumDragBaseOffsetHz = null;
 
@@ -181,10 +182,27 @@ public class IQAnalyzerApp {
 		return this;
 	}
 
+	public IQAnalyzerApp withLineThickness(float lineThickness) {
+		setLineThickness(lineThickness);
+		return this;
+	}
+
+	public void setLineThickness(float lineThickness) {
+		if (Float.isNaN(lineThickness) || Float.isInfinite(lineThickness)) {
+			return;
+		}
+		this.lineThickness = Math.max(0.1f, lineThickness);
+		IQTimeDomainPanel panel = timeDomainPanel;
+		if (panel != null) {
+			panel.setLineThickness(this.lineThickness);
+		}
+	}
+
 	public JFrame show(long centerFreqHz, int sampleRateHz, int lnaGain, int vgaGain, boolean rfAmp,
 			long channelOffsetHz, int channelBandwidthHz, Runnable closedCallback) {
 		ringBuffer = new IQRingBuffer(createBufferBytes(sampleRateHz));
 		timeDomainPanel = new IQTimeDomainPanel(ringBuffer, DEFAULT_VISIBLE_SAMPLES);
+		timeDomainPanel.setLineThickness(lineThickness);
 		timeDomainPanel.addVisibleSamplesListener(e -> SwingUtilities.invokeLater(this::syncTimeViewFromPanel));
 		spectrumPanel = new IQSpectrumPanel(ringBuffer);
 		spectrumPanel.setOffsetDragListener(offsetHz -> SwingUtilities.invokeLater(() -> adjustOffsetFromSpectrum(offsetHz)));

@@ -1195,6 +1195,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private volatile SpectrumRecording.Header		playbackHeader;
 	private volatile ReplayType						playbackType;
 	private volatile IQReplayFile					playbackIqFile;
+	private final CopyOnWriteArrayList<IQAnalyzerApp> openIqAnalyzers				= new CopyOnWriteArrayList<>();
 	private final CopyOnWriteArrayList<IQReplayAnalyzerFeed> playbackIqAnalyzers		= new CopyOnWriteArrayList<>();
 	private final AtomicInteger						playbackIqAnalyzerWindows			= new AtomicInteger();
 	private final IQAudioOutput						playbackIqAudio					= new IQAudioOutput();
@@ -4548,13 +4549,15 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			playbackIqAnalyzerWindows.incrementAndGet();
 			stopIqReplayAudio();
 			SwingUtilities.invokeLater(() -> {
-				IQAnalyzerApp analyzer = new IQAnalyzerApp().withVideoRecordingSettings(createIqAnalyzerVideoSettings());
+				IQAnalyzerApp analyzer = createIQAnalyzerApp();
 				IQReplayAnalyzerFeed feed = new IQReplayAnalyzerFeed(analyzer, sourceSampleRateHz, channelOffsetHz,
 						bandwidthHz, outputRateHz);
 				playbackIqAnalyzers.add(feed);
+				registerOpenIqAnalyzer(analyzer);
 				analyzer.showExternal(centerHz, feed.outputSampleRateHz, 0, bandwidthHz,
 						() -> playbackCurrentEpochMillis,
 						() -> {
+							unregisterOpenIqAnalyzer(analyzer);
 							playbackIqAnalyzers.remove(feed);
 							feed.close();
 							if (playbackIqAnalyzerWindows.decrementAndGet() == 0) {
@@ -4567,9 +4570,41 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 		new Thread(() -> {
 			stopHackrfSweep();
-			SwingUtilities.invokeLater(() -> new IQAnalyzerApp().withVideoRecordingSettings(createIqAnalyzerVideoSettings())
-					.show(centerHz, sampleRateHz, lnaGain, vgaGain, rfAmp, 0, bandwidthHz, this::restartHackrfSweep));
+			SwingUtilities.invokeLater(() -> {
+				IQAnalyzerApp analyzer = createIQAnalyzerApp();
+				registerOpenIqAnalyzer(analyzer);
+				analyzer.show(centerHz, sampleRateHz, lnaGain, vgaGain, rfAmp, 0, bandwidthHz, () -> {
+					unregisterOpenIqAnalyzer(analyzer);
+					restartHackrfSweep();
+				});
+			});
 		}, "open-iq-analyzer").start();
+	}
+
+	private IQAnalyzerApp createIQAnalyzerApp() {
+		return new IQAnalyzerApp()
+				.withVideoRecordingSettings(createIqAnalyzerVideoSettings())
+				.withLineThickness(getSpectrumLineThicknessValue());
+	}
+
+	private float getSpectrumLineThicknessValue() {
+		BigDecimal thickness = parameterSpectrumLineThickness.getValue();
+		return thickness == null ? 1f : thickness.floatValue();
+	}
+
+	private void registerOpenIqAnalyzer(IQAnalyzerApp analyzer) {
+		openIqAnalyzers.addIfAbsent(analyzer);
+		analyzer.setLineThickness(getSpectrumLineThicknessValue());
+	}
+
+	private void unregisterOpenIqAnalyzer(IQAnalyzerApp analyzer) {
+		openIqAnalyzers.remove(analyzer);
+	}
+
+	private void applyIqAnalyzerLineThickness(float thickness) {
+		for (IQAnalyzerApp analyzer : openIqAnalyzers) {
+			analyzer.setLineThickness(thickness);
+		}
 	}
 
 	private IQAnalyzerApp.VideoRecordingSettings createIqAnalyzerVideoSettings() {
@@ -5576,7 +5611,11 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		});
 
 		parameterSpectrumLineThickness.addListener((thickness) -> {
-			SwingUtilities.invokeLater(() -> chartLineRenderer.setBaseStroke(new BasicStroke(thickness.floatValue())));
+			SwingUtilities.invokeLater(() -> {
+				float lineThickness = thickness.floatValue();
+				chartLineRenderer.setBaseStroke(new BasicStroke(lineThickness));
+				applyIqAnalyzerLineThickness(lineThickness);
+			});
 		});
 		parameterSpectrumSpline.addListener((Boolean spline) -> setSpectrumSplineRenderer(spline));
 		
