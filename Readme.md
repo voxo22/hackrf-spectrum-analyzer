@@ -43,7 +43,7 @@ See Wiki
 - Switchable Datestamp and Infobox
 - Replay option of WAV/PCM I/Q files, can be used without HackRF HW, just to analyze any I/Q records
 - Direct HackRF HW Tx option of WAV/PCM IQ files while REPLAY in spectrum mode (orig/custom center freq setting, Tx power slider)
-- hackrf_sweep integrated as a shared library
+- hackrf_sweep and hackrf_iq integrated as a shared library
 
 You can customize "presets.csv" file by adding or deleting requested rows. Follow the structure and column meaning.
 Additionaly, in "freq" folder you can edit frequency allocation tables or make your own. "Slash" character (/) in text columns hyphenates rows.
