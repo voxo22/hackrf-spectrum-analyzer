@@ -1193,6 +1193,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private volatile File							lastReplayDirectory				= new File(".");
 	private volatile boolean						stopSpectrumPlayback				= false;
 	private volatile SpectrumRecording.Header		playbackHeader;
+	private volatile double[]						playbackFrequencyStart;
 	private volatile ReplayType						playbackType;
 	private volatile IQReplayFile					playbackIqFile;
 	private final CopyOnWriteArrayList<IQAnalyzerApp> openIqAnalyzers				= new CopyOnWriteArrayList<>();
@@ -3015,6 +3016,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			parameterFrequency.setValue(liveFrequencyRangeBeforePlayback);
 			parameterFFTBinHz.setValue(liveRbwBeforePlayback);
 			playbackHeader = null;
+			playbackFrequencyStart = null;
 			playbackIqFile = null;
 			playbackIqAudioLowerMHz = Double.NaN;
 			playbackIqAudioUpperMHz = Double.NaN;
@@ -3310,6 +3312,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private long playSpectrumRecordingFrom(File file, long startOffsetMillis) throws IOException, InterruptedException {
 		try (SpectrumRecording.Reader reader = new SpectrumRecording.Reader(file)) {
 			playbackHeader = reader.getHeader();
+			playbackFrequencyStart = buildPlaybackFrequencyStart(playbackHeader);
 			parameterDisplayFreqRange.setValue(getActiveRangesForDisplay());
 			updateFrequencySelectorForPlayback(playbackHeader);
 			if (resetTriggerRangeOnPlaybackStart) {
@@ -3332,41 +3335,51 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			hwProcessingQueue.clear();
 			offerPlaybackFrame(frame);
 			offerPlaybackFrame(frame);
-			SpectrumRecording.Frame previousFrame = frame;
+			long playbackBaseNanos = System.nanoTime()
+					- millisToNanos(Math.max(0, frame.timeOffsetMillis - startOffsetMillis));
 
 			while (!stopSpectrumPlayback && (frame = reader.readFrame()) != null) {
 				long seek = takePlaybackSeekRequest();
 				if (seek >= 0)
 					return seek;
 
-				long delay = previousFrame == null ? 0 : frame.timeOffsetMillis - previousFrame.timeOffsetMillis;
-				if (!sleepPlaybackDelay(delay))
+				long frameOffsetMillis = Math.max(0, frame.timeOffsetMillis - startOffsetMillis);
+				long pauseNanos = sleepUntilPlaybackDeadline(playbackBaseNanos + millisToNanos(frameOffsetMillis));
+				if (pauseNanos < 0)
 					return takePlaybackSeekRequest();
+				playbackBaseNanos += pauseNanos;
 
 				seek = takePlaybackSeekRequest();
 				if (seek >= 0)
 					return seek;
 
 				offerPlaybackFrame(frame);
-				previousFrame = frame;
 			}
 			return -1;
 		}
 	}
 
-	private boolean sleepPlaybackDelay(long delayMillis) throws InterruptedException {
-		if (delayMillis <= 0 || delayMillis >= 10000)
-			return !stopSpectrumPlayback;
-		long remaining = delayMillis;
-		while (!stopSpectrumPlayback && playbackSeekRequestMillis < 0 && remaining > 0) {
+	private long sleepUntilPlaybackDeadline(long deadlineNanos) throws InterruptedException {
+		long pausedNanos = 0;
+		while (!stopSpectrumPlayback && playbackSeekRequestMillis < 0) {
 			while (!stopSpectrumPlayback && playbackSeekRequestMillis < 0 && parameterIsCapturingPaused.getValue()) {
+				long pausedAtNanos = System.nanoTime();
 				Thread.sleep(50);
+				long pauseSliceNanos = System.nanoTime() - pausedAtNanos;
+				pausedNanos += pauseSliceNanos;
+				deadlineNanos += pauseSliceNanos;
 			}
-			long sleep = Math.min(remaining, 50);
-			Thread.sleep(sleep);
-			remaining -= sleep;
+			long remainingNanos = deadlineNanos - System.nanoTime();
+			if (remainingNanos <= 0)
+				break;
+			long sleepNanos = Math.min(remainingNanos, 50_000_000L);
+			Thread.sleep(sleepNanos / 1_000_000L, (int) (sleepNanos % 1_000_000L));
 		}
-		return !stopSpectrumPlayback && playbackSeekRequestMillis < 0;
+		return !stopSpectrumPlayback && playbackSeekRequestMillis < 0 ? pausedNanos : -1;
+	}
+
+	private long millisToNanos(long millis) {
+		return millis * 1_000_000L;
 	}
 
 	private long takePlaybackSeekRequest() {
@@ -3416,14 +3429,21 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		SpectrumRecording.Header header = playbackHeader;
 		if (header == null)
 			return;
-		double[] frequencyStart = new double[frame.spectrum.length];
-		for (int i = 0; i < frequencyStart.length; i++) {
-			frequencyStart[i] = header.freqStartMHz * 1000000d + header.fftBinHz * (i + 0.5d);
-		}
+		double[] frequencyStart = playbackFrequencyStart;
+		if (frequencyStart == null || frequencyStart.length != frame.spectrum.length)
+			frequencyStart = buildPlaybackFrequencyStart(header);
 		playbackPositionMillis = frame.timeOffsetMillis;
 		playbackCurrentEpochMillis = header.startEpochMillis <= 0 ? 0 : header.startEpochMillis + frame.timeOffsetMillis;
 		waterfallPlot.setPlaybackStatus(true, playbackPositionMillis, playbackDurationMillis);
 		hwProcessingQueue.put(new FFTBins(true, frequencyStart, header.fftBinHz, frame.spectrum.clone()));
+	}
+
+	private double[] buildPlaybackFrequencyStart(SpectrumRecording.Header header) {
+		double[] frequencyStart = new double[header.binCount];
+		for (int i = 0; i < frequencyStart.length; i++) {
+			frequencyStart[i] = header.freqStartMHz * 1000000d + header.fftBinHz * (i + 0.5d);
+		}
+		return frequencyStart;
 	}
 	
 	private FrequencyRange getFreq() {
