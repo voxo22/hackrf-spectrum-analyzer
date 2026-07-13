@@ -72,6 +72,8 @@ public class IQAnalyzerApp {
 	private static final int DEFAULT_VGA_GAIN = 32;
 	private static final int DEFAULT_VISIBLE_SAMPLES = 4096;
 	private static final int DEFAULT_BUFFER_SECONDS = 2;
+	private static final int AUTO_NARROW_MAX_BANDWIDTH_HZ = 1_500_000;
+	private static final int WIDEBAND_FALLBACK_BANDWIDTH_HZ = 1_000_000;
 	private static final int MAX_BLOCK_BYTES = 262_144;
 	private static final int NARROW_DC_AVOID_MIN_HZ = 50_000;
 	private static final int NARROW_DC_AVOID_GUARD_HZ = 25_000;
@@ -309,15 +311,21 @@ public class IQAnalyzerApp {
 		presetCombo.setSelectedIndex(0);
 		channelOffsetField.setText(formatOffset(channelOffsetHz));
 		selectExactRate(sampleRateHz);
-		if (channelBandwidthHz <= 0 || channelBandwidthHz >= sampleRateHz * 0.9d) {
+		if (!shouldAutoSelectNarrow(channelBandwidthHz)) {
 			viewModeCombo.setSelectedIndex(0);
-			selectBandwidth(sampleRateHz);
+			selectBandwidth(Math.min(Math.max(1, channelBandwidthHz), WIDEBAND_FALLBACK_BANDWIDTH_HZ));
 			selectExactOutputRate(sampleRateHz);
+			updateChannelControlState();
 			return;
 		}
 		viewModeCombo.setSelectedIndex(1);
 		selectBandwidth(channelBandwidthHz);
 		selectExactOutputRate(sampleRateHz);
+		updateChannelControlState();
+	}
+
+	private boolean shouldAutoSelectNarrow(int channelBandwidthHz) {
+		return channelBandwidthHz > 0 && channelBandwidthHz <= AUTO_NARROW_MAX_BANDWIDTH_HZ;
 	}
 
 	private boolean restoreWindowGeometry() {
@@ -548,7 +556,10 @@ public class IQAnalyzerApp {
 				new ViewModeOption("Narrow channel", true)
 		});
 		viewModeCombo.setSelectedIndex(1);
-		viewModeCombo.addActionListener(e -> applyDspSettingsLive());
+		viewModeCombo.addActionListener(e -> {
+			updateChannelControlState();
+			applyDspSettingsLive();
+		});
 		channelOffsetField = new JTextField("0", 7);
 		channelOffsetField.addActionListener(e -> applyDspSettingsLive());
 		channelOffsetField.addFocusListener(new FocusAdapter() {
@@ -698,6 +709,7 @@ public class IQAnalyzerApp {
 		styleRunStopButton();
 		styleRecordButtons();
 		styleSingleTriggerButton();
+		updateChannelControlState();
 		java.awt.Dimension controlsPreferredSize = controls.getPreferredSize();
 		controls.setPreferredSize(new java.awt.Dimension(280, controlsPreferredSize.height));
 
@@ -1291,7 +1303,7 @@ public class IQAnalyzerApp {
 		WavFileWriter iq = iqRecorder;
 		boolean video = isVideoRecording();
 		if (audio != null) {
-			text.append("Audio ").append(formatBytes(audio.getDataBytes()));
+			text.append("Audio ").append(formatRecordingSizeAndDuration(audio));
 		}
 		if (video) {
 			if (text.length() > 0) {
@@ -1303,9 +1315,24 @@ public class IQAnalyzerApp {
 			if (text.length() > 0) {
 				text.append("   ");
 			}
-			text.append("IQ ").append(formatBytes(iq.getDataBytes()));
+			text.append("IQ ").append(formatRecordingSizeAndDuration(iq));
 		}
 		recordStatusLabel.setText(text.toString());
+	}
+
+	private String formatRecordingSizeAndDuration(WavFileWriter recorder) {
+		return formatBytes(recorder.getDataBytes()) + " / " + formatRecordingDuration(recorder.getDurationMillis());
+	}
+
+	private String formatRecordingDuration(long durationMillis) {
+		long totalSeconds = Math.max(0, durationMillis / 1000L);
+		long seconds = totalSeconds % 60L;
+		long minutes = (totalSeconds / 60L) % 60L;
+		long hours = totalSeconds / 3600L;
+		if (hours > 0) {
+			return String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds);
+		}
+		return String.format(Locale.US, "%02d:%02d", minutes, seconds);
 	}
 
 	private String formatBytes(long bytes) {
@@ -1839,6 +1866,7 @@ public class IQAnalyzerApp {
 			viewModeCombo.setSelectedIndex(0);
 			deviationCheck.setSelected(false);
 			selectSampleView(preset.visibleSamples);
+			updateChannelControlState();
 			return;
 		}
 		viewModeCombo.setSelectedIndex(1);
@@ -1846,6 +1874,21 @@ public class IQAnalyzerApp {
 		selectBandwidth(preset.bandwidthHz);
 		selectOutputRate(preset.outputRateHz);
 		selectSampleView(preset.visibleSamples);
+		updateChannelControlState();
+	}
+
+	private void updateChannelControlState() {
+		if (viewModeCombo == null) {
+			return;
+		}
+		ViewModeOption viewMode = (ViewModeOption) viewModeCombo.getSelectedItem();
+		boolean channelMode = viewMode != null && viewMode.channel;
+		if (channelBandwidthCombo != null) {
+			channelBandwidthCombo.setEnabled(channelMode);
+		}
+		if (outputRateCombo != null) {
+			outputRateCombo.setEnabled(channelMode);
+		}
 	}
 
 	private void selectBandwidth(int bandwidthHz) {

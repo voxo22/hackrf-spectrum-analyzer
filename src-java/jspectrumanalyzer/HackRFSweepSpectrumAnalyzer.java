@@ -126,6 +126,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private static final double IQ_REPLAY_MAX_VIEW_SPAN_MULTIPLIER = 10d;
 	private static final int IQ_REPLAY_MIN_TARGET_RBW_HZ = 50;
 	private static final int IQ_REPLAY_TX_MIN_SAMPLE_RATE_HZ = 2_000_000;
+	private static final int IQ_ANALYZER_AUTO_NARROW_MAX_BANDWIDTH_HZ = 1_500_000;
 
 	private enum ReplayType {
 		DATA, WAV, RAW
@@ -153,9 +154,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		IQReplayAnalyzerFeed(IQAnalyzerApp analyzer, int sourceSampleRateHz, long channelOffsetHz,
 				int channelBandwidthHz, int outputRateHz) {
 			this.analyzer = analyzer;
-			boolean fullBandwidth = Math.abs(channelOffsetHz) <= sourceSampleRateHz / 200L
-					&& channelBandwidthHz >= sourceSampleRateHz * 0.9d
-					&& outputRateHz >= sourceSampleRateHz;
+			boolean fullBandwidth = channelBandwidthHz > IQ_ANALYZER_AUTO_NARROW_MAX_BANDWIDTH_HZ
+					&& Math.abs(channelOffsetHz) <= sourceSampleRateHz / 200L;
 			IQSampleProcessor selectedProcessor = null;
 			if (!fullBandwidth) {
 				try {

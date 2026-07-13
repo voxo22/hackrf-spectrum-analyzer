@@ -38,6 +38,14 @@ class WavFileWriter implements Pcm16AudioSink, AutoCloseable {
 		return dataBytes;
 	}
 
+	synchronized long getDurationMillis() {
+		long bytesPerSecond = (long) sampleRateHz * channels * bitsPerSample / 8L;
+		if (bytesPerSecond <= 0) {
+			return 0;
+		}
+		return dataBytes * 1000L / bytesPerSecond;
+	}
+
 	@Override
 	public synchronized void close() throws IOException {
 		if (closed) {
