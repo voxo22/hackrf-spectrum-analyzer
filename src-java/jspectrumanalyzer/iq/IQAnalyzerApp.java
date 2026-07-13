@@ -106,6 +106,8 @@ public class IQAnalyzerApp {
 	private JTextField channelOffsetField;
 	private JComboBox<BandwidthOption> channelBandwidthCombo;
 	private JComboBox<OutputRateOption> outputRateCombo;
+	private JComboBox<SignalTestOption> signalTestCombo;
+	private JButton signalTestButton;
 	private JCheckBox envelopeCheck;
 	private JCheckBox deviationCheck;
 	private JCheckBox burstDetectCheck;
@@ -156,6 +158,7 @@ public class IQAnalyzerApp {
 	private volatile LongSupplier recordingTimeMillisSupplier;
 	private volatile VideoRecordingSettings videoRecordingSettings = new VideoRecordingSettings("GIF", 540, 15);
 	private volatile float lineThickness = 1f;
+	private SignalQualityTesterFrame signalTestFrame;
 	private boolean singleTriggerArmed = false;
 	private Long spectrumDragBaseOffsetHz = null;
 
@@ -588,6 +591,15 @@ public class IQAnalyzerApp {
 		});
 		outputRateCombo.setSelectedIndex(3);
 		outputRateCombo.addActionListener(e -> applyDspSettingsLive());
+		signalTestCombo = new JComboBox<>(new SignalTestOption[] {
+				new SignalTestOption("DAB"),
+				new SignalTestOption("DVB-T 8 MHz"),
+				new SignalTestOption("DVB-T2 8 MHz"),
+				new SignalTestOption("Generic QAM")
+		});
+		signalTestButton = new JButton("SIGNAL TEST");
+		styleButton(signalTestButton, START_BG, Color.BLACK);
+		signalTestButton.addActionListener(e -> openSignalTestWindow());
 		envelopeCheck = new JCheckBox("Envelope");
 		envelopeCheck.setSelected(true);
 		deviationCheck = new JCheckBox("FSK dev");
@@ -679,11 +691,13 @@ public class IQAnalyzerApp {
 		addLabeled(channelSection, "Offset", channelOffsetField);
 		addLabeledPair(channelSection, "BW", channelBandwidthCombo, "Out", outputRateCombo);
 
+		JPanel signalSection = createSection("Signal");
+		addInline(signalSection, signalTestCombo, signalTestButton);
+
 		JPanel viewSection = createSection("View");
 		addLabeled(viewSection, "Time view", sampleViewCombo);
-		addWide(viewSection, timeViewInfoLabel);
 		addInline(viewSection, envelopeCheck, deviationCheck, burstDetectCheck);
-		addInline(viewSection, autoLevelCheck);
+		addInline(viewSection, createAutoLevelInfoRow());
 
 		JPanel audioSection = createSection("Audio");
 		addInline(audioSection, audioEnableCheck, createAudioToneRow());
@@ -702,6 +716,7 @@ public class IQAnalyzerApp {
 
 		controls.add(rfSection);
 		controls.add(channelSection);
+		controls.add(signalSection);
 		controls.add(viewSection);
 		controls.add(audioSection);
 		controls.add(triggerSection);
@@ -954,6 +969,15 @@ public class IQAnalyzerApp {
 		return panel;
 	}
 
+	private JPanel createAutoLevelInfoRow() {
+		JPanel panel = new JPanel(new BorderLayout(8, 0));
+		panel.setBackground(PANEL_BG);
+		panel.add(autoLevelCheck, BorderLayout.WEST);
+		timeViewInfoLabel.setHorizontalAlignment(JLabel.RIGHT);
+		panel.add(timeViewInfoLabel, BorderLayout.CENTER);
+		return panel;
+	}
+
 	private void applyAudioToneCutoff() {
 		if (audioToneSlider == null) {
 			return;
@@ -1039,6 +1063,32 @@ public class IQAnalyzerApp {
 			timeDomainPanel.setSingleTrigger(singleTriggerArmed);
 		}
 		styleSingleTriggerButton();
+	}
+
+	private void openSignalTestWindow() {
+		if (signalTestFrame != null) {
+			signalTestFrame.toFront();
+			signalTestFrame.requestFocus();
+			return;
+		}
+		SignalTestOption option = signalTestCombo == null ? null : (SignalTestOption) signalTestCombo.getSelectedItem();
+		String mode = option == null ? "Signal" : option.label;
+		SignalQualityTesterFrame tester = new SignalQualityTesterFrame(mode, () -> {
+			signalTestFrame = null;
+			styleSignalTestButton();
+		});
+		tester.setLocationRelativeTo(frame);
+		signalTestFrame = tester;
+		styleSignalTestButton();
+		tester.setVisible(true);
+	}
+
+	private void styleSignalTestButton() {
+		if (signalTestButton == null) {
+			return;
+		}
+		styleButton(signalTestButton, signalTestFrame == null ? START_BG : STOP_BG, Color.BLACK);
+		signalTestButton.setText(signalTestFrame == null ? "SIGNAL TEST" : "SHOW TEST");
 	}
 
 	private void toggleAudioRecording() {
@@ -1516,6 +1566,7 @@ public class IQAnalyzerApp {
 				recordingData = channelOutput;
 			}
 			byte[] copy;
+			offerSignalTestIQ(centerFreqHz, sampleRateHz, recordingData, recordingLength);
 			if (inputOwned && recordingData == iqData) {
 				copy = iqData;
 				applyAutoLevel(copy, recordingLength);
@@ -1535,6 +1586,7 @@ public class IQAnalyzerApp {
 			}
 			int processedBytes = processor.process(iqData, length, channelOutput);
 			if (processedBytes > 0) {
+				offerSignalTestIQ(centerFreqHz, processor.getActualOutputRateHz(), channelOutput, processedBytes);
 				byte[] copy = new byte[processedBytes];
 				System.arraycopy(channelOutput, 0, copy, 0, processedBytes);
 				applyAutoLevel(copy, copy.length);
@@ -1549,6 +1601,13 @@ public class IQAnalyzerApp {
 		blocks.incrementAndGet();
 		bytes.addAndGet(length);
 		latestCenterFreqHz.set(centerFreqHz);
+	}
+
+	private void offerSignalTestIQ(long centerFreqHz, int sampleRateHz, byte[] iqData, int length) {
+		SignalQualityTesterFrame tester = signalTestFrame;
+		if (tester != null) {
+			tester.offerIQBlock(centerFreqHz, sampleRateHz, iqData, length);
+		}
 	}
 
 	private byte[] copyAndLevel(byte[] iqData, int length) {
@@ -2139,6 +2198,19 @@ public class IQAnalyzerApp {
 		OutputRateOption(String label, int outputRateHz) {
 			this.label = label;
 			this.outputRateHz = outputRateHz;
+		}
+
+		@Override
+		public String toString() {
+			return label;
+		}
+	}
+
+	private static class SignalTestOption {
+		final String label;
+
+		SignalTestOption(String label) {
+			this.label = label;
 		}
 
 		@Override
