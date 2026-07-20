@@ -14,8 +14,10 @@ import java.util.Locale;
 
 import javax.swing.BorderFactory;
 import javax.swing.JFrame;
+import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.SwingConstants;
 import javax.swing.Timer;
 import javax.swing.border.EmptyBorder;
 
@@ -44,13 +46,42 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final ScatterPanel scatterPanel = new ScatterPanel();
 	private final SpectrumPanel spectrumPanel = new SpectrumPanel();
 	private final DabConstellationPanel dabConstellationPanel = new DabConstellationPanel();
+	private final Dvbt2P2Panel dvbt2P2Panel = new Dvbt2P2Panel();
 	private final QualityPanel qualityPanel = new QualityPanel();
 	private final DabLockPanel dabLockPanel = new DabLockPanel();
+	private final Dvbt2CrcPanel dvbt2CrcPanel = new Dvbt2CrcPanel();
+	private final JLabel dvbt2PreLabel = new JLabel();
+	private final JLabel dvbt2PostLabel = new JLabel();
 	private final JLabel titleLabel;
 	private final JLabel statsLabel = new JLabel("Waiting for IQ samples...");
 	private final JLabel detailLabel = new JLabel("RAW quality waits for signal level, clipping, DC offset and stability");
 	private final Timer repaintTimer;
 	private final boolean dabMode;
+	private final boolean dvbtMode;
+	private final boolean dvbt2Mode;
+	private final DvbtSignalAnalyzer dvbtAnalyzer = new DvbtSignalAnalyzer();
+	private final Dvbt2SignalAnalyzer dvbt2Analyzer = new Dvbt2SignalAnalyzer();
+	private volatile boolean dvbt2AnalysisRunning;
+	private volatile Dvbt2SignalAnalyzer.Result latestDvbt2Result;
+	private static final int DVBT2_SIGNALLING_CAPTURE_BYTES = 6_000_000;
+	private static final int DVBT2_P1_SCAN_BYTES = 800_000;
+	private static final int DVBT2_P1_OVERLAP_BYTES = 180_000;
+	private byte[] dvbt2SignallingCapture;
+	private int dvbt2SignallingCaptureLength;
+	private volatile boolean dvbt2SignallingRunning;
+	private volatile Dvbt2P2Decoder.Result dvbt2Signalling;
+	private volatile Dvbt2P1Decoder.Decoded dvbt2P1Lock;
+	private volatile long lastDvbt2P1RefreshNanos;
+	private volatile long lastDvbt2L1PostRefreshNanos;
+	private volatile String dvbt2SignallingState = "collecting DVB-T2 signalling IQ";
+	private final boolean[] dvbt2PreCrcHistory = new boolean[32];
+	private final boolean[] dvbt2PostCrcHistory = new boolean[32];
+	private int dvbt2CrcIndex, dvbt2CrcCount, dvbt2PreCrcSuccess, dvbt2PostCrcSuccess;
+	private static final int DVBT_TPS_CAPTURE_BYTES = 4_000_000;
+	private byte[] dvbtTpsCapture;
+	private int dvbtTpsCaptureLength;
+	private volatile boolean dvbtTpsRunning;
+	private volatile DvbtSignalAnalyzer.Result dvbtSignalling;
 
 	private volatile Snapshot snapshot;
 	private volatile long lastAnalysisNanos = 0;
@@ -66,8 +97,18 @@ final class SignalQualityTesterFrame extends JFrame {
 		super("Signal Quality Tester");
 		setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 		dabMode = "DAB".equals(mode);
+		dvbtMode = mode.startsWith("DVB-T ") && !mode.startsWith("DVB-T2");
+		dvbt2Mode = mode.startsWith("DVB-T2");
+		if (dvbtMode) dvbtTpsCapture = new byte[DVBT_TPS_CAPTURE_BYTES];
+		if (dvbt2Mode) {
+			latestDvbt2Result = Dvbt2SignalAnalyzer.Result.empty("collecting DVB-T2 IQ");
+			dvbt2SignallingCapture = new byte[DVBT2_SIGNALLING_CAPTURE_BYTES];
+			detailLabel.setFont(detailLabel.getFont().deriveFont(11f));
+			prepareParameterLabel(dvbt2PreLabel);
+			prepareParameterLabel(dvbt2PostLabel);
+		}
 
-		titleLabel = new JLabel(mode + " raw IQ monitor");
+		titleLabel = new JLabel(mode + (dabMode || dvbtMode || dvbt2Mode ? " signal quality" : " raw IQ monitor"));
 		titleLabel.setForeground(TEXT_FG);
 		titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 14f));
 		statsLabel.setForeground(MUTED_FG);
@@ -82,28 +123,35 @@ final class SignalQualityTesterFrame extends JFrame {
 		JPanel footer = new JPanel(new BorderLayout(8, 4));
 		footer.setBackground(PANEL_BG);
 		footer.setBorder(new EmptyBorder(6, 10, 8, 10));
-		JPanel qualityRows = new JPanel(new GridLayout(dabMode ? 2 : 1, 1, 0, 2));
+		JPanel qualityRows = new JPanel(new GridLayout(dvbt2Mode ? 3 : dabMode || dvbtMode ? 2 : 1, 1, 0, 2));
 		qualityRows.setBackground(PANEL_BG);
 		qualityRows.add(qualityPanel);
-		if (dabMode) {
+		if (dabMode || dvbtMode || dvbt2Mode) {
 			qualityRows.add(dabLockPanel);
 		}
+		if (dvbt2Mode) qualityRows.add(dvbt2CrcPanel);
 		footer.add(qualityRows, BorderLayout.NORTH);
 		footer.add(detailLabel, BorderLayout.CENTER);
 
 		scatterPanel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
 		spectrumPanel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
 		dabConstellationPanel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
+		dvbt2P2Panel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
 		JPanel plots = new JPanel(new GridLayout(1, 2, 6, 0));
 		plots.setBackground(PANEL_BG);
 		plots.setBorder(new EmptyBorder(0, 8, 0, 8));
-		plots.add(scatterPanel);
-		plots.add(dabMode ? dabConstellationPanel : spectrumPanel);
+		if (dvbt2Mode) {
+			plots.add(createDvbt2Column(dvbt2P2Panel, dvbt2PreLabel));
+			plots.add(createDvbt2Column(dabConstellationPanel, dvbt2PostLabel));
+		} else {
+			plots.add(scatterPanel);
+			plots.add(dabMode || dvbtMode ? dabConstellationPanel : spectrumPanel);
+		}
 
 		add(header, BorderLayout.NORTH);
 		add(plots, BorderLayout.CENTER);
 		add(footer, BorderLayout.SOUTH);
-		setSize(760, 420);
+		setSize(dvbt2Mode ? 1100 : 760, dvbt2Mode ? 650 : 420);
 
 		repaintTimer = new Timer(100, e -> updateView());
 		repaintTimer.start();
@@ -118,6 +166,24 @@ final class SignalQualityTesterFrame extends JFrame {
 		});
 	}
 
+	private void prepareParameterLabel(JLabel label) {
+		label.setOpaque(true);
+		label.setBackground(PANEL_BG);
+		label.setForeground(MUTED_FG);
+		label.setFont(new Font("Helvetica", Font.PLAIN, 10));
+		label.setVerticalAlignment(SwingConstants.TOP);
+		label.setBorder(new EmptyBorder(6, 8, 4, 8));
+		label.setPreferredSize(new Dimension(100, 250));
+	}
+
+	private JPanel createDvbt2Column(JPanel graph, JLabel parameters) {
+		JPanel column = new JPanel(new BorderLayout());
+		column.setBackground(PANEL_BG);
+		column.add(graph, BorderLayout.CENTER);
+		column.add(parameters, BorderLayout.SOUTH);
+		return column;
+	}
+
 	void offerIQBlock(long centerFreqHz, int sampleRateHz, byte[] iqData, int length) {
 		if (iqData == null || length < 2) {
 			return;
@@ -127,14 +193,16 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (totalSamples <= 0) {
 			return;
 		}
+		if (dvbtMode) offerDvbtTpsCapture(sampleRateHz, iqData, evenLength);
+		if (dvbt2Mode) offerDvbt2SignallingCapture(sampleRateHz, iqData, evenLength);
 		byte[] dabAnalysisData = iqData;
 		int dabAnalysisLength = evenLength;
-		if (dabMode) {
+		if (dabMode || dvbtMode || dvbt2Mode) {
 			dabAnalysisLength = appendDabHistory(iqData, evenLength);
 			dabAnalysisData = dabHistory;
 		}
 		long now = System.nanoTime();
-		long interval = dabMode ? DAB_MIN_ANALYSIS_INTERVAL_NANOS : MIN_ANALYSIS_INTERVAL_NANOS;
+		long interval = dabMode || dvbtMode || dvbt2Mode ? DAB_MIN_ANALYSIS_INTERVAL_NANOS : MIN_ANALYSIS_INTERVAL_NANOS;
 		if (now - lastAnalysisNanos < interval) {
 			return;
 		}
@@ -181,8 +249,184 @@ final class SignalQualityTesterFrame extends JFrame {
 			dabMetrics.constellation = computeDabConstellation(dabAnalysisData, dabAnalysisLength, sampleRateHz,
 					dabMetrics);
 		}
+		DvbtSignalAnalyzer.Result dvbtResult = dvbtMode
+				? dvbtAnalyzer.analyze(dabAnalysisData, dabAnalysisLength, sampleRateHz) : null;
+		if (dvbtResult != null) dvbtResult = dvbtResult.withSignalling(dvbtSignalling);
+		if (dvbt2Mode) scheduleDvbt2Analysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
+		Dvbt2SignalAnalyzer.Result dvbt2Result = dvbt2Mode ? latestDvbt2Result : null;
 		snapshot = new Snapshot(centerFreqHz, sampleRateHz, samples, sampleCount, dbfs, peak, dcPercent,
-				clippingPercent, stabilityDb, quality, spectrum, dabMetrics, System.currentTimeMillis());
+				clippingPercent, stabilityDb, quality, spectrum, dabMetrics, dvbtResult, dvbt2Result,
+				System.currentTimeMillis());
+	}
+
+	private synchronized void scheduleDvbt2Analysis(byte[] iqData, int length, int sampleRateHz) {
+		/* L1 acquisition is deliberately exclusive because it scans a much longer
+		 * capture. Once L1 is locked it never blocks the lightweight live monitor. */
+		if (dvbt2AnalysisRunning || (dvbt2Signalling == null && dvbt2SignallingRunning) || length < 2) return;
+		final byte[] capture = new byte[length & ~1];
+		System.arraycopy(iqData, 0, capture, 0, capture.length);
+		dvbt2AnalysisRunning = true;
+		Thread worker = new Thread(() -> {
+			try {
+				Dvbt2SignalAnalyzer.Result result = dvbt2Analyzer.analyze(capture, capture.length, sampleRateHz);
+				latestDvbt2Result = dvbt2Signalling == null
+						? result.waitingForSignalling(dvbt2SignallingState) : result.withSignalling(dvbt2Signalling);
+			} finally {
+				dvbt2AnalysisRunning = false;
+			}
+		}, "DVB-T2 constellation analyzer");
+		worker.setDaemon(true);
+		worker.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
+		worker.start();
+	}
+
+	private synchronized void offerDvbt2SignallingCapture(int sampleRateHz, byte[] iqData, int length) {
+		if (dvbt2SignallingCapture == null) return;
+		if (dvbt2Signalling != null && (dvbt2SignallingRunning
+				|| System.nanoTime() - lastDvbt2P1RefreshNanos < 100_000_000L)) return;
+		int copy = Math.min(length, dvbt2SignallingCapture.length - dvbt2SignallingCaptureLength) & ~1;
+		if (copy > 0) {
+			/* Keep the capture temporally continuous. If only part of the incoming
+			 * block fits, its beginning follows the data already accumulated. */
+			System.arraycopy(iqData, 0, dvbt2SignallingCapture, dvbt2SignallingCaptureLength, copy);
+			dvbt2SignallingCaptureLength += copy;
+		}
+		int required = Math.min(dvbt2SignallingCapture.length,
+				Math.max(2_000_000, (int)Math.ceil(sampleRateHz * .27) * 2));
+		if (dvbt2SignallingCaptureLength < required) return;
+		if (dvbt2SignallingRunning) return;
+		final byte[] capture = new byte[dvbt2SignallingCaptureLength];
+		System.arraycopy(dvbt2SignallingCapture, 0, capture, 0, capture.length);
+		dvbt2SignallingCaptureLength = 0;
+		final Dvbt2P2Decoder.Result lockedParameters = dvbt2Signalling;
+		final Dvbt2P1Decoder.Decoded knownP1 = dvbt2P1Lock;
+		dvbt2SignallingRunning = true;
+		if (lockedParameters != null) lastDvbt2P1RefreshNanos = System.nanoTime();
+		dvbt2SignallingState = lockedParameters == null
+				? "analyzing DVB-T2 P1/P2" : "refreshing DVB-T2 constellation";
+		Thread worker = new Thread(() -> {
+			try {
+				if (lockedParameters != null && knownP1 != null) {
+					int scanStep = DVBT2_P1_SCAN_BYTES - DVBT2_P1_OVERLAP_BYTES;
+					for (int offset = 0; offset < capture.length; offset += scanStep) {
+						int chunkLength = Math.min(DVBT2_P1_SCAN_BYTES, capture.length - offset) & ~1;
+						if (chunkLength < 160_000) break;
+						byte[] chunk = new byte[chunkLength];
+						System.arraycopy(capture, offset, chunk, 0, chunkLength);
+						Dvbt2P1Decoder.Result p1 = new Dvbt2P1Decoder().synchronize(chunk, chunk.length, sampleRateHz, knownP1);
+						if (p1.decoded != null && p1.decoded.points.length > 0) {
+							lockedParameters.p2Points = p1.decoded.points;
+							long now = System.nanoTime();
+							if (now - lastDvbt2L1PostRefreshNanos >= 1_000_000_000L) {
+								lastDvbt2L1PostRefreshNanos = now;
+								Dvbt2P2Decoder.Result fresh = new Dvbt2P2Decoder().refresh(
+										chunk, chunk.length, sampleRateHz, p1.decoded, lockedParameters);
+								if (fresh != null && fresh.l1PostValid && fresh.l1PostPoints.length > 0)
+									lockedParameters.l1PostPoints = fresh.l1PostPoints;
+							}
+							dvbt2SignallingState = "DVB-T2 P1 realtime";
+							latestDvbt2Result = latestDvbt2Result.withSignalling(lockedParameters);
+							break;
+						}
+					}
+					return;
+				}
+						Dvbt2P2Decoder.Result p2 = null;
+				Dvbt2P1Decoder.Decoded p1ForLock = null;
+				boolean p1Seen = false;
+				int step = DVBT2_P1_SCAN_BYTES - DVBT2_P1_OVERLAP_BYTES;
+				for (int offset = 0; offset < capture.length && p2 == null; offset += step) {
+					int chunkLength = Math.min(DVBT2_P1_SCAN_BYTES, capture.length - offset) & ~1;
+					if (chunkLength < 160_000) break;
+					byte[] chunk = new byte[chunkLength];
+					System.arraycopy(capture, offset, chunk, 0, chunkLength);
+					Dvbt2P1Decoder p1Decoder = new Dvbt2P1Decoder();
+					Dvbt2P1Decoder.Result p1 = lockedParameters != null && knownP1 != null
+							? p1Decoder.synchronize(chunk, chunk.length, sampleRateHz, knownP1)
+							: p1Decoder.detect(chunk, chunk.length, sampleRateHz);
+					if (p1.decoded != null) {
+						p1Seen = true;
+						p1ForLock = p1.decoded;
+						String preamble = p1.decoded.preamble == 0 ? "SISO"
+								: p1.decoded.preamble == 1 ? "MISO" : "type " + p1.decoded.preamble;
+						dvbt2SignallingState = lockedParameters == null
+								? "DVB-T2 P1 " + preamble + " " + p1.decoded.fftMode + " locked; decoding L1"
+								: "DVB-T2 P1 synced; refreshing constellation";
+						Dvbt2P2Decoder decoder = new Dvbt2P2Decoder();
+						p2 = lockedParameters == null
+								? decoder.decode(chunk, chunk.length, sampleRateHz, p1.decoded)
+								: decoder.refresh(chunk, chunk.length, sampleRateHz, p1.decoded, lockedParameters);
+					}
+				}
+				if (p2 != null) {
+					boolean currentPostValid = p2.l1PostValid;
+					if (p1ForLock != null && p1ForLock.points.length > 0) p2.p2Points = p1ForLock.points;
+					recordDvbt2Crc(true, currentPostValid);
+					if (!currentPostValid && lockedParameters != null) p2.keepPostFrom(lockedParameters);
+					dvbt2Signalling = p2;
+					dvbt2Analyzer.setLockedParameters(p2);
+					if (lockedParameters == null) dvbt2P1Lock = p1ForLock;
+					dvbt2SignallingState = lockedParameters == null
+							? "DVB-T2 L1 locked" : "DVB-T2 realtime P2";
+					latestDvbt2Result = latestDvbt2Result.withSignalling(p2);
+				} else {
+					recordDvbt2Crc(false, false);
+					dvbt2SignallingState = lockedParameters != null
+							? "DVB-T2 realtime frame missed — retrying"
+							: p1Seen ? "DVB-T2 P1 found; L1 CRC failed — retrying"
+							: "DVB-T2 P1 not found — retrying";
+					if (lockedParameters == null)
+						latestDvbt2Result = latestDvbt2Result.waitingForSignalling(dvbt2SignallingState);
+				}
+			} finally { dvbt2SignallingRunning = false; }
+		}, "DVB-T2 P1/P2 signalling detector");
+		worker.setDaemon(true);worker.setPriority(Thread.MIN_PRIORITY);worker.start();
+	}
+
+	private synchronized void recordDvbt2Crc(boolean preValid, boolean postValid) {
+		if (dvbt2CrcCount == dvbt2PreCrcHistory.length) {
+			if (dvbt2PreCrcHistory[dvbt2CrcIndex]) dvbt2PreCrcSuccess--;
+			if (dvbt2PostCrcHistory[dvbt2CrcIndex]) dvbt2PostCrcSuccess--;
+		} else {
+			dvbt2CrcCount++;
+		}
+		dvbt2PreCrcHistory[dvbt2CrcIndex] = preValid;
+		dvbt2PostCrcHistory[dvbt2CrcIndex] = postValid;
+		if (preValid) dvbt2PreCrcSuccess++;
+		if (postValid) dvbt2PostCrcSuccess++;
+		dvbt2CrcIndex = (dvbt2CrcIndex + 1) % dvbt2PreCrcHistory.length;
+	}
+
+	private synchronized void offerDvbtTpsCapture(int sampleRateHz, byte[] iqData, int length) {
+		if (dvbtSignalling != null || dvbtTpsRunning || dvbtTpsCapture == null) return;
+		int required = Math.min(dvbtTpsCapture.length,
+				Math.max(16_384, ((int) Math.ceil(sampleRateHz * 0.090)) * 2));
+		int copy = Math.min(length, required - dvbtTpsCaptureLength) & ~1;
+		if (copy > 0) {
+			System.arraycopy(iqData, length - copy, dvbtTpsCapture, dvbtTpsCaptureLength, copy);
+			dvbtTpsCaptureLength += copy;
+		}
+		if (dvbtTpsCaptureLength < required) return;
+		final byte[] capture = new byte[required];
+		System.arraycopy(dvbtTpsCapture, 0, capture, 0, required);
+		dvbtTpsRunning = true;
+		Thread worker = new Thread(() -> {
+			try {
+				DvbtSignalAnalyzer.Result result = new DvbtSignalAnalyzer(true)
+						.analyze(capture, capture.length, sampleRateHz);
+				if (result != null && !"--".equals(result.codeRate)) {
+					dvbtSignalling = result;
+					synchronized (SignalQualityTesterFrame.this) { dvbtTpsCapture = null; }
+				} else {
+					synchronized (SignalQualityTesterFrame.this) { dvbtTpsCaptureLength = 0; }
+				}
+			} finally {
+				dvbtTpsRunning = false;
+			}
+		}, "DVB-T TPS detector");
+		worker.setDaemon(true);
+		worker.setPriority(Thread.MIN_PRIORITY);
+		worker.start();
 	}
 
 	private int appendDabHistory(byte[] iqData, int length) {
@@ -732,11 +976,17 @@ final class SignalQualityTesterFrame extends JFrame {
 		scatterPanel.setSnapshot(active);
 		spectrumPanel.setSnapshot(active);
 		dabConstellationPanel.setSnapshot(active);
+		dvbt2P2Panel.setSnapshot(active);
 		qualityPanel.setSnapshot(active);
 		dabLockPanel.setSnapshot(active);
+		refreshDvbt2CrcPanel();
 		if (active == null) {
 			statsLabel.setText("Waiting for IQ samples...");
 			detailLabel.setText("RAW quality waits for signal level, clipping, DC offset and stability");
+			if (dvbt2Mode) {
+				dvbt2PreLabel.setText(parameterTable("L1-PRE SIGNALLING", "", "Waiting for DVB-T2 P1/L1-pre lock..."));
+				dvbt2PostLabel.setText(parameterTable("L1-POST / PLP", "", "Waiting for L1-post lock..."));
+			}
 			return;
 		}
 		statsLabel.setText(String.format(Locale.US, "%.3f MHz   %.3f MS/s   RMS %.1f dBFS   peak %d",
@@ -752,10 +1002,56 @@ final class SignalQualityTesterFrame extends JFrame {
 					constellation == null ? 0 : constellation.nullRatio,
 					constellation == null ? 0 : constellation.timingCorrelation,
 					constellation == null ? 0 : constellation.frequencyCorrectionHz));
+		} else if (dvbtMode && active.dvbtResult != null) {
+			DvbtSignalAnalyzer.Result dvbt = active.dvbtResult;
+			detailLabel.setText(String.format(Locale.US,
+					"%s   %s %s %s   code %s   MER %.1f dB   CP %.2f   pilots %.2f   CFO %.0f Hz",
+					dvbt.state, dvbt.fftMode, dvbt.guard, dvbt.modulation, dvbt.codeRate, dvbt.merDb,
+					dvbt.cpCorrelation, dvbt.pilotCoherence, dvbt.frequencyCorrectionHz));
+		} else if (dvbt2Mode && active.dvbt2Result != null) {
+			Dvbt2SignalAnalyzer.Result t2 = active.dvbt2Result;
+			String measurements = String.format(Locale.US,
+					"%s   CP %.3f   pilots %.3f   CFO %.0f Hz",
+					t2.state, t2.cpCorrelation, t2.pilotCoherence, t2.cfoHz);
+			detailLabel.setText(measurements);
+			detailLabel.setToolTipText(t2.transmissionDetails.length() == 0 ? measurements
+					: t2.transmissionDetails + " | " + measurements);
+			dvbt2PreLabel.setText(parameterTable("L1-PRE SIGNALLING", t2.l1PreDetails,
+					t2.l1Locked ? "" : t2.state));
+			dvbt2PostLabel.setText(parameterTable("L1-POST / PLP", t2.l1PostDetails,
+					t2.l1PostLocked ? "" : "L1-post parameters are not locked yet."));
 		} else {
 			detailLabel.setText(String.format(Locale.US, "DC %.1f%%   clipping %.2f%%   stability %.2f dB",
 					active.dcPercent, active.clippingPercent, active.stabilityDb));
 		}
+	}
+
+	private synchronized void refreshDvbt2CrcPanel() {
+		dvbt2CrcPanel.setStats(dvbt2CrcCount, dvbt2PreCrcSuccess, dvbt2PostCrcSuccess);
+	}
+
+	private String parameterTable(String title, String details, String waiting) {
+		StringBuilder html = new StringBuilder(1024);
+		html.append("<html><table cellspacing='0' cellpadding='1' width='100%'>")
+				.append("<tr><td colspan='5'><b>").append(title).append("</b></td></tr>");
+		if (details != null && details.length() > 0) {
+			java.util.List<String[]> rows = new java.util.ArrayList<>();
+			for (String row : details.split("\\n")) {
+				String[] fields = row.split("\\|", 2);
+				if (fields.length == 2) rows.add(fields);
+			}
+			int half=(rows.size()+1)/2;
+			for(int i=0;i<half;i++){
+				String[] left=rows.get(i),right=i+half<rows.size()?rows.get(i+half):null;
+				html.append("<tr><td>").append(left[0]).append("</td><td><b>").append(left[1]).append("</b></td><td width='14'></td>");
+				if(right!=null)html.append("<td>").append(right[0]).append("</td><td><b>").append(right[1]).append("</b></td>");
+				else html.append("<td></td><td></td>");
+				html.append("</tr>");
+			}
+		} else {
+			html.append("<tr><td colspan='5'><i>").append(waiting).append("</i></td></tr>");
+		}
+		return html.append("</table></html>").toString();
 	}
 
 	private static final class Average {
@@ -879,11 +1175,14 @@ final class SignalQualityTesterFrame extends JFrame {
 		final double quality;
 		final float[] spectrumDb;
 		final DabMetrics dabMetrics;
+		final DvbtSignalAnalyzer.Result dvbtResult;
+		final Dvbt2SignalAnalyzer.Result dvbt2Result;
 		final long createdMillis;
 
 		Snapshot(long centerFreqHz, int sampleRateHz, byte[] samples, int sampleCount, double dbfs, int peak,
 				double dcPercent, double clippingPercent, double stabilityDb, double quality, float[] spectrumDb,
-				DabMetrics dabMetrics, long createdMillis) {
+				DabMetrics dabMetrics, DvbtSignalAnalyzer.Result dvbtResult,
+				Dvbt2SignalAnalyzer.Result dvbt2Result, long createdMillis) {
 			this.centerFreqHz = centerFreqHz;
 			this.sampleRateHz = sampleRateHz;
 			this.samples = samples;
@@ -896,6 +1195,8 @@ final class SignalQualityTesterFrame extends JFrame {
 			this.quality = quality;
 			this.spectrumDb = spectrumDb;
 			this.dabMetrics = dabMetrics;
+			this.dvbtResult = dvbtResult;
+			this.dvbt2Result = dvbt2Result;
 			this.createdMillis = createdMillis;
 		}
 	}
@@ -928,7 +1229,8 @@ final class SignalQualityTesterFrame extends JFrame {
 				double quality = active == null ? 0 : active.quality;
 				Color color = quality >= 70 ? QUALITY_GOOD : quality >= 40 ? QUALITY_WARN : QUALITY_BAD;
 				g.setColor(TEXT_FG);
-				String label = active != null && active.dabMetrics != null ? "INPUT" : "RAW";
+				String label = active != null && (active.dabMetrics != null || active.dvbtResult != null
+						|| active.dvbt2Result != null) ? "INPUT" : "RAW";
 				g.drawString(active == null ? label + " --%" : String.format(Locale.US, "%s %.0f%%", label, quality), 4, 17);
 				g.setColor(GRID);
 				g.fillRect(barX, barY, barW, barH);
@@ -969,11 +1271,15 @@ final class SignalQualityTesterFrame extends JFrame {
 				Snapshot active = snapshot;
 				DabConstellation constellation = active == null || active.dabMetrics == null
 						? null : active.dabMetrics.constellation;
-				double lock = constellation == null ? 0 : constellation.lockScore;
+				double lock = active != null && active.dvbtResult != null
+						? active.dvbtResult.quality : active != null && active.dvbt2Result != null
+								? active.dvbt2Result.quality : constellation == null ? 0 : constellation.lockScore;
 				Color color = lock >= 55 ? QUALITY_GOOD : lock >= 35 ? QUALITY_WARN : QUALITY_BAD;
 				g.setColor(TEXT_FG);
-				g.drawString(constellation == null ? "QUALITY --%"
-						: String.format(Locale.US, "QUALITY %.0f%%", lock), 4, 16);
+				String label = active != null && active.dvbt2Result != null ? "DEMOD" : "QUALITY";
+				g.drawString(active == null || (constellation == null && active.dvbtResult == null
+						&& active.dvbt2Result == null) ? label + " --%"
+						: String.format(Locale.US, "%s %.0f%%", label, lock), 4, 16);
 				g.setColor(GRID);
 				g.fillRect(barX, barY, barW, barH);
 				g.setColor(color);
@@ -983,6 +1289,53 @@ final class SignalQualityTesterFrame extends JFrame {
 			} finally {
 				g.dispose();
 			}
+		}
+	}
+
+	private static final class Dvbt2CrcPanel extends JPanel {
+		private volatile int count, preSuccess, postSuccess;
+
+		Dvbt2CrcPanel() {
+			setBackground(PANEL_BG);
+			setPreferredSize(new Dimension(100, 22));
+		}
+
+		void setStats(int count, int preSuccess, int postSuccess) {
+			this.count = count;
+			this.preSuccess = preSuccess;
+			this.postSuccess = postSuccess;
+			repaint();
+		}
+
+		@Override
+		protected void paintComponent(Graphics graphics) {
+			super.paintComponent(graphics);
+			Graphics2D g = (Graphics2D) graphics.create();
+			try {
+				int width = getWidth(), barY = 5, barH = Math.max(8, getHeight() - 9);
+				int labelWidth = 128, gap = 12, barWidth = Math.max(24, (width - 2 * labelWidth - gap - 8) / 2);
+				drawCrc(g, 4, barY, labelWidth, barWidth, barH, "L1-pre CRC", preSuccess);
+				drawCrc(g, 4 + labelWidth + barWidth + gap, barY, labelWidth, barWidth, barH,
+						"L1-post CRC", postSuccess);
+			} finally {
+				g.dispose();
+			}
+		}
+
+		private void drawCrc(Graphics2D g, int x, int y, int labelWidth, int barWidth, int barHeight,
+				String label, int success) {
+			double percent = count == 0 ? 0 : success * 100d / count;
+			g.setColor(TEXT_FG);
+			String text = count == 0 ? label + " --" : String.format(Locale.US, "%s %d/%d %.0f%%",
+					label, success, count, percent);
+			g.drawString(text, x, 16);
+			int barX = x + labelWidth;
+			g.setColor(GRID);
+			g.fillRect(barX, y, barWidth, barHeight);
+			g.setColor(percent >= 90 ? QUALITY_GOOD : percent >= 50 ? QUALITY_WARN : QUALITY_BAD);
+			g.fillRect(barX, y, (int)Math.round(barWidth * percent / 100d), barHeight);
+			g.setColor(Color.DARK_GRAY);
+			g.drawRect(barX, y, barWidth, barHeight);
 		}
 	}
 
@@ -1069,6 +1422,73 @@ final class SignalQualityTesterFrame extends JFrame {
 		}
 	}
 
+	/** P2/data cells reconstructed by the signalling decoder. This is kept
+	 * separate from the continuously refreshed data-symbol constellation. */
+	private static final class Dvbt2P2Panel extends JPanel {
+		private volatile Snapshot snapshot;
+
+		Dvbt2P2Panel() {
+			setBackground(PANEL_BG);
+		}
+
+		void setSnapshot(Snapshot snapshot) {
+			this.snapshot = snapshot;
+			repaint();
+		}
+
+		@Override
+		protected void paintComponent(Graphics graphics) {
+			super.paintComponent(graphics);
+			Graphics2D g = (Graphics2D) graphics.create();
+			try {
+				g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+				int width = getWidth(), height = getHeight(), cx = width / 2, cy = height / 2;
+				int radius = Math.max(20, Math.min(width, height) / 2 - 28);
+				g.setColor(GRID);
+				g.drawLine(16, cy, width - 16, cy);
+				g.drawLine(cx, 18, cx, height - 18);
+				g.drawOval(cx - radius, cy - radius, radius * 2, radius * 2);
+				g.setColor(MUTED_FG);
+				g.drawString("DVB-T2 P1 differential constellation", 12, 16);
+				Snapshot active = snapshot;
+				Dvbt2SignalAnalyzer.Result result = active == null ? null : active.dvbt2Result;
+				if (result == null || result.p2Points.length < 2) {
+					g.drawString(result == null ? "Waiting for DVB-T2 P1..." : result.state, 18, 36);
+					return;
+				}
+				drawBpskMarkers(g, cx, cy, radius);
+				g.setColor(result.quality >= 65d ? QUALITY_GOOD : result.quality >= 35d ? QUALITY_WARN : POINT);
+				float scale = previewScale(result.p2Points);
+				for (int p = 0; p + 1 < result.p2Points.length; p += 2) {
+					float nx = result.p2Points[p] * scale, ny = result.p2Points[p + 1] * scale;
+					if (Math.abs(nx) > 1.08f || Math.abs(ny) > 1.08f) continue;
+					g.fillRect(cx + Math.round(nx * radius * .94f), cy - Math.round(ny * radius * .94f), 2, 2);
+				}
+				g.setColor(MUTED_FG);
+				g.drawString("Live P1 carriers", 12, height - 8);
+			} finally {
+				g.dispose();
+			}
+		}
+
+		private void drawBpskMarkers(Graphics2D g, int cx, int cy, int radius) {
+			g.setColor(new Color(0x446644));
+			int distance = Math.round(radius * .72f);
+			g.drawOval(cx - distance - 3, cy - 3, 6, 6);
+			g.drawOval(cx + distance - 3, cy - 3, 6, 6);
+		}
+
+		private float previewScale(float[] points) {
+			double magnitude = 0;
+			int count = 0;
+			for (int p = 0; p + 1 < points.length; p += 2) {
+				magnitude += Math.hypot(points[p], points[p + 1]);
+				count++;
+			}
+			return (float) (.72 / Math.max(1e-9, magnitude / Math.max(1, count)));
+		}
+	}
+
 	private static final class DabConstellationPanel extends JPanel {
 		private volatile Snapshot snapshot;
 
@@ -1096,20 +1516,69 @@ final class SignalQualityTesterFrame extends JFrame {
 				g.drawLine(16, cy, width - 16, cy);
 				g.drawLine(cx, 18, cx, height - 18);
 				g.drawOval(cx - radius, cy - radius, radius * 2, radius * 2);
+				Snapshot active = snapshot;
+				DvbtSignalAnalyzer.Result dvbt = active == null ? null : active.dvbtResult;
+				Dvbt2SignalAnalyzer.Result dvbt2 = active == null ? null : active.dvbt2Result;
 				g.setColor(new Color(0x446644));
 				int markerRadius = Math.max(3, radius / 28);
-				int markerDistance = Math.round(radius * 0.48f);
-				g.drawOval(cx + markerDistance - markerRadius, cy - markerDistance - markerRadius,
-						markerRadius * 2, markerRadius * 2);
-				g.drawOval(cx - markerDistance - markerRadius, cy - markerDistance - markerRadius,
-						markerRadius * 2, markerRadius * 2);
-				g.drawOval(cx + markerDistance - markerRadius, cy + markerDistance - markerRadius,
-						markerRadius * 2, markerRadius * 2);
-				g.drawOval(cx - markerDistance - markerRadius, cy + markerDistance - markerRadius,
-						markerRadius * 2, markerRadius * 2);
+				if (dvbt == null && dvbt2 == null) {
+					int markerDistance = Math.round(radius * 0.48f);
+					for (int xSign : new int[] {-1, 1}) {
+						for (int ySign : new int[] {-1, 1}) {
+							g.drawOval(cx + xSign * markerDistance - markerRadius,
+									cy + ySign * markerDistance - markerRadius, markerRadius * 2, markerRadius * 2);
+						}
+					}
+				} else {
+					String modulation = dvbt != null ? dvbt.modulation : dvbt2.l1PostConstellation;
+					int levels = "256-QAM".equals(modulation) ? 16 : "64-QAM".equals(modulation) ? 8
+							: "16-QAM".equals(modulation) ? 4 : "BPSK".equals(modulation) ? 1 : 2;
+					float scale = levels == 8 ? 7.25f : levels == 4 ? 3.25f : 1.15f;
+					if (levels == 16) scale = 16.2f;
+					for (int xi = 1 - Math.max(2, levels); xi < Math.max(2, levels); xi += 2) {
+						int yLevels = levels == 1 ? 1 : levels;
+						for (int yi = 1 - yLevels; yi < yLevels; yi += 2) {
+							int x = cx + Math.round(xi / scale * radius * 0.86f);
+							int y = cy - Math.round(yi / scale * radius * 0.86f);
+							g.drawOval(x - 2, y - 2, 4, 4);
+						}
+					}
+				}
 				g.setColor(MUTED_FG);
-				g.drawString("DAB differential DQPSK", 12, 16);
-				Snapshot active = snapshot;
+				g.drawString(dvbt2 != null ? "DVB-T2 L1-post " + dvbt2.l1PostConstellation
+						: dvbt == null ? "DAB differential DQPSK" : "DVB-T equalized " + dvbt.modulation, 12, 16);
+				if (dvbt2 != null) {
+					if (dvbt2.l1PostPoints.length < 2) {
+						g.drawString("Waiting for CRC-valid L1-post constellation...", 18, 36); return;
+					}
+					g.setColor(dvbt2.quality >= 65d ? QUALITY_GOOD : dvbt2.quality >= 35d ? QUALITY_WARN : POINT);
+					float scale = "64-QAM".equals(dvbt2.l1PostConstellation) ? 7.25f
+							: "16-QAM".equals(dvbt2.l1PostConstellation) ? 3.25f : 1.15f;
+					for (int p=0;p+1<dvbt2.l1PostPoints.length;p+=2) {
+						float nx=dvbt2.l1PostPoints[p]/scale, ny=dvbt2.l1PostPoints[p+1]/scale;
+						if(Math.abs(nx)>1.08f||Math.abs(ny)>1.08f)continue;
+						g.fillRect(cx+Math.round(nx*radius*.94f),cy-Math.round(ny*radius*.94f),2,2);
+					}
+					g.setColor(MUTED_FG);g.drawString("CRC-valid L1-post",12,height-8);
+					String status=String.format(Locale.US,"DEMOD %.0f%%",dvbt2.quality);
+					g.drawString(status,Math.max(12,width-g.getFontMetrics().stringWidth(status)-8),height-8);return;
+				}
+				if (dvbt != null) {
+					if (dvbt.points.length < 2) { g.drawString(dvbt.state, 18, 36); return; }
+					g.setColor(dvbt.quality >= 65d ? QUALITY_GOOD : dvbt.quality >= 35d ? QUALITY_WARN : POINT);
+					float scale = "64-QAM".equals(dvbt.modulation) ? 7.25f : "16-QAM".equals(dvbt.modulation) ? 3.25f : 1.15f;
+					for (int p=0; p+1<dvbt.points.length; p+=2) {
+						float normalizedX = dvbt.points[p] / scale;
+						float normalizedY = dvbt.points[p + 1] / scale;
+						if (Math.abs(normalizedX) > 1.08f || Math.abs(normalizedY) > 1.08f) continue;
+						int x=cx+Math.round(normalizedX*radius*0.94f), y=cy-Math.round(normalizedY*radius*0.94f);
+						g.fillRect(x,y,2,2);
+					}
+					g.setColor(MUTED_FG); g.drawString(dvbt.state,12,height-8);
+					String status=String.format(Locale.US,"MER %.1f dB  Q %.0f%%",dvbt.merDb,dvbt.quality);
+					g.drawString(status,Math.max(12,width-g.getFontMetrics().stringWidth(status)-8),height-8);
+					return;
+				}
 				DabConstellation constellation = active == null || active.dabMetrics == null
 						? null : active.dabMetrics.constellation;
 				if (constellation == null || constellation.points == null || constellation.points.length < 2) {

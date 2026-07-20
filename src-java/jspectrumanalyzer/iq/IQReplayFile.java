@@ -17,7 +17,7 @@ public final class IQReplayFile implements AutoCloseable {
 	}
 
 	private static final Pattern WAV_CENTER_PATTERN = Pattern.compile(
-			"(?i)(?:^|[^0-9.])(\\d+(?:\\.\\d+)?)\\s*(kHz|Hz)(?:[^a-z]|$)");
+			"(?i)(?:^|[^0-9.])(\\d+(?:\\.\\d+)?)\\s*(MHz|kHz|Hz)(?:[^a-z]|$)");
 	private static final Pattern RAW_CENTER_PATTERN = Pattern.compile("(?i)(\\d+(?:\\.\\d+)?)(kHz|Hz)");
 	private static final Pattern RAW_CENTER_PREFIX_PATTERN = Pattern.compile("^([0-9]+(?:\\.[0-9]+)?)_");
 	private static final Pattern RAW_BANDWIDTH_PATTERN = Pattern.compile("(?i)_([0-9]+(?:\\.[0-9]+)?)(k)?\\.pcm$");

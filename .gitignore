@@ -12,3 +12,8 @@
 **.jrf
 **.hsr
 hackrf-sweep.ini
+checkpoints/hackrf-sweep_before_dvbt2_ui_layout_2026-07-20.jar
+checkpoints/before_dvbt2_ui_layout_2026-07-20.zip
+src/hackrf-sweep/.project
+checkpoints/before_dvbt2_decoder_fidelity_2026-07-20.zip
+hackrf-iq-analyzer.ini
