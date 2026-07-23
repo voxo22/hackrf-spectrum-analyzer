@@ -29,6 +29,7 @@ public final class IQFftChannelProcessor implements IQSampleProcessor, AutoClose
 	private final int sampleRateHz;
 	private final int bandwidthHz;
 	private final int decimation;
+	private final int outputRateHz;
 	private final double offsetHz;
 	private final Memory fftBuffer = new Memory(FFT_SIZE * 2L * 4L);
 	private final float[] block = new float[FFT_SIZE * 2];
@@ -39,7 +40,7 @@ public final class IQFftChannelProcessor implements IQSampleProcessor, AutoClose
 	private final Pointer inversePlan;
 	private int newSamplesInBlock;
 	private int warmupRemaining = OVERLAP;
-	private int decimationCounter;
+	private long rateAccumulator;
 	private double oscillatorCos = 1d;
 	private double oscillatorSin;
 	private boolean closed;
@@ -55,7 +56,9 @@ public final class IQFftChannelProcessor implements IQSampleProcessor, AutoClose
 		this.sampleRateHz = Math.max(1, sampleRateHz);
 		this.offsetHz = offsetHz;
 		this.bandwidthHz = Math.max(1, bandwidthHz);
-		this.decimation = Math.max(1, Math.round(this.sampleRateHz / (float) Math.max(1, outputRateHz)));
+		this.outputRateHz=Math.min(this.sampleRateHz,Math.max(1,outputRateHz));
+		this.decimation = Math.max(1, Math.round(this.sampleRateHz / (float) this.outputRateHz));
+		this.rateAccumulator=this.sampleRateHz-this.outputRateHz;
 		this.forwardPlan = FFTW.fftwf_plan_dft_1d(FFT_SIZE, fftBuffer, fftBuffer, FFTW_FORWARD, FFTW_ESTIMATE);
 		this.inversePlan = FFTW.fftwf_plan_dft_1d(FFT_SIZE, fftBuffer, fftBuffer, FFTW_BACKWARD, FFTW_ESTIMATE);
 		if (forwardPlan == null || inversePlan == null) {
@@ -121,7 +124,7 @@ public final class IQFftChannelProcessor implements IQSampleProcessor, AutoClose
 
 	@Override
 	public int getActualOutputRateHz() {
-		return sampleRateHz / decimation;
+		return outputRateHz;
 	}
 
 	@Override
@@ -169,11 +172,9 @@ public final class IQFftChannelProcessor implements IQSampleProcessor, AutoClose
 				warmupRemaining--;
 				continue;
 			}
-			if (decimationCounter > 0) {
-				decimationCounter--;
-				continue;
-			}
-			decimationCounter = decimation - 1;
+			rateAccumulator += outputRateHz;
+			if (rateAccumulator < sampleRateHz) continue;
+			rateAccumulator -= sampleRateHz;
 			if (written >= maximumOutputSamples) {
 				break;
 			}

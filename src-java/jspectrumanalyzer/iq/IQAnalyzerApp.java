@@ -146,6 +146,7 @@ public class IQAnalyzerApp {
 	private volatile int streamGeneration = 0;
 	private volatile int activeRawSampleRateHz = DEFAULT_SAMPLE_RATE_HZ;
 	private volatile long activeCenterFreqHz = DEFAULT_CENTER_FREQ_HZ;
+	private volatile long activeChannelOffsetHz;
 	private volatile long activeLowIfShiftHz = 0;
 	private volatile int activeRfSampleRateHz = DEFAULT_SAMPLE_RATE_HZ;
 	private volatile int activeLnaGain = DEFAULT_LNA_GAIN;
@@ -547,7 +548,7 @@ public class IQAnalyzerApp {
 		presetCombo = new JComboBox<>(new PresetOption[] {
 				new PresetOption("Manual", 0, 0, 0),
 				new PresetOption("Wide pulses", 0, 0, 1024),
-				new PresetOption("GSM 200 kHz", 200_000, 250_000, 8192),
+				new PresetOption("GSM 200 kHz", 200_000, 500_000, 8192),
 				new PresetOption("NFM 12.5 kHz", 12_500, 48_000, 4096),
 				new PresetOption("NFM 25 kHz", 25_000, 96_000, 4096),
 				new PresetOption("WFM 200 kHz", 200_000, 250_000, 8192),
@@ -595,8 +596,11 @@ public class IQAnalyzerApp {
 				new SignalTestOption("DAB"),
 				new SignalTestOption("DVB-T 8 MHz"),
 				new SignalTestOption("DVB-T2 8 MHz"),
+				new SignalTestOption("GSM 200 kHz"),
+				new SignalTestOption("LTE"),
 				new SignalTestOption("Generic QAM")
 		});
+		signalTestCombo.addActionListener(e -> applySignalTestPreset());
 		signalTestButton = new JButton("SIGNAL TEST");
 		styleButton(signalTestButton, START_BG, Color.BLACK);
 		signalTestButton.addActionListener(e -> openSignalTestWindow());
@@ -1081,6 +1085,24 @@ public class IQAnalyzerApp {
 		signalTestFrame = tester;
 		styleSignalTestButton();
 		tester.setVisible(true);
+	}
+
+	private void applySignalTestPreset() {
+		SignalTestOption option = signalTestCombo == null ? null
+				: (SignalTestOption) signalTestCombo.getSelectedItem();
+		if (option == null) return;
+		if (option.label.startsWith("LTE")) {
+			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
+			return;
+		}
+		if (!option.label.startsWith("GSM") || presetCombo == null) return;
+		for (int i = 0; i < presetCombo.getItemCount(); i++) {
+			PresetOption preset = presetCombo.getItemAt(i);
+			if (preset.label.startsWith("GSM")) {
+				presetCombo.setSelectedIndex(i);
+				return;
+			}
+		}
 	}
 
 	private void styleSignalTestButton() {
@@ -1586,7 +1608,8 @@ public class IQAnalyzerApp {
 			}
 			int processedBytes = processor.process(iqData, length, channelOutput);
 			if (processedBytes > 0) {
-				offerSignalTestIQ(centerFreqHz, processor.getActualOutputRateHz(), channelOutput, processedBytes);
+				offerSignalTestIQ(centerFreqHz + activeChannelOffsetHz, processor.getActualOutputRateHz(),
+						channelOutput, processedBytes);
 				byte[] copy = new byte[processedBytes];
 				System.arraycopy(channelOutput, 0, copy, 0, processedBytes);
 				applyAutoLevel(copy, copy.length);
@@ -1741,6 +1764,7 @@ public class IQAnalyzerApp {
 	private void configureDspPipeline(int rawSampleRateHz, boolean resetBuffer) {
 		ViewModeOption viewMode = (ViewModeOption) viewModeCombo.getSelectedItem();
 		boolean channelMode = viewMode != null && viewMode.channel;
+		activeChannelOffsetHz = channelMode ? getCurrentChannelOffsetHz() : 0;
 		int displayRateHz = calculateDisplayRateHz(rawSampleRateHz);
 		IQChannelProcessor newProcessor = null;
 		IQFrequencyShifter newWideLowIfShifter = null;

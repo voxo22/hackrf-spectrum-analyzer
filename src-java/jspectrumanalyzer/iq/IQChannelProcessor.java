@@ -15,7 +15,7 @@ public class IQChannelProcessor implements IQSampleProcessor {
 	private double oscillatorSin = 0;
 	private int historyIndex = 0;
 	private int historyFilled = 0;
-	private int decimationCounter = 0;
+	private long rateAccumulator;
 
 	public IQChannelProcessor(int sampleRateHz, double offsetHz, int bandwidthHz, int outputRateHz) {
 		configure(sampleRateHz, offsetHz, bandwidthHz, outputRateHz);
@@ -25,7 +25,7 @@ public class IQChannelProcessor implements IQSampleProcessor {
 		this.sampleRateHz = Math.max(1, sampleRateHz);
 		this.offsetHz = offsetHz;
 		this.bandwidthHz = Math.max(1, bandwidthHz);
-		this.outputRateHz = Math.max(1, outputRateHz);
+		this.outputRateHz = Math.min(this.sampleRateHz, Math.max(1, outputRateHz));
 		this.decimation = Math.max(1, Math.round(this.sampleRateHz / (float) this.outputRateHz));
 		designLowPass();
 		resetState();
@@ -86,11 +86,9 @@ public class IQChannelProcessor implements IQSampleProcessor {
 			if (historyFilled < TAPS) {
 				continue;
 			}
-			if (decimationCounter > 0) {
-				decimationCounter--;
-				continue;
-			}
-			decimationCounter = decimation - 1;
+			rateAccumulator += outputRateHz;
+			if (rateAccumulator < sampleRateHz) continue;
+			rateAccumulator -= sampleRateHz;
 			if (outputIndex >= maxOutputSamples) {
 				break;
 			}
@@ -117,7 +115,7 @@ public class IQChannelProcessor implements IQSampleProcessor {
 	}
 
 	public synchronized int getActualOutputRateHz() {
-		return sampleRateHz / decimation;
+		return outputRateHz;
 	}
 
 	public synchronized int getDecimation() {
@@ -152,7 +150,7 @@ public class IQChannelProcessor implements IQSampleProcessor {
 		}
 		historyIndex = 0;
 		historyFilled = 0;
-		decimationCounter = 0;
+		rateAccumulator = sampleRateHz - outputRateHz;
 		oscillatorCos = 1;
 		oscillatorSin = 0;
 	}

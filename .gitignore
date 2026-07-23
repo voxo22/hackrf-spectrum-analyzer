@@ -17,3 +17,9 @@ checkpoints/before_dvbt2_ui_layout_2026-07-20.zip
 src/hackrf-sweep/.project
 checkpoints/before_dvbt2_decoder_fidelity_2026-07-20.zip
 hackrf-iq-analyzer.ini
+src-java/jspectrumanalyzer/iq/IQReplayFileTest.java
+src-java/jspectrumanalyzer/iq/IQReplayFileTest.java
+src-java/jspectrumanalyzer/iq/LteSignalAnalyzerTest.java
+src-java/jspectrumanalyzer/iq/IQReplayFileTest.java
+src-java/jspectrumanalyzer/iq/PlmnDatabaseTest.java
+tools/Convert-WavToCellSearchBin.ps1

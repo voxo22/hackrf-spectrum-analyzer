@@ -4,6 +4,7 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Font;
+import java.awt.FlowLayout;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridLayout;
@@ -11,9 +12,12 @@ import java.awt.RenderingHints;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.Locale;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import javax.swing.BorderFactory;
 import javax.swing.JFrame;
+import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -31,9 +35,11 @@ final class SignalQualityTesterFrame extends JFrame {
 	private static final int DAB_MODE_I_GUARD_SAMPLES = 504;
 	private static final int DAB_MODE_I_ACTIVE_CARRIERS = 1536;
 	private static final int DAB_CONSTELLATION_CARRIER_STEP = 8;
-	private static final int DAB_HISTORY_BYTES = 700_000;
+	/* 100 ms even at 20 MS/s: LTE PBCH has a 40 ms scrambling cycle. */
+	private static final int DAB_HISTORY_BYTES = 4_000_000;
 	private static final long MIN_ANALYSIS_INTERVAL_NANOS = 50_000_000L;
 	private static final long DAB_MIN_ANALYSIS_INTERVAL_NANOS = 100_000_000L;
+	private static final long GSM_MIN_ANALYSIS_INTERVAL_NANOS = 500_000_000L;
 	private static final Color PANEL_BG = Color.BLACK;
 	private static final Color TEXT_FG = Color.WHITE;
 	private static final Color MUTED_FG = new Color(0xdddddd);
@@ -52,6 +58,10 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final Dvbt2CrcPanel dvbt2CrcPanel = new Dvbt2CrcPanel();
 	private final JLabel dvbt2PreLabel = new JLabel();
 	private final JLabel dvbt2PostLabel = new JLabel();
+	private final JLabel gsmParameterLabel = new JLabel();
+	private final JLabel lteParameterLabel = new JLabel();
+	private final LteCellTablePanel lteCellTablePanel = new LteCellTablePanel();
+	private final LteConstellationPanel lteConstellationPanel = new LteConstellationPanel();
 	private final JLabel titleLabel;
 	private final JLabel statsLabel = new JLabel("Waiting for IQ samples...");
 	private final JLabel detailLabel = new JLabel("RAW quality waits for signal level, clipping, DC offset and stability");
@@ -59,8 +69,24 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final boolean dabMode;
 	private final boolean dvbtMode;
 	private final boolean dvbt2Mode;
+	private final boolean gsmMode;
+	private final boolean lteMode;
 	private final DvbtSignalAnalyzer dvbtAnalyzer = new DvbtSignalAnalyzer();
 	private final Dvbt2SignalAnalyzer dvbt2Analyzer = new Dvbt2SignalAnalyzer();
+	private final GsmSignalAnalyzer gsmAnalyzer = new GsmSignalAnalyzer();
+	private final LteSignalAnalyzer lteAnalyzer = new LteSignalAnalyzer();
+	private volatile boolean gsmAnalysisRunning;
+	private volatile GsmSignalAnalyzer.Result latestGsmResult;
+	private volatile boolean lteAnalysisRunning;
+	private volatile LteSignalAnalyzer.Result latestLteResult;
+	private final Map<Integer,LteSignalAnalyzer.Candidate> lteCells=new LinkedHashMap<Integer,LteSignalAnalyzer.Candidate>();
+	private final Map<Integer,LteSignalAnalyzer.SiData> lteSystemInformation=new LinkedHashMap<Integer,LteSignalAnalyzer.SiData>();
+	private final Map<Integer,Long> ltePagingCounts=new LinkedHashMap<Integer,Long>();
+	private final Map<String,Long> ltePagingSeen=new LinkedHashMap<String,Long>();
+	private final Map<Integer,Double> lteLoadPercent=new LinkedHashMap<Integer,Double>();
+	private GsmPagingStatsFrame gsmPagingFrame;
+	private GsmBcchDetailsFrame gsmBcchFrame;
+	private LteCellDetailsFrame lteCellDetailsFrame;
 	private volatile boolean dvbt2AnalysisRunning;
 	private volatile Dvbt2SignalAnalyzer.Result latestDvbt2Result;
 	private static final int DVBT2_SIGNALLING_CAPTURE_BYTES = 6_000_000;
@@ -99,6 +125,18 @@ final class SignalQualityTesterFrame extends JFrame {
 		dabMode = "DAB".equals(mode);
 		dvbtMode = mode.startsWith("DVB-T ") && !mode.startsWith("DVB-T2");
 		dvbt2Mode = mode.startsWith("DVB-T2");
+		gsmMode = mode.startsWith("GSM");
+		lteMode = mode.startsWith("LTE");
+		if (gsmMode) {
+			latestGsmResult = GsmSignalAnalyzer.Result.empty("collecting GSM channel IQ");
+			prepareParameterLabel(gsmParameterLabel);
+			gsmParameterLabel.setFont(gsmParameterLabel.getFont().deriveFont(12f));
+		}
+		if (lteMode) {
+			latestLteResult = LteSignalAnalyzer.Result.empty("collecting LTE IQ");
+			prepareParameterLabel(lteParameterLabel);
+			lteParameterLabel.setFont(lteParameterLabel.getFont().deriveFont(12f));
+		}
 		if (dvbtMode) dvbtTpsCapture = new byte[DVBT_TPS_CAPTURE_BYTES];
 		if (dvbt2Mode) {
 			latestDvbt2Result = Dvbt2SignalAnalyzer.Result.empty("collecting DVB-T2 IQ");
@@ -108,7 +146,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			prepareParameterLabel(dvbt2PostLabel);
 		}
 
-		titleLabel = new JLabel(mode + (dabMode || dvbtMode || dvbt2Mode ? " signal quality" : " raw IQ monitor"));
+		titleLabel = new JLabel(mode + (dabMode || dvbtMode || dvbt2Mode || gsmMode || lteMode ? " signal quality" : " raw IQ monitor"));
 		titleLabel.setForeground(TEXT_FG);
 		titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 14f));
 		statsLabel.setForeground(MUTED_FG);
@@ -119,14 +157,30 @@ final class SignalQualityTesterFrame extends JFrame {
 		header.setBorder(new EmptyBorder(8, 10, 6, 10));
 		header.add(titleLabel, BorderLayout.WEST);
 		header.add(statsLabel, BorderLayout.CENTER);
+		if (gsmMode) {
+			JPanel gsmButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+			gsmButtons.setOpaque(false);
+			JButton bcchButton = new JButton("BCCH / CELL DETAILS");
+			bcchButton.addActionListener(e -> openGsmBcchDetails());
+			JButton pagingButton = new JButton("PAGING / STATS");
+			pagingButton.addActionListener(e -> openGsmPagingStats());
+			gsmButtons.add(bcchButton); gsmButtons.add(pagingButton);
+			header.add(gsmButtons, BorderLayout.EAST);
+		} else if (lteMode) {
+			JPanel lteButtons=new JPanel(new FlowLayout(FlowLayout.RIGHT,5,0));
+			lteButtons.setOpaque(false);
+			JButton detailsButton=new JButton("CELL DETAILS");
+			detailsButton.addActionListener(e -> openLteCellDetails());
+			lteButtons.add(detailsButton);header.add(lteButtons,BorderLayout.EAST);
+		}
 
 		JPanel footer = new JPanel(new BorderLayout(8, 4));
 		footer.setBackground(PANEL_BG);
 		footer.setBorder(new EmptyBorder(6, 10, 8, 10));
-		JPanel qualityRows = new JPanel(new GridLayout(dvbt2Mode ? 3 : dabMode || dvbtMode ? 2 : 1, 1, 0, 2));
+		JPanel qualityRows = new JPanel(new GridLayout(dvbt2Mode ? 3 : dabMode || dvbtMode || gsmMode || lteMode ? 2 : 1, 1, 0, 2));
 		qualityRows.setBackground(PANEL_BG);
 		qualityRows.add(qualityPanel);
-		if (dabMode || dvbtMode || dvbt2Mode) {
+		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || lteMode) {
 			qualityRows.add(dabLockPanel);
 		}
 		if (dvbt2Mode) qualityRows.add(dvbt2CrcPanel);
@@ -143,6 +197,18 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (dvbt2Mode) {
 			plots.add(createDvbt2Column(dvbt2P2Panel, dvbt2PreLabel));
 			plots.add(createDvbt2Column(dabConstellationPanel, dvbt2PostLabel));
+		} else if (gsmMode) {
+			gsmParameterLabel.setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createLineBorder(Color.DARK_GRAY), new EmptyBorder(14, 18, 14, 18)));
+			plots.add(gsmParameterLabel);
+		} else if (lteMode) {
+			lteParameterLabel.setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createLineBorder(Color.DARK_GRAY), new EmptyBorder(14, 18, 14, 18)));
+			JPanel lteColumn=new JPanel(new BorderLayout(0,6));
+			lteColumn.setBackground(PANEL_BG);
+			lteColumn.add(lteParameterLabel,BorderLayout.NORTH);
+			lteColumn.add(lteCellTablePanel,BorderLayout.CENTER);
+			plots.add(lteColumn);
 		} else {
 			plots.add(scatterPanel);
 			plots.add(dabMode || dvbtMode ? dabConstellationPanel : spectrumPanel);
@@ -151,7 +217,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		add(header, BorderLayout.NORTH);
 		add(plots, BorderLayout.CENTER);
 		add(footer, BorderLayout.SOUTH);
-		setSize(dvbt2Mode ? 1100 : 760, dvbt2Mode ? 650 : 420);
+		setSize(dvbt2Mode ? 1100 : 760, dvbt2Mode ? 650 : lteMode ? 570 : gsmMode ? 445 : 420);
 
 		repaintTimer = new Timer(100, e -> updateView());
 		repaintTimer.start();
@@ -159,11 +225,45 @@ final class SignalQualityTesterFrame extends JFrame {
 			@Override
 			public void windowClosed(WindowEvent e) {
 				repaintTimer.stop();
+				if (gsmPagingFrame != null) gsmPagingFrame.dispose();
+				if (gsmBcchFrame != null) gsmBcchFrame.dispose();
+				if (lteCellDetailsFrame != null) lteCellDetailsFrame.dispose();
 				if (closedCallback != null) {
 					closedCallback.run();
 				}
 			}
 		});
+	}
+
+	private void openLteCellDetails() {
+		if(lteCellDetailsFrame==null||!lteCellDetailsFrame.isDisplayable())
+			lteCellDetailsFrame=new LteCellDetailsFrame(
+					() -> lteCellTablePanel.selectedPci(),
+					pci -> lteCells.get(pci),
+					pci -> lteSystemInformation.get(pci),
+					pci -> ltePagingCounts.containsKey(pci)?ltePagingCounts.get(pci):0L,
+					pci -> lteLoadPercent.containsKey(pci)?lteLoadPercent.get(pci):Double.NaN);
+		lteCellDetailsFrame.setLocationRelativeTo(this);
+		lteCellDetailsFrame.setVisible(true);
+		lteCellDetailsFrame.toFront();
+	}
+
+	private void openGsmPagingStats() {
+		if (gsmPagingFrame == null || !gsmPagingFrame.isDisplayable())
+			gsmPagingFrame = new GsmPagingStatsFrame(() -> latestGsmResult);
+		gsmPagingFrame.setLocationRelativeTo(this);
+		gsmPagingFrame.setVisible(true);
+		gsmPagingFrame.toFront();
+	}
+
+	private void openGsmBcchDetails() {
+		if (gsmBcchFrame == null || !gsmBcchFrame.isDisplayable())
+			gsmBcchFrame = new GsmBcchDetailsFrame(() -> latestGsmResult,
+					() -> snapshot == null ? -1L : snapshot.centerFreqHz,
+					() -> snapshot == null ? -120d : snapshot.dbfs);
+		gsmBcchFrame.setLocationRelativeTo(this);
+		gsmBcchFrame.setVisible(true);
+		gsmBcchFrame.toFront();
 	}
 
 	private void prepareParameterLabel(JLabel label) {
@@ -197,12 +297,13 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (dvbt2Mode) offerDvbt2SignallingCapture(sampleRateHz, iqData, evenLength);
 		byte[] dabAnalysisData = iqData;
 		int dabAnalysisLength = evenLength;
-		if (dabMode || dvbtMode || dvbt2Mode) {
+		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || lteMode) {
 			dabAnalysisLength = appendDabHistory(iqData, evenLength);
 			dabAnalysisData = dabHistory;
 		}
 		long now = System.nanoTime();
-		long interval = dabMode || dvbtMode || dvbt2Mode ? DAB_MIN_ANALYSIS_INTERVAL_NANOS : MIN_ANALYSIS_INTERVAL_NANOS;
+		long interval = gsmMode || lteMode ? GSM_MIN_ANALYSIS_INTERVAL_NANOS
+				: dabMode || dvbtMode || dvbt2Mode ? DAB_MIN_ANALYSIS_INTERVAL_NANOS : MIN_ANALYSIS_INTERVAL_NANOS;
 		if (now - lastAnalysisNanos < interval) {
 			return;
 		}
@@ -243,7 +344,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		double dcPercent = Math.sqrt(meanI * meanI + meanQ * meanQ) / 128d * 100d;
 		double clippingPercent = sampleCount <= 0 ? 0 : clipped * 100d / sampleCount;
 		double quality = calculateRawQuality(dbfs, clippingPercent, dcPercent);
-		float[] spectrum = computeSpectrum(iqData, totalSamples);
+		float[] spectrum = gsmMode || lteMode ? new float[0] : computeSpectrum(iqData, totalSamples);
 		DabMetrics dabMetrics = dabMode ? computeDabMetrics(spectrum, sampleRateHz) : null;
 		if (dabMetrics != null) {
 			dabMetrics.constellation = computeDabConstellation(dabAnalysisData, dabAnalysisLength, sampleRateHz,
@@ -254,9 +355,49 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (dvbtResult != null) dvbtResult = dvbtResult.withSignalling(dvbtSignalling);
 		if (dvbt2Mode) scheduleDvbt2Analysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
 		Dvbt2SignalAnalyzer.Result dvbt2Result = dvbt2Mode ? latestDvbt2Result : null;
+		if (gsmMode) scheduleGsmAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
+		GsmSignalAnalyzer.Result gsmResult = gsmMode ? latestGsmResult : null;
+		if (lteMode) scheduleLteAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
+		LteSignalAnalyzer.Result lteResult = lteMode ? latestLteResult : null;
 		snapshot = new Snapshot(centerFreqHz, sampleRateHz, samples, sampleCount, dbfs, peak, dcPercent,
-				clippingPercent, stabilityDb, quality, spectrum, dabMetrics, dvbtResult, dvbt2Result,
+				clippingPercent, stabilityDb, quality, spectrum, dabMetrics, dvbtResult, dvbt2Result, gsmResult, lteResult,
 				System.currentTimeMillis());
+	}
+
+	private synchronized void scheduleLteAnalysis(byte[] iqData, int length, int sampleRateHz) {
+		int minimumBytes=Math.max(2,sampleRateHz/40); // 12.5 ms of stereo 8-bit IQ
+		if (lteAnalysisRunning || length < minimumBytes) return;
+		/* 50 ms contains the complete 40 ms PBCH scrambling cycle plus enough
+		 * margin to find the next frame boundary, without delaying live refresh. */
+		int wanted=Math.min(length & ~1, Math.max(65_536, sampleRateHz/10));
+		final byte[] capture=new byte[wanted];
+		System.arraycopy(iqData,(length-wanted)&~1,capture,0,wanted);
+		lteAnalysisRunning=true;
+		Thread worker=new Thread(() -> {
+			try { latestLteResult=lteAnalyzer.analyze(capture,capture.length,sampleRateHz); }
+			finally { lteAnalysisRunning=false; }
+		},"LTE PSS cell search");
+		worker.setDaemon(true); worker.setPriority(Thread.MIN_PRIORITY); worker.start();
+	}
+
+	private synchronized void scheduleGsmAnalysis(byte[] iqData, int length, int sampleRateHz) {
+		if (gsmAnalysisRunning || length < 2) return;
+		/* 350 ms spans an entire GSM 51-multiframe, so a capture containing
+		 * any FCCH/SCH pair also reaches the BCCH frames. */
+		int wanted = Math.min(length & ~1, Math.max(32_768, sampleRateHz * 7 / 10));
+		final byte[] capture = new byte[wanted];
+		System.arraycopy(iqData, (length - wanted) & ~1, capture, 0, wanted);
+		gsmAnalysisRunning = true;
+		Thread worker = new Thread(() -> {
+			try {
+				latestGsmResult = gsmAnalyzer.analyze(capture, capture.length, sampleRateHz);
+			} finally {
+				gsmAnalysisRunning = false;
+			}
+		}, "GSM FCCH analyzer");
+		worker.setDaemon(true);
+		worker.setPriority(Thread.MIN_PRIORITY);
+		worker.start();
 	}
 
 	private synchronized void scheduleDvbt2Analysis(byte[] iqData, int length, int sampleRateHz) {
@@ -987,6 +1128,8 @@ final class SignalQualityTesterFrame extends JFrame {
 				dvbt2PreLabel.setText(parameterTable("L1-PRE SIGNALLING", "", "Waiting for DVB-T2 P1/L1-pre lock..."));
 				dvbt2PostLabel.setText(parameterTable("L1-POST / PLP", "", "Waiting for L1-post lock..."));
 			}
+			if (gsmMode) gsmParameterLabel.setText(parameterTable("GSM DOWNLINK", "", "Waiting for GSM IQ..."));
+			if (lteMode) lteParameterLabel.setText(parameterTable("LTE CELL SEARCH", "", "Waiting for LTE IQ..."));
 			return;
 		}
 		statsLabel.setText(String.format(Locale.US, "%.3f MHz   %.3f MS/s   RMS %.1f dBFS   peak %d",
@@ -1020,11 +1163,79 @@ final class SignalQualityTesterFrame extends JFrame {
 					t2.l1Locked ? "" : t2.state));
 			dvbt2PostLabel.setText(parameterTable("L1-POST / PLP", t2.l1PostDetails,
 					t2.l1PostLocked ? "" : "L1-post parameters are not locked yet."));
+		} else if (gsmMode && active.gsmResult != null) {
+			GsmSignalAnalyzer.Result gsm = active.gsmResult;
+			PlmnDatabase.Entry plmn = gsm.bcchDecoded ? PlmnDatabase.lookup(gsm.mcc, gsm.mnc) : null;
+			detailLabel.setText(String.format(Locale.US,
+					"%s   FCCH %.1f%%   SCH %.1f%%   tone %+.0f Hz   CFO %+.0f Hz   burst %.1f dBFS",
+					gsm.state, gsm.coherence * 100d, gsm.schCorrelation * 100d,
+					gsm.toneHz, gsm.cfoHz, gsm.burstDbfs));
+			String details = String.format(Locale.US,
+					"Acquisition|%s\nFCCH lock|%s\nSCH sync|%s\nSCH data CRC|%s\nControl channel|%s\nPaging observations|%d\nSystem Information 3|%s\nPLMN (MCC-MNC)|%s\nCountry|%s\nOperator / network|%s\nAssignment status|%s\nLAC|%s\nCell ID|%s\nBSIC|%s\nNCC / BCC|%s\nFrame number|%s\nFCCH quality|%.1f %%\nSCH correlation|%.1f %%\n"
+					+ "FCCH tone|%+.1f Hz\nFrequency error (CFO)|%+.1f Hz\nBurst level|%.1f dBFS\n"
+					+ "FCCH candidates|%d\nChannel center|%.6f MHz\nIQ sample rate|%.3f kS/s",
+					gsm.state, gsm.fcchLocked ? "LOCKED" : "searching", gsm.schDetected ? "SYNCHRONIZED" : "searching",
+					gsm.schDecoded ? "OK" : "waiting for a CRC-valid SCH burst",
+					gsm.bcchMessageType >= 0 ? String.format(Locale.US, "RR 0x%02X", gsm.bcchMessageType) : "searching",
+					gsm.pagingEvents.size(),
+					gsm.bcchDecoded ? "FIRE CRC OK" : "searching",
+					gsm.bcchDecoded ? gsm.mcc + "-" + gsm.mnc : "--",
+					plmn == null ? (gsm.bcchDecoded ? "unknown in embedded database" : "--")
+							: plmn.country + (plmn.countryCode.length() == 0 ? "" : " (" + plmn.countryCode + ")"),
+					plmn == null ? "--" : plmn.networkName(),
+					plmn == null ? "--" : plmn.status,
+					gsm.bcchDecoded ? Integer.toString(gsm.lac) : "--",
+					gsm.bcchDecoded ? Integer.toString(gsm.cellId) : "--",
+					gsm.schDecoded ? Integer.toString(gsm.bsic) : "--",
+					gsm.schDecoded ? gsm.ncc + " / " + gsm.bcc : "--",
+					gsm.schDecoded ? Long.toString(gsm.frameNumber) : "--",
+					gsm.quality, gsm.schCorrelation * 100d, gsm.toneHz, gsm.cfoHz, gsm.burstDbfs,
+					gsm.candidates, active.centerFreqHz / 1_000_000d,
+					active.sampleRateHz / 1000d);
+			gsmParameterLabel.setText(parameterTable("GSM DOWNLINK ACQUISITION", details, gsm.state));
+		} else if (lteMode && active.lteResult != null) {
+			LteSignalAnalyzer.Result lte=active.lteResult;
+			lteConstellationPanel.setResult(lte);
+			for(LteSignalAnalyzer.Candidate candidate:lte.candidates)if(candidate.pci>=0) {
+				if(candidate.si.valid)lteSystemInformation.put(candidate.pci,candidate.si);
+				else if(lteSystemInformation.containsKey(candidate.pci))candidate.si=lteSystemInformation.get(candidate.pci);
+				if(candidate.load.valid){Double previousLoad=lteLoadPercent.get(candidate.pci);lteLoadPercent.put(candidate.pci,previousLoad==null?candidate.load.percent:previousLoad*.7+candidate.load.percent*.3);}
+				long now=System.nanoTime();
+				for(Integer event:candidate.pagingEvents){String key=candidate.pci+":"+event;Long last=ltePagingSeen.get(key);if(last==null||now-last>2_000_000_000L){ltePagingSeen.put(key,now);ltePagingCounts.put(candidate.pci,ltePagingCounts.containsKey(candidate.pci)?ltePagingCounts.get(candidate.pci)+1L:1L);}}
+				LteSignalAnalyzer.Candidate previous=lteCells.get(candidate.pci);
+				/* A short refresh can end at a PBCH cycle boundary.  Keep a previously
+				 * CRC-verified MIB while updating the live synchronization measurements. */
+				if(!candidate.mib.valid&&previous!=null&&previous.mib.valid)candidate=candidate.withMib(previous.mib);
+				if(!candidate.cfi.valid&&previous!=null&&previous.cfi.valid)candidate.cfi=previous.cfi;
+				if(!candidate.control.valid&&previous!=null&&previous.control.valid)candidate.control=previous.control;
+				if(!candidate.pdcch.valid&&previous!=null&&previous.pdcch.valid)candidate.pdcch=previous.pdcch;
+				if(!candidate.sib1Pdcch.valid&&previous!=null&&previous.sib1Pdcch.valid){candidate.sib1Cfi=previous.sib1Cfi;candidate.sib1Pdcch=previous.sib1Pdcch;candidate.sib1FrameOffset=previous.sib1FrameOffset;}
+				if(!candidate.sib1Pdsch.valid&&previous!=null&&previous.sib1Pdsch.valid)candidate.sib1Pdsch=previous.sib1Pdsch;
+				if(!candidate.sib1Transport.valid&&previous!=null&&previous.sib1Transport.valid)candidate.sib1Transport=previous.sib1Transport;
+				if(!candidate.sib1.valid&&previous!=null&&previous.sib1.valid)candidate.sib1=previous.sib1;
+				if(!candidate.siTransport.valid&&previous!=null&&previous.siTransport.valid){candidate.siCfi=previous.siCfi;candidate.siPdcch=previous.siPdcch;candidate.siPdsch=previous.siPdsch;candidate.siTransport=previous.siTransport;candidate.siFrameOffset=previous.siFrameOffset;candidate.siSubframe=previous.siSubframe;}
+				/* Parsed SIB2/3 may come either from the current CRC-valid transport or
+				 * from the analyzer's per-PCI cache. Retain it independently of the
+				 * transport object so a later short refresh cannot blank detail tabs. */
+				if(!candidate.si.valid&&previous!=null&&previous.si.valid)candidate.si=previous.si;
+				if(candidate.si.valid)lteSystemInformation.put(candidate.pci,candidate.si);
+				lteCells.put(candidate.pci,candidate);
+			}
+			lteCellTablePanel.updateCells(lteCells.values());
+			detailLabel.setText(String.format(Locale.US,"%s   PSS %.1f%%   detected cells %d",
+					lte.state,lte.correlation*100d,lteCells.size()));
+			String details=String.format(Locale.US,
+					"Acquisition|%s\nDetected cells|%d\nCurrent PSS / SSS|%.1f %% / %.1f %%\nIQ orientation|%s\nChannel center|%.6f MHz\nIQ sample rate|%.3f MS/s",
+					lte.state,lteCells.size(),lte.correlation*100d,lte.sssCorrelation*100d,
+					lte.iqOrientation>0?"normal":"conjugated",active.centerFreqHz/1e6,active.sampleRateHz/1e6);
+			lteParameterLabel.setText(parameterTable("LTE CELL ACQUISITION / SESSION STATUS",details,lte.state));
 		} else {
 			detailLabel.setText(String.format(Locale.US, "DC %.1f%%   clipping %.2f%%   stability %.2f dB",
 					active.dcPercent, active.clippingPercent, active.stabilityDb));
 		}
 	}
+	private static String lteBandwidthMhz(int rb){switch(rb){case 6:return"1.4";case 15:return"3";case 25:return"5";case 50:return"10";case 75:return"15";case 100:return"20";default:return"?";}}
+	private static String phichResource(int value){return new String[]{"1/6","1/2","1","2"}[Math.max(0,Math.min(3,value))];}
 
 	private synchronized void refreshDvbt2CrcPanel() {
 		dvbt2CrcPanel.setStats(dvbt2CrcCount, dvbt2PreCrcSuccess, dvbt2PostCrcSuccess);
@@ -1177,12 +1388,15 @@ final class SignalQualityTesterFrame extends JFrame {
 		final DabMetrics dabMetrics;
 		final DvbtSignalAnalyzer.Result dvbtResult;
 		final Dvbt2SignalAnalyzer.Result dvbt2Result;
+		final GsmSignalAnalyzer.Result gsmResult;
+		final LteSignalAnalyzer.Result lteResult;
 		final long createdMillis;
 
 		Snapshot(long centerFreqHz, int sampleRateHz, byte[] samples, int sampleCount, double dbfs, int peak,
 				double dcPercent, double clippingPercent, double stabilityDb, double quality, float[] spectrumDb,
 				DabMetrics dabMetrics, DvbtSignalAnalyzer.Result dvbtResult,
-				Dvbt2SignalAnalyzer.Result dvbt2Result, long createdMillis) {
+				Dvbt2SignalAnalyzer.Result dvbt2Result, GsmSignalAnalyzer.Result gsmResult,
+				LteSignalAnalyzer.Result lteResult, long createdMillis) {
 			this.centerFreqHz = centerFreqHz;
 			this.sampleRateHz = sampleRateHz;
 			this.samples = samples;
@@ -1197,7 +1411,64 @@ final class SignalQualityTesterFrame extends JFrame {
 			this.dabMetrics = dabMetrics;
 			this.dvbtResult = dvbtResult;
 			this.dvbt2Result = dvbt2Result;
+			this.gsmResult = gsmResult;
+			this.lteResult = lteResult;
 			this.createdMillis = createdMillis;
+		}
+	}
+
+	private static final class LteConstellationPanel extends JPanel {
+		private volatile LteSignalAnalyzer.Result result;
+
+		LteConstellationPanel() {
+			setBackground(PANEL_BG);
+			setPreferredSize(new Dimension(185,135));
+			setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
+		}
+
+		void setResult(LteSignalAnalyzer.Result result) {
+			this.result=result;
+			repaint();
+		}
+
+		@Override protected void paintComponent(Graphics graphics) {
+			super.paintComponent(graphics);
+			Graphics2D g=(Graphics2D)graphics.create();
+			try {
+				g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);
+				int width=getWidth(),height=getHeight(),cx=width/2,cy=height/2+5;
+				g.setColor(GRID);g.drawLine(7,cy,width-7,cy);g.drawLine(cx,22,cx,height-7);
+				LteSignalAnalyzer.Result current=result;double[] points=null;double evm=Double.POSITIVE_INFINITY;String source="PBCH";
+				if(current!=null) {
+					for(LteSignalAnalyzer.Candidate cell:current.candidates)
+						if(cell.pdcch.valid&&cell.pdcch.llr.length>=2&&cell.pdcch.qpskEvm<evm){
+							points=cell.pdcch.llr;evm=cell.pdcch.qpskEvm;source="PDCCH";
+						}
+					if(points==null)for(LteSignalAnalyzer.Candidate cell:current.candidates)
+						if(cell.sib1Pdsch.valid&&cell.sib1Pdsch.llr.length>=2&&cell.sib1Pdsch.qpskEvm<evm){
+							points=cell.sib1Pdsch.llr;evm=cell.sib1Pdsch.qpskEvm;source="PDSCH";
+						}
+					if(points==null)for(LteSignalAnalyzer.Candidate cell:current.candidates)
+						if(cell.sib1Pdcch.valid&&cell.sib1Pdcch.llr.length>=2&&cell.sib1Pdcch.qpskEvm<evm){
+							points=cell.sib1Pdcch.llr;evm=cell.sib1Pdcch.qpskEvm;source="PDCCH";
+						}
+					if(points==null||points.length<2){points=current.pbchConstellation;evm=current.pbchEvm;}
+				}
+				g.setColor(TEXT_FG);g.drawString("LTE QPSK",8,14);
+				if(points==null||points.length<2){g.setColor(MUTED_FG);g.drawString("waiting",width-48,14);return;}
+				int pairs=points.length/2,step=Math.max(1,pairs/900);double power=0;int used=0;
+				for(int q=0;q<pairs;q+=step){double re=points[2*q],im=points[2*q+1];power+=re*re+im*im;used++;}
+				double component=Math.sqrt(power/Math.max(1,2*used));if(component<1e-9)return;
+				double radius=Math.min(width-18,height-31)*.29,scale=radius/component;
+				g.setColor(new Color(0x31505f));
+				for(int sx:new int[]{-1,1})for(int sy:new int[]{-1,1})
+					g.drawOval((int)Math.round(cx+sx*radius)-4,(int)Math.round(cy-sy*radius)-4,8,8);
+				double quality=Double.isFinite(evm)?Math.max(0,Math.min(100,100*(1-evm))):0;
+				g.setColor(quality>=70?QUALITY_GOOD:quality>=40?QUALITY_WARN:QUALITY_BAD);
+				for(int q=0;q<pairs;q+=step){int x=(int)Math.round(cx+points[2*q]*scale),y=(int)Math.round(cy-points[2*q+1]*scale);if(x>=3&&x<width-3&&y>=20&&y<height-3)g.fillRect(x-1,y-1,3,3);}
+				g.setColor(MUTED_FG);
+				g.drawString(String.format(Locale.US,"%s %.0f%%",source,quality),Math.max(58,width-78),14);
+			} finally { g.dispose(); }
 		}
 	}
 
@@ -1230,7 +1501,7 @@ final class SignalQualityTesterFrame extends JFrame {
 				Color color = quality >= 70 ? QUALITY_GOOD : quality >= 40 ? QUALITY_WARN : QUALITY_BAD;
 				g.setColor(TEXT_FG);
 				String label = active != null && (active.dabMetrics != null || active.dvbtResult != null
-						|| active.dvbt2Result != null) ? "INPUT" : "RAW";
+						|| active.dvbt2Result != null || active.gsmResult != null || active.lteResult != null) ? "INPUT" : "RAW";
 				g.drawString(active == null ? label + " --%" : String.format(Locale.US, "%s %.0f%%", label, quality), 4, 17);
 				g.setColor(GRID);
 				g.fillRect(barX, barY, barW, barH);
@@ -1273,12 +1544,16 @@ final class SignalQualityTesterFrame extends JFrame {
 						? null : active.dabMetrics.constellation;
 				double lock = active != null && active.dvbtResult != null
 						? active.dvbtResult.quality : active != null && active.dvbt2Result != null
-								? active.dvbt2Result.quality : constellation == null ? 0 : constellation.lockScore;
+								? active.dvbt2Result.quality : active != null && active.gsmResult != null
+										? active.gsmResult.quality : active != null && active.lteResult != null
+												? lteQpskQuality(active.lteResult) : constellation == null ? 0 : constellation.lockScore;
 				Color color = lock >= 55 ? QUALITY_GOOD : lock >= 35 ? QUALITY_WARN : QUALITY_BAD;
 				g.setColor(TEXT_FG);
-				String label = active != null && active.dvbt2Result != null ? "DEMOD" : "QUALITY";
+				String label = active != null && active.dvbt2Result != null ? "DEMOD"
+						: active != null && active.gsmResult != null ? "FCCH"
+						: active != null && active.lteResult != null ? "QPSK" : "QUALITY";
 				g.drawString(active == null || (constellation == null && active.dvbtResult == null
-						&& active.dvbt2Result == null) ? label + " --%"
+						&& active.dvbt2Result == null && active.gsmResult == null && active.lteResult == null) ? label + " --%"
 						: String.format(Locale.US, "%s %.0f%%", label, lock), 4, 16);
 				g.setColor(GRID);
 				g.fillRect(barX, barY, barW, barH);
@@ -1289,6 +1564,18 @@ final class SignalQualityTesterFrame extends JFrame {
 			} finally {
 				g.dispose();
 			}
+		}
+
+		private static double lteQpskQuality(LteSignalAnalyzer.Result result) {
+			double evm=result.pbchEvm;
+			boolean live=false;for(LteSignalAnalyzer.Candidate cell:result.candidates)
+				if(cell.pdcch.valid&&Double.isFinite(cell.pdcch.qpskEvm)){evm=cell.pdcch.qpskEvm;live=true;break;}
+			if(!live)for(LteSignalAnalyzer.Candidate cell:result.candidates)
+				if(cell.sib1Pdcch.valid&&Double.isFinite(cell.sib1Pdcch.qpskEvm)){evm=cell.sib1Pdcch.qpskEvm;break;}
+			if(!live)for(LteSignalAnalyzer.Candidate cell:result.candidates)
+				if(cell.sib1Pdsch.valid&&Double.isFinite(cell.sib1Pdsch.qpskEvm)){evm=cell.sib1Pdsch.qpskEvm;break;}
+			if(!Double.isFinite(evm))return 0;
+			return Math.max(0,Math.min(100,100*(1-evm)));
 		}
 	}
 
@@ -1370,7 +1657,8 @@ final class SignalQualityTesterFrame extends JFrame {
 				}
 				g.drawLine(width / 2, top, width / 2, bottom);
 				g.setColor(MUTED_FG);
-				g.drawString("FFT spectrum", left, 15);
+				g.drawString(snapshot != null && snapshot.gsmResult != null
+						? "GSM 200 kHz channel / FCCH" : "FFT spectrum", left, 15);
 				Snapshot active = snapshot;
 				if (active == null || active.spectrumDb == null || active.spectrumDb.length == 0) {
 					g.drawString("Waiting for spectrum...", left, top + 24);
@@ -1379,6 +1667,11 @@ final class SignalQualityTesterFrame extends JFrame {
 				if (active.dabMetrics != null && active.dabMetrics.bandwidthHz > 0 && active.sampleRateHz > 0) {
 					int halfWidth = Math.round((right - left) * (active.dabMetrics.bandwidthHz
 							/ (float) active.sampleRateHz) * 0.5f);
+					g.setColor(new Color(0x667733));
+					g.drawLine(width / 2 - halfWidth, top, width / 2 - halfWidth, bottom);
+					g.drawLine(width / 2 + halfWidth, top, width / 2 + halfWidth, bottom);
+				} else if (active.gsmResult != null && active.sampleRateHz > 0) {
+					int halfWidth = Math.round((right - left) * (200_000f / active.sampleRateHz) * 0.5f);
 					g.setColor(new Color(0x667733));
 					g.drawLine(width / 2 - halfWidth, top, width / 2 - halfWidth, bottom);
 					g.drawLine(width / 2 + halfWidth, top, width / 2 + halfWidth, bottom);

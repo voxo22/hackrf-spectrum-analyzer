@@ -183,6 +183,14 @@ public final class IQReplayFileTest {
 			assertEquals(433_920_000L, replay.getCenterFrequencyHz(), "RAW MHz prefix center");
 			assertEquals(500_000L, replay.getSampleRateHz(), "RAW prefix bandwidth");
 		}
+		File hzFile = new File(directory, "1827500000_capture_5.pcm");
+		try (FileOutputStream output = new FileOutputStream(hzFile)) {
+			output.write(samples);
+		}
+		try (IQReplayFile replay = IQReplayFile.open(hzFile)) {
+			assertEquals(1_827_500_000L, replay.getCenterFrequencyHz(), "RAW Hz prefix center");
+			assertEquals(5_000_000L, replay.getSampleRateHz(), "RAW Hz prefix bandwidth");
+		}
 	}
 
 	private static void testWav(File directory) throws Exception {

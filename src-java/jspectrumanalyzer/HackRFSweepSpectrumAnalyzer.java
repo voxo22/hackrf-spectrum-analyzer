@@ -126,7 +126,6 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private static final double IQ_REPLAY_MAX_VIEW_SPAN_MULTIPLIER = 10d;
 	private static final int IQ_REPLAY_MIN_TARGET_RBW_HZ = 50;
 	private static final int IQ_REPLAY_TX_MIN_SAMPLE_RATE_HZ = 2_000_000;
-	private static final int IQ_ANALYZER_AUTO_NARROW_MAX_BANDWIDTH_HZ = 1_500_000;
 
 	private enum ReplayType {
 		DATA, WAV, RAW
@@ -154,8 +153,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		IQReplayAnalyzerFeed(IQAnalyzerApp analyzer, int sourceSampleRateHz, long channelOffsetHz,
 				int channelBandwidthHz, int outputRateHz) {
 			this.analyzer = analyzer;
-			boolean fullBandwidth = channelBandwidthHz > IQ_ANALYZER_AUTO_NARROW_MAX_BANDWIDTH_HZ
-					&& Math.abs(channelOffsetHz) <= sourceSampleRateHz / 200L;
+			/* Bypass the channelizer only when the selection really represents the
+			 * complete recording. A merely centred selection must still be cropped
+			 * and decimated (for example 8 MHz selected from a 20 MS/s replay). */
+			boolean fullBandwidth = channelBandwidthHz >= sourceSampleRateHz * .9d
+					&& Math.abs(channelOffsetHz) <= sourceSampleRateHz / 200L
+					&& outputRateHz >= sourceSampleRateHz;
 			IQSampleProcessor selectedProcessor = null;
 			if (!fullBandwidth) {
 				try {
@@ -4642,6 +4645,14 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	}
 
 	private int chooseReplayIqOutputRate(int sourceSampleRateHz, int bandwidthHz) {
+		if (bandwidthHz > 1_500_000) {
+			int[] wideRates = { 2_000_000, 4_000_000, 6_000_000, 8_000_000, 10_000_000,
+					12_500_000, 16_000_000, 20_000_000 };
+			for (int rate : wideRates) {
+				if (rate >= bandwidthHz && rate <= sourceSampleRateHz) return rate;
+			}
+			return sourceSampleRateHz;
+		}
 		int requested = Math.max(48_000, (int) Math.ceil(bandwidthHz * 1.25d));
 		if (requested >= sourceSampleRateHz) {
 			return sourceSampleRateHz;

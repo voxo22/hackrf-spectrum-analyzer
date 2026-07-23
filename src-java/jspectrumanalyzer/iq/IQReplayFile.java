@@ -267,7 +267,11 @@ public final class IQReplayFile implements AutoCloseable {
 		}
 		matcher = RAW_CENTER_PREFIX_PATTERN.matcher(name);
 		if (matcher.find()) {
-			return parseScaledValue(matcher.group(1), "MHz");
+			/* Historical recordings use a decimal MHz prefix (433.92_...), while
+			 * newer HackRF captures may use an integer frequency in Hz
+			 * (1827500000_...). Keep both conventions unambiguous. */
+			double prefix = Double.parseDouble(matcher.group(1));
+			return parseScaledValue(matcher.group(1), prefix >= 100_000d ? "Hz" : "MHz");
 		}
 		throw new IOException("PCM filename must contain Hz/kHz center frequency or start with <MHz>_");
 	}
