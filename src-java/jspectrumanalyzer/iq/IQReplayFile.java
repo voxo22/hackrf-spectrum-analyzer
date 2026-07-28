@@ -209,6 +209,24 @@ public final class IQReplayFile implements AutoCloseable {
 		return requested;
 	}
 
+	public synchronized boolean canReadSignedBlockWithoutLoop(int destinationBytes) {
+		if (destinationBytes < 2) {
+			return false;
+		}
+		int requested = destinationBytes & ~1;
+		long sourceBytes = (requested / 2L) * bytesPerComponent * 2L;
+		return sourceBytes <= dataLength;
+	}
+
+	public synchronized boolean wouldLoopOnNextRead(int destinationBytes) {
+		if (destinationBytes < 2) {
+			return false;
+		}
+		int requested = destinationBytes & ~1;
+		long sourceBytes = (requested / 2L) * bytesPerComponent * 2L;
+		return dataPosition + sourceBytes > dataLength;
+	}
+
 	public synchronized void seekMillis(long positionMillis) throws IOException {
 		int bytesPerIqSample = bytesPerComponent * 2;
 		long bytePosition = Math.round(Math.max(0, positionMillis) * sampleRateHz * bytesPerIqSample / 1000d);

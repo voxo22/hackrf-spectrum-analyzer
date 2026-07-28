@@ -45,6 +45,9 @@ public class IQTimeDomainPanel extends JPanel {
 	private volatile long bytes;
 	private volatile long startedNanos;
 	private volatile int decimation = 1;
+	private volatile double rmsDbfs = Double.NaN;
+	private volatile double peakDbfs = Double.NaN;
+	private volatile int peakSample = 0;
 	private volatile boolean triggerEnabled = false;
 	private volatile boolean singleTriggerEnabled = false;
 	private volatile int triggerThreshold = 64;
@@ -127,16 +130,24 @@ public class IQTimeDomainPanel extends JPanel {
 	}
 
 	public void setStats(long centerFreqHz, int sampleRateHz, long blocks, long bytes, long startedNanos) {
-		setStats(centerFreqHz, sampleRateHz, blocks, bytes, startedNanos, 1);
+		setStats(centerFreqHz, sampleRateHz, blocks, bytes, startedNanos, 1, Double.NaN, Double.NaN, 0);
 	}
 
 	public void setStats(long centerFreqHz, int sampleRateHz, long blocks, long bytes, long startedNanos, int decimation) {
+		setStats(centerFreqHz, sampleRateHz, blocks, bytes, startedNanos, decimation, Double.NaN, Double.NaN, 0);
+	}
+
+	public void setStats(long centerFreqHz, int sampleRateHz, long blocks, long bytes, long startedNanos, int decimation,
+			double rmsDbfs, double peakDbfs, int peakSample) {
 		this.centerFreqHz = centerFreqHz;
 		this.sampleRateHz = sampleRateHz;
 		this.blocks = blocks;
 		this.bytes = bytes;
 		this.startedNanos = startedNanos;
 		this.decimation = Math.max(1, decimation);
+		this.rmsDbfs = rmsDbfs;
+		this.peakDbfs = peakDbfs;
+		this.peakSample = Math.max(0, peakSample);
 	}
 
 	public void setTrigger(boolean enabled, int threshold, int prePercent) {
@@ -526,8 +537,13 @@ public class IQTimeDomainPanel extends JPanel {
 
 		g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
 		g.setColor(new Color(0xdddddd));
-		String text = String.format("Center %.6f MHz   Display %.3f kS/s   Decim %dx   Blocks %d   %.2f MiB/s   View %.2f us",
-				centerFreqHz / 1_000_000d, sampleRateHz / 1_000d, decimation, blocks, mibPerSecond, visibleMicros);
+		String peakRmsText = (Double.isNaN(rmsDbfs) || Double.isNaN(peakDbfs))
+				? "--.-/--.- dBFS"
+				: String.format("%.1f/%.1f dBFS", peakDbfs, rmsDbfs);
+		String text = String.format(
+				"Center %.6f MHz   Display %.3f kS/s   Decim %dx   Blocks %d   %.2f MiB/s   View %.2f us   Peak/RMS %s",
+				centerFreqHz / 1_000_000d, sampleRateHz / 1_000d, decimation, blocks, mibPerSecond, visibleMicros,
+				peakRmsText);
 		g.drawString(text, 12, 22);
 
 		drawLegend(g);

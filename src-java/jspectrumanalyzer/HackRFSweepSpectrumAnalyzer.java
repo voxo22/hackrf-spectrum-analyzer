@@ -1229,6 +1229,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private double									dragZoomCurrentMHz				= Double.NaN;
 	private int										dragZoomAnchorX				= -1;
 	private boolean									dragZoomSnapEnabled;
+	private boolean									dragZoomCenteredSelection;
 	private int										iqReplayPanLastX				= -1;
 	private final TriggerSettings					triggerSettings					= new TriggerSettings();
 	private final ArrayList<TriggerEvent>			triggerEvents					= new ArrayList<>();
@@ -3163,6 +3164,16 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					if (iqData.length != frameBytes) {
 						iqData = new byte[frameBytes];
 					}
+					if (iqFile.canReadSignedBlockWithoutLoop(frameBytes) && iqFile.wouldLoopOnNextRead(frameBytes)) {
+						iqFile.seekMillis(0);
+						if (txFeed != null) {
+							txFeed.seekMillis(0);
+						}
+						if (spectrumFeed != null) {
+							spectrumFeed.clearPending();
+						}
+						playbackDeadlineNanos = System.nanoTime();
+					}
 					iqFile.readLoopedSigned(iqData);
 					playbackPositionMillis = iqFile.getPositionMillis();
 					playbackCurrentEpochMillis = recordingStartEpochMillis + playbackPositionMillis;
@@ -4325,8 +4336,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			return;
 		}
 		XYPlot plot = chart.getXYPlot();
-		double lower = Math.min(dragZoomAnchorMHz, dragZoomCurrentMHz);
-		double upper = Math.max(dragZoomAnchorMHz, dragZoomCurrentMHz);
+		double[] dragZoomBounds = getDragZoomDomainBounds(dragZoomAnchorMHz, dragZoomCurrentMHz,
+				dragZoomCenteredSelection);
+		double lower = dragZoomBounds[0];
+		double upper = dragZoomBounds[1];
 		double x1 = plot.getDomainAxis().valueToJava2D(lower, area, plot.getDomainAxisEdge());
 		double x2 = plot.getDomainAxis().valueToJava2D(upper, area, plot.getDomainAxisEdge());
 		int x = (int) Math.round(Math.min(x1, x2));
@@ -4436,6 +4449,19 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		return snapZoomDomainFrequencyMHz(domainMHz);
 	}
 
+	private double[] getDragZoomDomainBounds(double anchorDomainMHz, double currentDomainMHz, boolean centeredSelection) {
+		if (!centeredSelection) {
+			return new double[] { Math.min(anchorDomainMHz, currentDomainMHz), Math.max(anchorDomainMHz, currentDomainMHz) };
+		}
+		XYPlot plot = chart.getXYPlot();
+		double minDomainMHz = Math.min(plot.getDomainAxis().getLowerBound(), plot.getDomainAxis().getUpperBound());
+		double maxDomainMHz = Math.max(plot.getDomainAxis().getLowerBound(), plot.getDomainAxis().getUpperBound());
+		double clampedCurrentMHz = Math.max(minDomainMHz, Math.min(maxDomainMHz, currentDomainMHz));
+		double radiusMHz = Math.abs(clampedCurrentMHz - anchorDomainMHz);
+		radiusMHz = Math.min(radiusMHz, Math.min(anchorDomainMHz - minDomainMHz, maxDomainMHz - anchorDomainMHz));
+		return new double[] { anchorDomainMHz - radiusMHz, anchorDomainMHz + radiusMHz };
+	}
+
 	private double[] getDragZoomDisplayRangeMHz(double lowerDomainMHz, double upperDomainMHz) {
 		if (isIqReplayActive()) {
 			return new double[] { lowerDomainMHz, upperDomainMHz };
@@ -4461,6 +4487,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 	private void startDragZoom(MouseEvent event) {
 		dragZoomSnapEnabled = !event.isControlDown();
+		dragZoomCenteredSelection = event.isShiftDown();
 		dragZoomAnchorMHz = maybeSnapZoomDomainFrequencyMHz(mouseToDomainMHz(event.getX()));
 		dragZoomCurrentMHz = dragZoomAnchorMHz;
 		dragZoomAnchorX = clampMouseXToPlot(event.getX());
@@ -4471,6 +4498,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		dragZoomCurrentMHz = Double.NaN;
 		dragZoomAnchorX = -1;
 		dragZoomSnapEnabled = false;
+		dragZoomCenteredSelection = false;
 	}
 
 	private void applyLiveDragZoom(double firstDomainMHz, double secondDomainMHz) {
@@ -4523,17 +4551,31 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		}
 		anchorMHz = Math.max(subRange[0], Math.min(subRange[1], anchorMHz));
 		IQSelection selection = new IQSelection(anchorMHz, subRange, !e.isControlDown());
-		updateIQSelection(selection, e.getX());
+		updateIQSelection(selection, e);
 		return selection;
 	}
 
-	private void updateIQSelection(IQSelection selection, int mouseX) {
+	private void updateIQSelection(IQSelection selection, MouseEvent event) {
 		int[] activePairs = parseRangePairs(getActiveRangesForDisplay());
-		double currentMHz = domainToSelectionMHz(mouseToDomainMHz(mouseX), activePairs);
+		double currentMHz = domainToSelectionMHz(mouseToDomainMHz(event.getX()), activePairs);
 		double minMHz = Math.max(selection.subRange[0], selection.anchorMHz - IQ_SELECTION_MAX_BW_MHZ);
 		double maxMHz = Math.min(selection.subRange[1], selection.anchorMHz + IQ_SELECTION_MAX_BW_MHZ);
 		currentMHz = Math.max(minMHz, Math.min(maxMHz, currentMHz));
-		if (selection.snapEnabled) {
+		boolean centeredSelection = event.isShiftDown();
+		if (centeredSelection) {
+			double radiusMHz = Math.min(selection.anchorMHz - minMHz, maxMHz - selection.anchorMHz);
+			double mirroredMHz = selection.anchorMHz - (currentMHz - selection.anchorMHz);
+			currentMHz = Math.max(selection.anchorMHz - radiusMHz, Math.min(selection.anchorMHz + radiusMHz, currentMHz));
+			mirroredMHz = Math.max(selection.anchorMHz - radiusMHz, Math.min(selection.anchorMHz + radiusMHz, mirroredMHz));
+			if (selection.snapEnabled) {
+				double[] snappedRange = snapSelectionRangeMHz(mirroredMHz, currentMHz, minMHz, maxMHz);
+				selection.startMHz = snappedRange[0];
+				selection.stopMHz = snappedRange[1];
+			} else {
+				selection.startMHz = Math.min(mirroredMHz, currentMHz);
+				selection.stopMHz = Math.max(mirroredMHz, currentMHz);
+			}
+		} else if (selection.snapEnabled) {
 			double[] snappedRange = snapSelectionRangeMHz(selection.anchorMHz, currentMHz, minMHz, maxMHz);
 			selection.startMHz = snappedRange[0];
 			selection.stopMHz = snappedRange[1];
@@ -4568,7 +4610,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			long sourceCenterHz = iqReplay.getCenterFrequencyHz();
 			int sourceSampleRateHz = iqReplay.getSampleRateHz();
 			long channelOffsetHz = centerHz - sourceCenterHz;
-			int outputRateHz = chooseReplayIqOutputRate(sourceSampleRateHz, bandwidthHz);
+			/* Preserve replay fidelity in the IQ analyzer. We still crop the
+			 * selected channel, but keep the original replay sample rate so the
+			 * analyzer path does not introduce fractional-rate replay artifacts. */
+			int outputRateHz = sourceSampleRateHz;
 			playbackIqAnalyzerWindows.incrementAndGet();
 			stopIqReplayAudio();
 			SwingUtilities.invokeLater(() -> {
@@ -4636,7 +4681,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	}
 
 	private int chooseIQSampleRateHz(int bandwidthHz) {
-		int[] rates = { 2_000_000, 4_000_000, 6_000_000, 8_000_000, 10_000_000, 12_500_000, 16_000_000, 20_000_000 };
+		int[] rates = { 2_000_000, 3_000_000, 4_000_000, 5_000_000, 6_000_000, 7_000_000, 8_000_000, 9_142_857,
+				10_000_000, 11_000_000, 12_500_000, 13_000_000, 14_000_000, 15_000_000, 16_000_000, 17_000_000,
+				18_000_000, 19_000_000, 20_000_000 };
 		for (int rate : rates) {
 			if (rate >= bandwidthHz)
 				return rate;
@@ -4646,8 +4693,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 	private int chooseReplayIqOutputRate(int sourceSampleRateHz, int bandwidthHz) {
 		if (bandwidthHz > 1_500_000) {
-			int[] wideRates = { 2_000_000, 4_000_000, 6_000_000, 8_000_000, 10_000_000,
-					12_500_000, 16_000_000, 20_000_000 };
+			int[] wideRates = { 2_000_000, 3_000_000, 4_000_000, 5_000_000, 6_000_000, 7_000_000, 8_000_000,
+					9_142_857, 10_000_000, 11_000_000, 12_500_000, 13_000_000, 14_000_000, 15_000_000, 16_000_000,
+					17_000_000, 18_000_000, 19_000_000, 20_000_000 };
 			for (int rate : wideRates) {
 				if (rate >= bandwidthHz && rate <= sourceSampleRateHz) return rate;
 			}
@@ -4980,7 +5028,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
             	}
             	if (iqSelection != null) {
             		IQSelection finishedSelection = iqSelection;
-            		updateIQSelection(finishedSelection, e.getX());
+					updateIQSelection(finishedSelection, e);
             		iqSelection = null;
             		chartPanel.setDomainZoomable(true);
             		chartPanel.repaint();
@@ -4990,8 +5038,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                 }
                 if (isIqReplayActive()) {
 					if (!Double.isNaN(dragZoomAnchorMHz)) {
-						final double zoomStart = dragZoomAnchorMHz;
+						dragZoomCenteredSelection = e.isShiftDown();
 						final double zoomStop = maybeSnapZoomDomainFrequencyMHz(mouseToDomainMHz(e.getX()));
+						final double[] zoomBounds = getDragZoomDomainBounds(dragZoomAnchorMHz, zoomStop,
+								dragZoomCenteredSelection);
 						final boolean applyZoom = Math.abs(clampMouseXToPlot(e.getX()) - dragZoomAnchorX) >= 4;
 						clearDragZoom();
 						dragging = false;
@@ -5000,7 +5050,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						e.consume();
 						SwingUtilities.invokeLater(() -> {
 							if (applyZoom && isIqReplayActive()) {
-								applyIqReplayDomainRange(zoomStart, zoomStop);
+								applyIqReplayDomainRange(zoomBounds[0], zoomBounds[1]);
 							}
 							chartPanel.setDomainZoomable(true);
 							chartPanel.repaint();
@@ -5019,9 +5069,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                     return;
                 }
 				if (!Double.isNaN(dragZoomAnchorMHz)) {
+					dragZoomCenteredSelection = e.isShiftDown();
 					dragZoomCurrentMHz = maybeSnapZoomDomainFrequencyMHz(mouseToDomainMHz(e.getX()));
 					if (Math.abs(clampMouseXToPlot(e.getX()) - dragZoomAnchorX) >= 4) {
-						applyLiveDragZoom(dragZoomAnchorMHz, dragZoomCurrentMHz);
+						double[] zoomBounds = getDragZoomDomainBounds(dragZoomAnchorMHz, dragZoomCurrentMHz,
+								dragZoomCenteredSelection);
+						applyLiveDragZoom(zoomBounds[0], zoomBounds[1]);
 					}
 					clearDragZoom();
 					dragging = false;
@@ -5147,12 +5200,13 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                 	return;
                 }
                 if (iqSelection != null) {
-                	updateIQSelection(iqSelection, e.getX());
+					updateIQSelection(iqSelection, e);
                 	e.consume();
                 	return;
                 }
                 if (isIqReplayActive()) {
 					if (!Double.isNaN(dragZoomAnchorMHz)) {
+						dragZoomCenteredSelection = e.isShiftDown();
 						dragZoomCurrentMHz = maybeSnapZoomDomainFrequencyMHz(mouseToDomainMHz(e.getX()));
 						chartPanel.repaint();
 					} else if (dragging && iqReplayPanLastX >= 0) {
@@ -5161,6 +5215,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                     return;
                 }
 				if (!Double.isNaN(dragZoomAnchorMHz)) {
+					dragZoomCenteredSelection = e.isShiftDown();
 					dragZoomCurrentMHz = maybeSnapZoomDomainFrequencyMHz(mouseToDomainMHz(e.getX()));
 					chartPanel.repaint();
 					e.consume();

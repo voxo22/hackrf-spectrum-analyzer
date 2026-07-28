@@ -104,6 +104,8 @@ public class IQAnalyzerApp {
 	private JCheckBox rfAmpCheck;
 	private JComboBox<ViewModeOption> viewModeCombo;
 	private JTextField channelOffsetField;
+	private JCheckBox dcOffsetEnableCheck;
+	private JComboBox<DcOffsetOption> dcOffsetCombo;
 	private JComboBox<BandwidthOption> channelBandwidthCombo;
 	private JComboBox<OutputRateOption> outputRateCombo;
 	private JComboBox<SignalTestOption> signalTestCombo;
@@ -144,6 +146,9 @@ public class IQAnalyzerApp {
 	private volatile long startedNanos = 0;
 	private volatile boolean streaming = false;
 	private volatile int streamGeneration = 0;
+	private volatile double latestRmsDbfs = Double.NaN;
+	private volatile double latestPeakDbfs = Double.NaN;
+	private volatile int latestPeakSample = 0;
 	private volatile int activeRawSampleRateHz = DEFAULT_SAMPLE_RATE_HZ;
 	private volatile long activeCenterFreqHz = DEFAULT_CENTER_FREQ_HZ;
 	private volatile long activeChannelOffsetHz;
@@ -162,6 +167,7 @@ public class IQAnalyzerApp {
 	private SignalQualityTesterFrame signalTestFrame;
 	private boolean singleTriggerArmed = false;
 	private Long spectrumDragBaseOffsetHz = null;
+	private boolean updatingDcOffsetControls = false;
 
 	public static void main(String[] args) {
 		long centerFreqHz = args.length > 0 ? parseFrequencyHz(args[0]) : DEFAULT_CENTER_FREQ_HZ;
@@ -236,7 +242,8 @@ public class IQAnalyzerApp {
 					triggerPre == null ? 25 : triggerPre.percent);
 			timeDomainPanel.setSingleTrigger(singleTriggerArmed);
 			timeDomainPanel.setStats(latestCenterFreqHz.get(), (int) latestSampleRateHz.get(), blocks.get(),
-					bytes.get(), startedNanos, (int) latestDecimation.get());
+					bytes.get(), startedNanos, (int) latestDecimation.get(), latestRmsDbfs, latestPeakDbfs,
+					latestPeakSample);
 			spectrumPanel.setCenterFrequencyHz(latestCenterFreqHz.get());
 			spectrumPanel.setSampleRateHz((int) latestSampleRateHz.get());
 			spectrumPanel.setChannelOffsetHz(getCurrentChannelOffsetHz());
@@ -420,6 +427,9 @@ public class IQAnalyzerApp {
 					IQAudioOutput.MAX_TONE_CUTOFF_HZ));
 			applyAudioToneCutoff();
 		}
+		if (dcOffsetEnableCheck != null) {
+			dcOffsetEnableCheck.setSelected(Boolean.parseBoolean(properties.getProperty("channel.dcOffsetEnabled", "true")));
+		}
 		if (triggerCheck != null) {
 			triggerCheck.setSelected(Boolean.parseBoolean(properties.getProperty("trigger.enabled", "false")));
 		}
@@ -458,6 +468,13 @@ public class IQAnalyzerApp {
 		if (audioToneSlider != null) {
 			properties.setProperty("audio.toneCutoffHz", Integer.toString(audioToneSlider.getValue()));
 		}
+		if (dcOffsetEnableCheck != null) {
+			properties.setProperty("channel.dcOffsetEnabled", Boolean.toString(dcOffsetEnableCheck.isSelected()));
+		}
+		if (dcOffsetCombo != null) {
+			DcOffsetOption option = (DcOffsetOption) dcOffsetCombo.getSelectedItem();
+			properties.setProperty("channel.dcOffsetMHz", Integer.toString(option == null ? 1 : option.shiftMHz));
+		}
 		if (triggerCheck != null) {
 			properties.setProperty("trigger.enabled", Boolean.toString(triggerCheck.isSelected()));
 		}
@@ -495,16 +512,30 @@ public class IQAnalyzerApp {
 		});
 		sampleRateCombo = new JComboBox<>(new RateOption[] {
 				new RateOption("2 MS/s", 2_000_000),
+				new RateOption("3 MS/s", 3_000_000),
 				new RateOption("4 MS/s", 4_000_000),
+				new RateOption("5 MS/s", 5_000_000),
 				new RateOption("6 MS/s", 6_000_000),
+				new RateOption("7 MS/s", 7_000_000),
 				new RateOption("8 MS/s", 8_000_000),
+				new RateOption("9 MS/s", 9_142_857),
 				new RateOption("10 MS/s", 10_000_000),
+				new RateOption("11 MS/s", 11_000_000),
 				new RateOption("12.5 MS/s", 12_500_000),
+				new RateOption("13 MS/s", 13_000_000),
+				new RateOption("14 MS/s", 14_000_000),
+				new RateOption("15 MS/s", 15_000_000),
 				new RateOption("16 MS/s", 16_000_000),
+				new RateOption("17 MS/s", 17_000_000),
+				new RateOption("18 MS/s", 18_000_000),
+				new RateOption("19 MS/s", 19_000_000),
 				new RateOption("20 MS/s", 20_000_000)
 		});
 		selectRate(sampleRateHz);
-		sampleRateCombo.addActionListener(e -> scheduleRfSettingsLiveApply());
+		sampleRateCombo.addActionListener(e -> {
+			updateChannelControlState();
+			scheduleRfSettingsLiveApply();
+		});
 
 		sampleViewCombo = new JComboBox<>(new SampleViewOption[] {
 				new SampleViewOption("Custom", 0),
@@ -552,23 +583,36 @@ public class IQAnalyzerApp {
 				new PresetOption("NFM 12.5 kHz", 12_500, 48_000, 4096),
 				new PresetOption("NFM 25 kHz", 25_000, 96_000, 4096),
 				new PresetOption("WFM 200 kHz", 200_000, 250_000, 8192),
+				new PresetOption("Analog TV 8 MHz", 0, 0, 1048576),
 				new PresetOption("Wide 1 MHz", 1_000_000, 1_000_000, 16384)
 		});
 		presetCombo.addActionListener(e -> applyPreset());
 		viewModeCombo = new JComboBox<>(new ViewModeOption[] {
-				new ViewModeOption("Wideband pulses", false),
-				new ViewModeOption("Narrow channel", true)
+				new ViewModeOption("Wideband", false),
+				new ViewModeOption("Narrowband", true)
 		});
 		viewModeCombo.setSelectedIndex(1);
 		viewModeCombo.addActionListener(e -> {
 			updateChannelControlState();
 			applyDspSettingsLive();
 		});
-		channelOffsetField = new JTextField("0", 7);
+		channelOffsetField = new JTextField("0", 5);
 		channelOffsetField.addActionListener(e -> applyDspSettingsLive());
 		channelOffsetField.addFocusListener(new FocusAdapter() {
 			@Override
 			public void focusLost(FocusEvent e) {
+				applyDspSettingsLive();
+			}
+		});
+		dcOffsetEnableCheck = new JCheckBox("DC offset");
+		dcOffsetEnableCheck.setSelected(true);
+		dcOffsetEnableCheck.addActionListener(e -> {
+			updateChannelControlState();
+			applyDspSettingsLive();
+		});
+		dcOffsetCombo = new JComboBox<>(new DcOffsetOption[] { new DcOffsetOption("Auto", 0) });
+		dcOffsetCombo.addActionListener(e -> {
+			if (!updatingDcOffsetControls) {
 				applyDspSettingsLive();
 			}
 		});
@@ -578,7 +622,8 @@ public class IQAnalyzerApp {
 				new BandwidthOption("100 kHz", 100_000),
 				new BandwidthOption("200 kHz", 200_000),
 				new BandwidthOption("500 kHz", 500_000),
-				new BandwidthOption("1 MHz", 1_000_000)
+				new BandwidthOption("1 MHz", 1_000_000),
+				new BandwidthOption("8 MHz", 8_000_000)
 		});
 		channelBandwidthCombo.setSelectedIndex(3);
 		channelBandwidthCombo.addActionListener(e -> applyDspSettingsLive());
@@ -588,7 +633,8 @@ public class IQAnalyzerApp {
 				new OutputRateOption("192 kS/s", 192_000),
 				new OutputRateOption("250 kS/s", 250_000),
 				new OutputRateOption("500 kS/s", 500_000),
-				new OutputRateOption("1 MS/s", 1_000_000)
+				new OutputRateOption("1 MS/s", 1_000_000),
+				new OutputRateOption("8 MS/s", 8_000_000)
 		});
 		outputRateCombo.setSelectedIndex(3);
 		outputRateCombo.addActionListener(e -> applyDspSettingsLive());
@@ -596,6 +642,8 @@ public class IQAnalyzerApp {
 				new SignalTestOption("DAB"),
 				new SignalTestOption("DVB-T 8 MHz"),
 				new SignalTestOption("DVB-T2 8 MHz"),
+				new SignalTestOption("Analog TV PAL"),
+				new SignalTestOption("Analog TV SECAM"),
 				new SignalTestOption("GSM 200 kHz"),
 				new SignalTestOption("LTE"),
 				new SignalTestOption("Generic QAM")
@@ -691,8 +739,8 @@ public class IQAnalyzerApp {
 
 		JPanel channelSection = createSection("Channel");
 		addLabeled(channelSection, "Zoom", presetCombo);
-		addLabeled(channelSection, "Mode", viewModeCombo);
-		addLabeled(channelSection, "Offset", channelOffsetField);
+		addLabeledPair(channelSection, "Mode", viewModeCombo, "Offset", channelOffsetField);
+		addLabeledPair(channelSection, "DC", dcOffsetEnableCheck, "Shift", dcOffsetCombo);
 		addLabeledPair(channelSection, "BW", channelBandwidthCombo, "Out", outputRateCombo);
 
 		JPanel signalSection = createSection("Signal");
@@ -1093,6 +1141,18 @@ public class IQAnalyzerApp {
 		if (option == null) return;
 		if (option.label.startsWith("LTE")) {
 			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
+			return;
+		}
+		if (option.label.startsWith("Analog TV")) {
+			selectExactRate(8_000_000);
+			if (presetCombo == null) return;
+			for (int i = 0; i < presetCombo.getItemCount(); i++) {
+				PresetOption preset = presetCombo.getItemAt(i);
+				if (preset.label.startsWith("Analog TV")) {
+					presetCombo.setSelectedIndex(i);
+					return;
+				}
+			}
 			return;
 		}
 		if (!option.label.startsWith("GSM") || presetCombo == null) return;
@@ -1599,6 +1659,7 @@ public class IQAnalyzerApp {
 			activeRingBuffer.write(copy, recordingLength);
 			writeIqRecording(copy, recordingLength);
 			audioOutput.acceptIQ(copy, recordingLength);
+			updateDisplayedIqStats(copy, recordingLength);
 			latestSampleRateHz.set(sampleRateHz);
 			latestDecimation.set(1);
 		} else {
@@ -1617,6 +1678,7 @@ public class IQAnalyzerApp {
 				activeRingBuffer.write(copy);
 				writeIqRecording(copy, copy.length);
 				audioOutput.acceptIQ(copy, copy.length);
+				updateDisplayedIqStats(copy, copy.length);
 			}
 			latestSampleRateHz.set(processor.getActualOutputRateHz());
 			latestDecimation.set(processor.getDecimation());
@@ -1624,6 +1686,28 @@ public class IQAnalyzerApp {
 		blocks.incrementAndGet();
 		bytes.addAndGet(length);
 		latestCenterFreqHz.set(centerFreqHz);
+	}
+
+	private void updateDisplayedIqStats(byte[] iqData, int length) {
+		if (iqData == null || length < 2) {
+			latestRmsDbfs = Double.NaN;
+			latestPeakDbfs = Double.NaN;
+			latestPeakSample = 0;
+			return;
+		}
+		long sumPower = 0;
+		int peak = 0;
+		int pairs = length / 2;
+		for (int i = 0; i + 1 < length; i += 2) {
+			int iSample = iqData[i];
+			int qSample = iqData[i + 1];
+			sumPower += iSample * iSample + qSample * qSample;
+			peak = Math.max(peak, Math.max(Math.abs(iSample), Math.abs(qSample)));
+		}
+		double rms = pairs <= 0 ? 0d : Math.sqrt(sumPower / (pairs * 2d));
+		latestRmsDbfs = rms <= 0d ? -120d : 20d * Math.log10(rms / 128d);
+		latestPeakDbfs = peak <= 0 ? -120d : 20d * Math.log10(peak / 128d);
+		latestPeakSample = peak;
 	}
 
 	private void offerSignalTestIQ(long centerFreqHz, int sampleRateHz, byte[] iqData, int length) {
@@ -1828,7 +1912,7 @@ public class IQAnalyzerApp {
 	}
 
 	private long calculateLowIfShiftHz(int rawSampleRateHz) {
-		if (viewModeCombo == null) {
+		if (viewModeCombo == null || dcOffsetEnableCheck == null || !dcOffsetEnableCheck.isSelected()) {
 			return 0;
 		}
 		ViewModeOption viewMode = (ViewModeOption) viewModeCombo.getSelectedItem();
@@ -1856,11 +1940,19 @@ public class IQAnalyzerApp {
 	}
 
 	private long calculateWideLowIfShiftHz(int rawSampleRateHz) {
-		long maxShiftHz = rawSampleRateHz / 2L - WIDE_DC_AVOID_GUARD_HZ;
+		if (dcOffsetCombo == null) {
+			return 0;
+		}
+		DcOffsetOption option = (DcOffsetOption) dcOffsetCombo.getSelectedItem();
+		long shiftHz = option == null ? 0 : option.shiftMHz * 1_000_000L;
+		if (shiftHz <= 0) {
+			return 0;
+		}
+		long maxShiftHz = rawSampleRateHz / 2L;
 		if (maxShiftHz <= 0) {
 			return 0;
 		}
-		long shiftHz = Math.min(WIDE_DC_AVOID_HZ, maxShiftHz);
+		shiftHz = Math.min(shiftHz, maxShiftHz);
 		long requestedCenterHz = centerField == null ? activeCenterFreqHz : parseFrequencyHz(centerField.getText());
 		if (requestedCenterHz - shiftHz <= 0) {
 			shiftHz = -shiftHz;
@@ -1903,6 +1995,14 @@ public class IQAnalyzerApp {
 		return Math.max(1, Math.round(rawSampleRateHz / (float) outputRateHz));
 	}
 
+	private int getSelectedRawSampleRateHz() {
+		if (sampleRateCombo == null) {
+			return DEFAULT_SAMPLE_RATE_HZ;
+		}
+		RateOption rate = (RateOption) sampleRateCombo.getSelectedItem();
+		return rate == null ? DEFAULT_SAMPLE_RATE_HZ : rate.sampleRateHz;
+	}
+
 	private void updateButtons() {
 		if (runStopButton == null) {
 			return;
@@ -1921,11 +2021,20 @@ public class IQAnalyzerApp {
 	}
 
 	private void selectRate(int sampleRateHz) {
+		int bestIndex = -1;
 		for (int i = 0; i < sampleRateCombo.getItemCount(); i++) {
 			if (sampleRateCombo.getItemAt(i).sampleRateHz == sampleRateHz) {
 				sampleRateCombo.setSelectedIndex(i);
 				return;
 			}
+			if (sampleRateCombo.getItemAt(i).sampleRateHz >= sampleRateHz && bestIndex < 0) {
+				bestIndex = i;
+			}
+		}
+		if (bestIndex >= 0) {
+			sampleRateCombo.setSelectedIndex(bestIndex);
+		} else if (sampleRateCombo.getItemCount() > 0) {
+			sampleRateCombo.setSelectedIndex(sampleRateCombo.getItemCount() - 1);
 		}
 	}
 
@@ -1966,11 +2075,65 @@ public class IQAnalyzerApp {
 		}
 		ViewModeOption viewMode = (ViewModeOption) viewModeCombo.getSelectedItem();
 		boolean channelMode = viewMode != null && viewMode.channel;
+		if (channelOffsetField != null) {
+			channelOffsetField.setEnabled(channelMode);
+		}
 		if (channelBandwidthCombo != null) {
 			channelBandwidthCombo.setEnabled(channelMode);
 		}
 		if (outputRateCombo != null) {
 			outputRateCombo.setEnabled(channelMode);
+		}
+		if (dcOffsetEnableCheck != null) {
+			dcOffsetEnableCheck.setEnabled(!externalSource);
+		}
+		refreshDcOffsetOptions();
+	}
+
+	private void refreshDcOffsetOptions() {
+		if (dcOffsetCombo == null || viewModeCombo == null) {
+			return;
+		}
+		updatingDcOffsetControls = true;
+		try {
+			ViewModeOption viewMode = (ViewModeOption) viewModeCombo.getSelectedItem();
+			boolean channelMode = viewMode != null && viewMode.channel;
+			int selectedShiftMHz = 1;
+			DcOffsetOption selected = (DcOffsetOption) dcOffsetCombo.getSelectedItem();
+			if (selected != null) {
+				selectedShiftMHz = selected.shiftMHz;
+			} else {
+				selectedShiftMHz = parsePropertyInt(loadSettingsProperties(), "channel.dcOffsetMHz", 1);
+			}
+			dcOffsetCombo.removeAllItems();
+			if (channelMode) {
+				dcOffsetCombo.addItem(new DcOffsetOption("Auto", 0));
+				dcOffsetCombo.setSelectedIndex(0);
+				dcOffsetCombo.setEnabled(false);
+				return;
+			}
+			int sampleRateHz = getSelectedRawSampleRateHz();
+			int maxShiftMHz = Math.max(0, sampleRateHz / 2 / 1_000_000);
+			for (int shiftMHz = 1; shiftMHz <= maxShiftMHz; shiftMHz++) {
+				dcOffsetCombo.addItem(new DcOffsetOption(shiftMHz + " MHz", shiftMHz));
+			}
+			if (dcOffsetCombo.getItemCount() == 0) {
+				dcOffsetCombo.addItem(new DcOffsetOption("Auto", 0));
+				dcOffsetCombo.setSelectedIndex(0);
+				dcOffsetCombo.setEnabled(false);
+				return;
+			}
+			int safeShiftMHz = Math.max(1, Math.min(selectedShiftMHz, maxShiftMHz));
+			for (int i = 0; i < dcOffsetCombo.getItemCount(); i++) {
+				DcOffsetOption option = dcOffsetCombo.getItemAt(i);
+				if (option.shiftMHz == safeShiftMHz) {
+					dcOffsetCombo.setSelectedIndex(i);
+					break;
+				}
+			}
+			dcOffsetCombo.setEnabled(dcOffsetEnableCheck != null && dcOffsetEnableCheck.isSelected());
+		} finally {
+			updatingDcOffsetControls = false;
 		}
 	}
 
@@ -2222,6 +2385,21 @@ public class IQAnalyzerApp {
 		OutputRateOption(String label, int outputRateHz) {
 			this.label = label;
 			this.outputRateHz = outputRateHz;
+		}
+
+		@Override
+		public String toString() {
+			return label;
+		}
+	}
+
+	private static class DcOffsetOption {
+		final String label;
+		final int shiftMHz;
+
+		DcOffsetOption(String label, int shiftMHz) {
+			this.label = label;
+			this.shiftMHz = shiftMHz;
 		}
 
 		@Override
