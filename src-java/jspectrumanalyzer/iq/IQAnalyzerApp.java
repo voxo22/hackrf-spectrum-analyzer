@@ -583,7 +583,6 @@ public class IQAnalyzerApp {
 				new PresetOption("NFM 12.5 kHz", 12_500, 48_000, 4096),
 				new PresetOption("NFM 25 kHz", 25_000, 96_000, 4096),
 				new PresetOption("WFM 200 kHz", 200_000, 250_000, 8192),
-				new PresetOption("Analog TV 8 MHz", 0, 0, 1048576),
 				new PresetOption("Wide 1 MHz", 1_000_000, 1_000_000, 16384)
 		});
 		presetCombo.addActionListener(e -> applyPreset());
@@ -642,8 +641,6 @@ public class IQAnalyzerApp {
 				new SignalTestOption("DAB"),
 				new SignalTestOption("DVB-T 8 MHz"),
 				new SignalTestOption("DVB-T2 8 MHz"),
-				new SignalTestOption("Analog TV PAL"),
-				new SignalTestOption("Analog TV SECAM"),
 				new SignalTestOption("GSM 200 kHz"),
 				new SignalTestOption("LTE"),
 				new SignalTestOption("Generic QAM")
@@ -1141,18 +1138,6 @@ public class IQAnalyzerApp {
 		if (option == null) return;
 		if (option.label.startsWith("LTE")) {
 			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
-			return;
-		}
-		if (option.label.startsWith("Analog TV")) {
-			selectExactRate(8_000_000);
-			if (presetCombo == null) return;
-			for (int i = 0; i < presetCombo.getItemCount(); i++) {
-				PresetOption preset = presetCombo.getItemAt(i);
-				if (preset.label.startsWith("Analog TV")) {
-					presetCombo.setSelectedIndex(i);
-					return;
-				}
-			}
 			return;
 		}
 		if (!option.label.startsWith("GSM") || presetCombo == null) return;

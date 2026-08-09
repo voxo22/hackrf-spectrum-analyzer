@@ -26,6 +26,11 @@ public class IQTimeDomainPanel extends JPanel {
 	private static final Color COLOR_Q = new Color(0xff5555);
 	private static final Color COLOR_ENVELOPE = new Color(0xeeee00);
 	private static final Color COLOR_DEVIATION = new Color(0xd98cff);
+	private static final Color COLOR_METER_BG = new Color(0x202020);
+	private static final Color COLOR_METER_BORDER = new Color(0x5a5a5a);
+	private static final Color COLOR_METER_RMS = new Color(0xffe24a);
+	private static final Color COLOR_METER_PEAK = new Color(0x22c322);
+	private static final Color COLOR_METER_PEAK_CLIP = new Color(0xff3030);
 	private static final int DEVIATION_SCALE_SAMPLES = 4096;
 	private static final int DEVIATION_MIN_MAGNITUDE = 6;
 	private static final double DEVIATION_MIN_COHERENCE = 0.22d;
@@ -34,6 +39,9 @@ public class IQTimeDomainPanel extends JPanel {
 	private static final int ZOOM_BUTTON_SIZE = 42;
 	private static final int ZOOM_BUTTON_GAP = 8;
 	private static final double BUTTON_ZOOM_FACTOR = 1.5d;
+	private static final double LEVEL_METER_MIN_DBFS = -40d;
+	private static final int LEVEL_METER_WIDTH = 130;
+	private static final int LEVEL_METER_HEIGHT = 10;
 
 	private byte[] snapshot;
 	private IQRingBuffer ringBuffer;
@@ -534,23 +542,22 @@ public class IQTimeDomainPanel extends JPanel {
 		double elapsedSeconds = startedNanos == 0 ? 0 : (System.nanoTime() - startedNanos) / 1_000_000_000d;
 		double mibPerSecond = elapsedSeconds <= 0 ? 0 : bytes / elapsedSeconds / (1024d * 1024d);
 		double visibleMicros = sampleRateHz <= 0 ? 0 : Math.max(1, displaySamples) * 1_000_000d / sampleRateHz;
-
-		g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
+		Font headerFont = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
+		g.setFont(headerFont);
 		g.setColor(new Color(0xdddddd));
-		String peakRmsText = (Double.isNaN(rmsDbfs) || Double.isNaN(peakDbfs))
-				? "--.-/--.- dBFS"
-				: String.format("%.1f/%.1f dBFS", peakDbfs, rmsDbfs);
 		String text = String.format(
-				"Center %.6f MHz   Display %.3f kS/s   Decim %dx   Blocks %d   %.2f MiB/s   View %.2f us   Peak/RMS %s",
-				centerFreqHz / 1_000_000d, sampleRateHz / 1_000d, decimation, blocks, mibPerSecond, visibleMicros,
-				peakRmsText);
-		g.drawString(text, 12, 22);
+				"Center %.6f MHz   Display %.3f kS/s   Decim %dx   Blocks %d   %.2f MiB/s   View %.2f us",
+				centerFreqHz / 1_000_000d, sampleRateHz / 1_000d, decimation, blocks, mibPerSecond, visibleMicros);
+		g.drawString(text, 12, 16);
+		int meterX = 26 + g.getFontMetrics().stringWidth(text);
+		drawLevelMeter(g, meterX, 6, LEVEL_METER_WIDTH, LEVEL_METER_HEIGHT);
+		g.setFont(headerFont);
 
 		drawLegend(g);
 
 		if (read == 0) {
-			g.setColor(new Color(0x888888));
-			g.drawString("No buffered samples", Math.max(12, getWidth() - 150), 34);
+		g.setColor(new Color(0x888888));
+		g.drawString("No buffered samples", Math.max(12, getWidth() - 150), 34);
 		}
 		if (isTriggerThresholdVisible()) {
 			g.setColor(triggerFound ? new Color(0x75ff7a) : new Color(0xff7b7b));
@@ -560,15 +567,50 @@ public class IQTimeDomainPanel extends JPanel {
 			} else {
 				triggerText = triggerFound ? "Triggered" : "Armed";
 			}
-			g.drawString(triggerText, Math.max(12, getWidth() - 110), 34);
+			g.drawString(triggerText, Math.max(12, getWidth() - 110), 16);
 		}
 		if (burstDetectorEnabled) {
 			drawBurstStats(g);
 		}
 	}
 
+	private void drawLevelMeter(Graphics2D g, int x, int y, int width, int height) {
+		g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 10));
+		g.setColor(new Color(0xbbbbbb));
+		g.drawString("PEAK/RMS", x, y + height - 1);
+		int innerX = x + 62;
+		int innerWidth = Math.max(40, width);
+		drawMeterRow(g, innerX, y, innerWidth, height, peakDbfs, rmsDbfs, peakSample >= 126);
+	}
+
+	private void drawMeterRow(Graphics2D g, int x, int y, int width, int height, double peakDbfs, double rmsDbfs,
+			boolean peakClip) {
+		g.setColor(COLOR_METER_BG);
+		g.fillRect(x, y, width, height);
+		int peakFill = meterFillWidth(peakDbfs, width);
+		if (peakFill > 0) {
+			g.setColor(peakClip || (Double.isFinite(peakDbfs) && peakDbfs >= -0.2d) ? COLOR_METER_PEAK_CLIP : COLOR_METER_PEAK);
+			g.fillRect(x, y, peakFill, height);
+		}
+		int rmsFill = meterFillWidth(rmsDbfs, width);
+		if (rmsFill > 0) {
+			g.setColor(COLOR_METER_RMS);
+			g.fillRect(x, y, rmsFill, height);
+		}
+		g.setColor(COLOR_METER_BORDER);
+		g.drawRect(x, y, width, height);
+	}
+
+	private int meterFillWidth(double dbfs, int width) {
+		if (!Double.isFinite(dbfs)) return 0;
+		double clamped = Math.max(LEVEL_METER_MIN_DBFS, Math.min(0d, dbfs));
+		double normalized = (clamped - LEVEL_METER_MIN_DBFS) / -LEVEL_METER_MIN_DBFS;
+		return (int) Math.round(width * normalized);
+	}
+
 	private void drawBurstStats(Graphics2D g) {
 		BurstStats stats = burstStats;
+		g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
 		g.setColor(COLOR_ENVELOPE);
 		if (stats.count <= 0) {
 			g.drawString("Burst: none", 12, 34);
@@ -658,7 +700,8 @@ public class IQTimeDomainPanel extends JPanel {
 
 	private void drawLegend(Graphics2D g) {
 		int x = Math.max(12, getWidth() - 220);
-		int y = 22;
+		int y = 34;
+		g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
 		if (deviationView) {
 			drawLegendItem(g, x, y, COLOR_DEVIATION, "FSK deviation");
 			return;

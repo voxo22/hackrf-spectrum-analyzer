@@ -29,7 +29,6 @@ final class LteCellDetailsFrame extends JFrame {
 	private final DefaultTableModel radio=model("Parameter","Value","Meaning");
 	private final DefaultTableModel reselection=model("Parameter","Value","Meaning");
 	private final DefaultTableModel paging=model("Statistic","Value","Meaning");
-	private final DefaultTableModel load=model("Statistic","Value","Meaning");
 	private final JLabel status=new JLabel("Select an LTE cell in the main window.");
 	private final Timer timer;
 
@@ -48,7 +47,9 @@ final class LteCellDetailsFrame extends JFrame {
 		tabs.addTab("RADIO",panel(radio));
 		tabs.addTab("RESELECTION",panel(reselection));
 		tabs.addTab("PAGING",panel(paging));
-		tabs.addTab("AIR LOAD",panel(load));
+		tabs.setEnabledAt(1,false);
+		tabs.setEnabledAt(2,false);
+		tabs.setEnabledAt(3,false);
 		add(status,BorderLayout.NORTH);add(tabs,BorderLayout.CENTER);
 		setSize(820,500);setMinimumSize(new Dimension(680,380));
 		timer=new Timer(500,e->refresh());timer.start();refresh();
@@ -58,7 +59,7 @@ final class LteCellDetailsFrame extends JFrame {
 
 	private void refresh() {
 		int pci=pciSupplier.getAsInt();LteSignalAnalyzer.Candidate c=pci<0?null:cellSupplier.apply(pci);
-		system.setRowCount(0);radio.setRowCount(0);reselection.setRowCount(0);paging.setRowCount(0);load.setRowCount(0);
+		system.setRowCount(0);radio.setRowCount(0);reselection.setRowCount(0);paging.setRowCount(0);
 		if(c==null){status.setText("Select an LTE cell in the main window.");return;}
 		status.setText("PCI "+pci+" - last CRC-verified MIB and System Information retained during this session");
 		add(system,"Physical Cell ID",Integer.toString(c.pci),"Radio-layer identity; it is not a globally unique BTS identifier.");
@@ -75,6 +76,11 @@ final class LteCellDetailsFrame extends JFrame {
 		add(system,"SI schedule",c.sib1.valid?String.join(" / ",c.sib1.schedules):WAIT,"When the remaining System Information blocks are transmitted.");
 		double recentLoad=loadSupplier.apply(pci);
 		add(system,"Recent downlink air load",Double.isNaN(recentLoad)?WAIT:String.format(Locale.US,"%.1f %%",recentLoad),"Estimated occupied PRBs across the tuned LTE carrier.");
+		add(system,"Latest air-load measurement",c.load.valid?String.format(Locale.US,"%.1f %%  (%d/%d)",c.load.percent,c.load.activePrbSamples,c.load.totalPrbSamples):WAIT,"PRB/subframe samples whose data-symbol energy exceeded the measured guard-band noise.");
+		add(system,"Air-load observed subframes",c.load.valid?Integer.toString(c.load.subframes):WAIT,"Subframes contributing to the latest estimate.");
+		add(system,"Air-load scope","Current downlink carrier only","Does not include other component carriers, uplink traffic, or other LTE bands.");
+		add(system,"Air-load co-channel cells","Combined radio energy","Traffic from multiple PCI on the same frequency cannot be separated by this energy estimate.");
+		add(system,"Air-load interpretation","Radio-resource occupancy estimate","Not the operator's internal BTS CPU/backhaul load and not guaranteed to equal scheduled throughput.");
 
 		LteSignalAnalyzer.SiData retained=siSupplier.apply(pci);
 		LteSignalAnalyzer.SiData s=retained!=null?retained:c.si;
@@ -99,12 +105,6 @@ final class LteCellDetailsFrame extends JFrame {
 		add(paging,"Configured paging cycle",s.valid?"RF"+s.pagingCycle:WAIT,"Broadcast configuration from SIB2.");
 		add(paging,"Observed paging allocations",Long.toString(pagingCountSupplier.applyAsLong(pci)),"CRC-verified P-RNTI scheduling events; UE identifiers are not decoded or stored.");
 		add(paging,"Observation scope","Current program session","Statistics are not written to disk.");
-		add(load,"Recent occupied PRBs",Double.isNaN(recentLoad)?WAIT:String.format(Locale.US,"%.1f %%",recentLoad),"Short smoothed estimate across the tuned LTE carrier.");
-		add(load,"Latest measurement",c.load.valid?String.format(Locale.US,"%.1f %%  (%d/%d)",c.load.percent,c.load.activePrbSamples,c.load.totalPrbSamples):WAIT,"PRB/subframe samples whose data-symbol energy exceeded the measured guard-band noise.");
-		add(load,"Observed subframes",c.load.valid?Integer.toString(c.load.subframes):WAIT,"Subframes contributing to the latest estimate.");
-		add(load,"Scope","Current downlink carrier only","Does not include other component carriers, uplink traffic, or other LTE bands.");
-		add(load,"Co-channel cells","Combined radio energy","Traffic from multiple PCI on the same frequency cannot be separated by this energy estimate.");
-		add(load,"Interpretation","Radio-resource occupancy estimate","Not the operator's internal BTS CPU/backhaul load and not guaranteed to equal scheduled throughput.");
 	}
 
 	private static JPanel panel(DefaultTableModel model){

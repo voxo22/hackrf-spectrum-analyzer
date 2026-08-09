@@ -9,9 +9,13 @@ import java.util.Map;
 /** First LTE acquisition stage: time-domain search for the three LTE PSS sequences. */
 final class LteSignalAnalyzer {
 	private static final int[] ROOT = { 25, 29, 34 };
+	private static final boolean DECODE_FIRST_SI = false;
+	private static final boolean LTE_LOCKED_SEARCH_ONLY = true;
+	private static final int FULL_ACQUISITION_INTERVAL = 20;
 	private static int diagnosticDistance,diagnosticMode,diagnosticPorts,diagnosticFrames,diagnosticQuarter;
 	private static double diagnosticLlr;
 	private static String diagnosticSi="";
+	private static String diagnosticSib1Dci="";
 	private static final double[] diagnosticEvm=new double[3];
 	private static final double[] diagnosticNoise=new double[4];
 	private static final Map<Long,ResampleKernel> RESAMPLE_KERNELS=new LinkedHashMap<Long,ResampleKernel>();
@@ -24,6 +28,7 @@ final class LteSignalAnalyzer {
 
 	Result analyze(byte[] iq, int length, int sampleRateHz) {
 		resetPbchDiagnostics();
+		diagnosticSib1Dci="";
 		int inputSamples=Math.min(length, iq == null ? 0 : iq.length)/2;
 		if (sampleRateHz < 1_100_000 || inputSamples < sampleRateHz/80)
 			return Result.empty("Need at least 1.1 MS/s and 12.5 ms of LTE IQ");
@@ -43,7 +48,7 @@ final class LteSignalAnalyzer {
 		int step=Math.max(2,fft/32),acquisitionSamples=Math.min(samples,rate/50);
 		double best=0; int bestId=-1,bestAt=-1,bestOrientation=1; int peaks=0;
 		List<Candidate> candidates=new ArrayList<Candidate>();
-		boolean fullAcquisition=cellLocks.isEmpty()||analysesSinceFullSearch>=20;
+		boolean fullAcquisition=!LTE_LOCKED_SEARCH_ONLY||cellLocks.isEmpty()||analysesSinceFullSearch>=FULL_ACQUISITION_INTERVAL;
 		boolean[][] search=new boolean[3][2];
 		if(fullAcquisition){for(int id=0;id<3;id++)java.util.Arrays.fill(search[id],true);analysesSinceFullSearch=0;}
 		else for(CellLock lock:cellLocks.values())if(lock.nid2>=0&&lock.nid2<3)search[lock.nid2][lock.orientation<0?1:0]=true;
@@ -89,7 +94,7 @@ final class LteSignalAnalyzer {
 			/* MIB is static apart from SFN. Keep the decoded radio configuration, but
 			 * refresh PBCH while system information is still missing because its SFN
 			 * selects the SIB windows. */
-			boolean needFreshMib=lock==null||!lock.mib.valid||!lock.sib1.valid||!lock.si.valid;
+			boolean needFreshMib=lock==null||!lock.mib.valid||!lock.sib1.valid||(DECODE_FIRST_SI&&!lock.si.valid);
 			MibData fresh=needFreshMib&&mibPssAt>=0
 					?decodeMibFrames(inI,inQ,mibPssAt,rate,fft,candidate.pci,candidate.iqOrientation>0?0:1,candidate.extendedCp,candidate.halfFrameSamples)
 					:MibData.EMPTY;
@@ -98,17 +103,17 @@ final class LteSignalAnalyzer {
 			if(mibPssAt>=0){int cp=candidate.extendedCp?fft/4:Math.max(1,(int)Math.round(fft*10d/128d)),shortCp=candidate.extendedCp?fft/4:Math.max(1,(int)Math.round(fft*9d/128d));int refinedFrame=(int)Math.round((mibPssAt-(6d*fft+cp+6d*shortCp))*sampleScale),refinedPbch=(int)Math.round((mibPssAt+fft+cp)*sampleScale);timed=candidate.withTiming(refinedFrame,refinedPbch);}
 			Candidate decodedCandidate=timed.withMib(mib);
 			if(mib.valid){
+				if(lock==null){lock=new CellLock();cellLocks.put(decodedCandidate.pci,lock);}
 				if(lock!=null)lock.restore(decodedCandidate);
 				decodedCandidate.cfi=decodeCfi(iq,inputSamples,sampleRateHz,decodedCandidate);
 				decodedCandidate.control=controlRegion(decodedCandidate);
 				decodedCandidate.pdcch=extractPdcch(iq,inputSamples,sampleRateHz,decodedCandidate);
-				if(!decodedCandidate.sib1.valid)scanSib1Pdcch(iq,inputSamples,sampleRateHz,decodedCandidate);
-				if(decodedCandidate.sib1.valid&&!decodedCandidate.si.valid)scanFirstSiWindow(iq,inputSamples,sampleRateHz,decodedCandidate);
+				if(!decodedCandidate.sib1.valid)scanSib1Pdcch(iq,inputSamples,sampleRateHz,decodedCandidate,lock);
+				if(DECODE_FIRST_SI&&decodedCandidate.sib1.valid&&!decodedCandidate.si.valid)scanFirstSiWindow(iq,inputSamples,sampleRateHz,decodedCandidate);
 				if(decodedCandidate.si.valid)siCache.put(decodedCandidate.pci,decodedCandidate.si);
 				else if(siCache.containsKey(decodedCandidate.pci))decodedCandidate.si=siCache.get(decodedCandidate.pci);
-				if(decodedCandidate.si.valid)scanPagingPdcch(iq,inputSamples,sampleRateHz,decodedCandidate);
+				if(DECODE_FIRST_SI&&decodedCandidate.si.valid)scanPagingPdcch(iq,inputSamples,sampleRateHz,decodedCandidate);
 				decodedCandidate.load=estimateDownlinkLoad(iq,inputSamples,sampleRateHz,decodedCandidate);
-				if(lock==null){lock=new CellLock();cellLocks.put(decodedCandidate.pci,lock);}
 				lock.capture(decodedCandidate);
 			}
 			candidates.set(index,decodedCandidate);decoded++;
@@ -155,7 +160,6 @@ final class LteSignalAnalyzer {
 		for(int pick=0;pick<limit;pick++){int selected=-1;double selectedScore=0;for(int bin=0;bin<bins;bin++)if(!blocked[bin]&&scores[bin]>selectedScore){selectedScore=scores[bin];selected=bin;}if(selected<0)break;int coarse=locations[selected],bestAt=coarse;double bestScore=0;for(int at=Math.max(0,coarse-step);at<=Math.min(samples-fft,coarse+step);at++){double score=correlation(inI,inQ,reference,orientation,at,fft);if(score>bestScore){bestScore=score;bestAt=at;}}double repeat=repeatScore(inI,inQ,reference,orientation,bestAt,fft,rate),measuredPeriod=measurePssPeriod(inI,inQ,reference,orientation,bestAt,fft,period);double ppm=(measuredPeriod/period-1d)*1e6;if(!Double.isFinite(ppm)||Math.abs(ppm)>100){measuredPeriod=period;ppm=0;}int cp=Math.max(1,(int)Math.round(fft*9d/128d));double omega=cyclicPrefixOffset(inI,inQ,bestAt,fft,cp),cfo=omega*rate/(2d*Math.PI)*(orientation==0?1:-1);result.add(new PssPeak(bestAt,Math.min(bestScore,repeat),measuredPeriod,ppm,cfo));for(int delta=-guard;delta<=guard;delta++)blocked[Math.floorMod(selected+delta,bins)]=true;}
 		Collections.sort(result,(a,b)->Double.compare(b.correlation,a.correlation));return result;
 	}
-
 	private static double measurePssPeriod(double[] inI,double[] inQ,double[][] reference,int orientation,int anchor,int fft,int nominal){double sx=0,sy=0,sxx=0,sxy=0;int count=0;for(int multiple=-8;multiple<=8;multiple++){int expected=anchor+multiple*nominal;if(expected<0||expected+fft>inI.length)continue;int bestAt=expected;double best=0;for(int at=Math.max(0,expected-64);at<=Math.min(inI.length-fft,expected+64);at++){double score=correlation(inI,inQ,reference,orientation,at,fft);if(score>best){best=score;bestAt=at;}}if(best<.10)continue;sx+=multiple;sy+=bestAt;sxx+=multiple*multiple;sxy+=multiple*(double)bestAt;count++;}double den=count*sxx-sx*sx;return count<3||Math.abs(den)<1e-9?nominal:(count*sxy-sx*sy)/den;}
 
 	private static double[][] resample(byte[] iq,int inputSamples,int inputRate,int outputRate){
@@ -199,7 +203,7 @@ final class LteSignalAnalyzer {
 	}
 
 	private static int lteFftSize(int rb){switch(rb){case 6:return 128;case 15:return 256;case 25:return 512;case 50:return 1024;case 75:return 1536;case 100:return 2048;default:return 128;}}
-	private static void scanSib1Pdcch(byte[] iq,int inputSamples,int inputRate,Candidate cell){
+	private static void scanSib1Pdcch(byte[] iq,int inputSamples,int inputRate,Candidate cell,CellLock lock){
 		double frame=inputRate/100d;PdcchData best=PdcchData.EMPTY;CfiData bestCfi=CfiData.EMPTY;int bestOffset=0;List<PdschData> pdschList=new ArrayList<PdschData>();List<DciData> dciList=new ArrayList<DciData>();
 		for(int offset=-2;offset<=12;offset++){
 			int sfn=Math.floorMod(cell.mib.systemFrameNumber+offset,1024);if((sfn&1)!=0)continue;
@@ -225,7 +229,7 @@ final class LteSignalAnalyzer {
 				if(candidate)break;
 			}
 		}
-		cell.sib1Cfi=bestCfi;cell.sib1Pdcch=best;cell.sib1FrameOffset=bestOffset;if(!best.systemDci.format1A)return;if(!cell.sib1Pdsch.valid)cell.sib1Pdsch=extractSib1Pdsch(iq,inputSamples,inputRate,cell,cell.frameStartSample+bestOffset*frame,bestCfi,best.systemDci);cell.sib1Transport=decodeSib1Transports(pdschList,dciList);cell.sib1=decodeSib1(cell.sib1Transport);
+		cell.sib1Cfi=bestCfi;cell.sib1Pdcch=best;cell.sib1FrameOffset=bestOffset;if(!best.systemDci.format1A)return;if(!cell.sib1Pdsch.valid)cell.sib1Pdsch=extractSib1Pdsch(iq,inputSamples,inputRate,cell,cell.frameStartSample+bestOffset*frame,bestCfi,best.systemDci);cell.sib1Transport=decodeSib1Transports(pdschList,dciList);if(!cell.sib1Transport.valid&&lock!=null)cell.sib1Transport=lock.combineSib1(pdschList,dciList);cell.sib1=decodeSib1(cell.sib1Transport);if(cell.sib1.valid&&lock!=null)lock.clearSib1Combiner();
 	}
 	private static void scanFirstSiWindow(byte[] iq,int inputSamples,int inputRate,Candidate cell){
 		double frame=inputRate/100d;PdcchData best=PdcchData.EMPTY;CfiData bestCfi=CfiData.EMPTY;PdschData bestPdsch=PdschData.EMPTY;int bestOffset=0,bestSubframe=-1;
@@ -392,9 +396,57 @@ final class LteSignalAnalyzer {
 	private static Sib1TransportData decodeTurboCandidates(double[][] streams,int tbs,TurboParameters parameters,int transmissions){int k=tbs+24,feedbackMask=6,parityMask=5;int[] bits=turboDecode(streams,k,parameters.f1,parameters.f2,8,feedbackMask,parityMask);return new Sib1TransportData(crc24aValid(bits,tbs),tbs,bits,8,transmissions,feedbackMask,parityMask);}
 	private static int sib1TransportBlockSize(DciData dci){
 		// For SI-RNTI DCI 1A, N_PRB_1A selects TBS-table column 2 or 3; it is not the allocation length.
-		if(dci.mcs==6&&dci.nPrb1a==0)return 176;if(dci.mcs==6&&dci.nPrb1a==1)return 256;return -1;
+		if(dci.nPrb1a==0)return lteTransportBlockSize(dci.mcs,2);
+		if(dci.nPrb1a==1)return lteTransportBlockSize(dci.mcs,3);
+		return lteTransportBlockSize(dci.mcs,dci.rbLength);
 	}
-	private static TurboParameters turboParameters(int k){if(k==200)return new TurboParameters(13,50);if(k==280)return new TurboParameters(103,210);if(k==400)return new TurboParameters(151,40);if(k==608)return new TurboParameters(37,76);if(k==624)return new TurboParameters(41,234);return null;}
+	private static int lteTransportBlockSize(int mcs,int rbLength){
+		int[] dlMcsToTbs={0,1,2,3,4,5,6,7,8,9,9,10,11,12,13,14,15,15,16,17,18,19,20,21,22,23,24,25,26};
+		int[][] table={
+				{16,32,56,88,120,152,176,208,224,256},
+				{24,56,88,144,176,208,224,256,328,344},
+				{32,72,144,176,208,256,296,328,376,424},
+				{40,104,176,208,256,328,392,440,504,568},
+				{56,120,208,256,328,408,488,552,632,696},
+				{72,144,224,328,424,504,600,680,776,872},
+				{328,176,256,392,504,600,712,808,936,1032},
+				{104,224,328,472,584,712,840,968,1096,1224},
+				{120,256,392,536,680,808,968,1096,1256,1384},
+				{136,296,456,616,776,936,1096,1256,1416,1544},
+				{144,328,504,680,872,1032,1224,1384,1544,1736},
+				{176,376,584,776,1000,1192,1384,1608,1800,2024},
+				{208,440,680,904,1128,1352,1608,1800,2024,2280},
+				{224,488,744,1000,1256,1544,1800,2024,2280,2536},
+				{256,552,840,1128,1416,1736,1992,2280,2600,2856},
+				{280,600,904,1224,1544,1800,2152,2472,2728,3112},
+				{328,632,968,1288,1608,1928,2280,2600,2984,3240},
+				{336,696,1064,1416,1800,2152,2536,2856,3240,3624},
+				{376,776,1160,1544,1992,2344,2792,3112,3624,4008},
+				{408,840,1288,1736,2152,2600,2984,3496,3880,4264},
+				{440,904,1384,1864,2344,2792,3240,3752,4136,4584},
+				{488,1000,1480,1992,2472,2984,3496,4008,4584,4968},
+				{520,1064,1608,2152,2664,3240,3752,4392,4968,5352},
+				{552,1128,1736,2280,2856,3496,4008,4776,5352,5992},
+				{584,1192,1800,2408,2984,3624,4264,4968,5736,6200},
+				{616,1256,1864,2536,3112,3752,4392,5160,5992,6712},
+				{712,1480,2216,2984,3752,4392,5160,5992,6968,7480}};
+		if(mcs<0||mcs>=dlMcsToTbs.length||rbLength<1)return -1;
+		int tbsIndex=dlMcsToTbs[mcs];
+		if(tbsIndex<0||tbsIndex>=table.length||rbLength>table[tbsIndex].length)return -1;
+		return table[tbsIndex][rbLength-1];
+	}
+	private static final int[][] TURBO_PARAMETERS = {
+			{56,19,42},{80,11,20},{96,11,24},{112,41,84},{128,15,32},{144,17,108},
+			{168,101,84},{200,13,50},{232,85,58},{248,33,62},{280,103,210},
+			{320,21,120},{352,21,44},{400,151,40},{416,25,52},{464,247,58},
+			{480,89,180},{512,31,64},{528,17,66},{576,65,96},{608,37,76},
+			{624,41,234},{704,155,44},{736,139,92},{768,217,48},{864,17,48},
+			{928,15,58},{992,65,124},{1024,31,64},{1088,71,204},{1152,35,72},
+			{1184,19,74},{1216,39,76},{1280,199,240},{1312,21,82},{1408,43,88},
+			{1504,49,846},{1632,25,102},{1760,27,110},{1824,29,114},
+			{1888,45,354},{2240,209,420}
+	};
+	private static TurboParameters turboParameters(int k){for(int[] row:TURBO_PARAMETERS)if(row[0]==k)return new TurboParameters(row[1],row[2]);return null;}
 	private static double[][] turboDeratematch(double[] received,int k,int rv){
 		int d=k+4,rows=(d+31)/32,kpi=rows*32,ncb=3*kpi;int[] map=turboRateMap(d,received.length,rv);double[][] streams=new double[3][d];for(int q=0;q<received.length;q++){int code=map[q];if(code<0)continue;int stream=code/d,index=code%d;streams[stream][index]+=received[q];}return streams;
 	}
@@ -468,12 +520,18 @@ final class LteSignalAnalyzer {
 		int useful=m/9*9;int[] result=new int[useful];for(int q=0;q<useful;q++)result[q]=ordered[q].symbol*nsc+ordered[q].start;return result;
 	}
 	private static DciData findSystemDci(double[] control,int cceCount){return findCommonDci(control,cceCount,0xffff);}
-	private static DciData findSib1Dci(double[] control,int cceCount,int rb){for(int aggregation:new int[]{8,4}){int candidates=aggregation==8?2:4;for(int m=0;m<candidates;m++){int first=m*aggregation;if(first+aggregation>Math.min(16,cceCount))continue;double[] received=new double[aggregation*72];System.arraycopy(control,first*72,received,0,received.length);for(int payload=16;payload<=32;payload++){int length=payload+16;double[][] streams=convDeratematch(received,length);int[] bits=viterbiTailBiting(streams,new int[]{0155,0117,0127});if(crcValidMasked(bits,payload,0xffff)){DciData dci=new DciData(true,first,aggregation,payload,bits,0);parseDci1A(dci,rb);if(dci.format1A&&!dci.distributed&&dci.mcs==6)return dci;}}}}return DciData.EMPTY;}
+	private static DciData findSib1Dci(double[] control,int cceCount,int rb){
+		int bestDistance=17,bestFirst=-1,bestAggregation=0,bestPayload=0;int[] bestBits=null;String best="";
+		for(int aggregation:new int[]{8,4}){int candidates=aggregation==8?2:4;for(int m=0;m<candidates;m++){int first=m*aggregation;if(first+aggregation>Math.min(16,cceCount))continue;double[] received=new double[aggregation*72];System.arraycopy(control,first*72,received,0,received.length);for(int payload=16;payload<=32;payload++){int length=payload+16;double[][] streams=convDeratematch(received,length);int[] bits=viterbiTailBiting(streams,new int[]{0155,0117,0127});int distance=crcDistanceMasked(bits,payload,0xffff);if(distance<bestDistance){bestDistance=distance;bestFirst=first;bestAggregation=aggregation;bestPayload=payload;bestBits=bits;best="best d"+distance+" L"+aggregation+" CCE"+first+" payload "+payload;}if(distance==0){DciData dci=new DciData(true,first,aggregation,payload,bits,0);parseDci1A(dci,rb);if(dci.format1A&&!dci.distributed&&dci.mcs>=0&&dci.mcs<=28){diagnosticSib1Dci="OK "+best;return dci;}diagnosticSib1Dci="CRC OK but rejected L"+aggregation+" CCE"+first+" payload "+payload+" fmt "+dci.format1A+" dist "+dci.distributed+" mcs "+dci.mcs+" rb "+dci.rbStart+"+"+dci.rbLength;}}}}
+		diagnosticSib1Dci=bestDistance<17?best:"no SI-RNTI candidates";return DciData.EMPTY;
+	}
 	private static DciData findCommonDci(double[] control,int cceCount,int rnti){for(int aggregation:new int[]{8,4}){int candidates=aggregation==8?2:4;for(int m=0;m<candidates;m++){int first=m*aggregation;if(first+aggregation>Math.min(16,cceCount))continue;double[] received=new double[aggregation*72];System.arraycopy(control,first*72,received,0,received.length);for(int payload=16;payload<=32;payload++){int length=payload+16;double[][] streams=convDeratematch(received,length);int[] bits=viterbiTailBiting(streams,new int[]{0155,0117,0127});if(crcValidMasked(bits,payload,rnti)){double reliability=0;for(double value:received)reliability+=Math.abs(value);return new DciData(true,first,aggregation,payload,bits,reliability/received.length);}}}}return DciData.EMPTY;}
 	static DciData decodeSystemDciForTest(double[] control,int cceCount){return findSystemDci(control,cceCount);}
 	private static double[][] convDeratematch(double[] received,int length){int[] map=convRateMap(length,received.length);double[][] streams=new double[3][length];int[][] count=new int[3][length];for(int i=0;i<received.length;i++){int code=map[i],s=code/length,b=code%length;streams[s][b]+=received[i];count[s][b]++;}for(int s=0;s<3;s++)for(int b=0;b<length;b++)if(count[s][b]>1)streams[s][b]/=count[s][b];return streams;}
 	private static int[] convRateMap(int length,int outputLength){int rows=(length+31)/32,dummy=rows*32-length;int[] permutation={1,17,9,25,5,21,13,29,3,19,11,27,7,23,15,31,0,16,8,24,4,20,12,28,2,18,10,26,6,22,14,30};int block=rows*32;int[][] v=new int[3][block];for(int s=0;s<3;s++)for(int r=0;r<rows;r++)for(int c=0;c<32;c++){int input=r*32+permutation[c];v[s][c*rows+r]=input<dummy?-1:s*length+input-dummy;}int[] w=new int[3*block];for(int s=0;s<3;s++)System.arraycopy(v[s],0,w,s*block,block);int[] map=new int[outputLength];for(int k=0,j=0;k<outputLength;){int value=w[j++%w.length];if(value>=0)map[k++]=value;}return map;}
 	private static boolean crcValidMasked(int[] bits,int payload,int mask){int[] work=bits.clone();for(int i=0;i<16;i++)work[payload+i]^=(mask>>>(15-i))&1;for(int i=0;i<payload;i++)if(work[i]!=0){work[i]^=1;work[i+4]^=1;work[i+11]^=1;work[i+16]^=1;}for(int i=payload;i<payload+16;i++)if(work[i]!=0)return false;return true;}
+	static String sib1DciDiagnostics(){return diagnosticSib1Dci;}
+	private static int crcDistanceMasked(int[] bits,int payload,int mask){int[] work=bits.clone();for(int i=0;i<16;i++)work[payload+i]^=(mask>>>(15-i))&1;for(int i=0;i<payload;i++)if(work[i]!=0){work[i]^=1;work[i+4]^=1;work[i+11]^=1;work[i+16]^=1;}int distance=0;for(int i=payload;i<payload+16;i++)if(work[i]!=0)distance++;return distance;}
 	private static void parseDci1A(DciData dci,int rb){int allocationBits=0,values=rb*(rb+1)/2;while((1<<allocationBits)<values)allocationBits++;int needed=1+1+allocationBits+5+3+1+2+2;if(dci.payloadBits<needed||dci.bits[0]!=1)return;int at=1;dci.distributed=dci.bits[at++]!=0;int riv=readBits(dci.bits,at,allocationBits);at+=allocationBits;dci.riv=riv;dci.mcs=readBits(dci.bits,at,5);at+=5;dci.harq=readBits(dci.bits,at,3);at+=3;dci.ndi=dci.bits[at++];dci.rv=readBits(dci.bits,at,2);at+=2;dci.tpc=readBits(dci.bits,at,2);dci.nPrb1a=dci.bits[at+1];int q=riv/rb,r=riv%rb,start=r,length=q+1;if(length>rb-start){length=rb-q+1;start=rb-1-r;}if(start>=0&&length>0&&start+length<=rb){dci.rbStart=start;dci.rbLength=length;dci.format1A=true;}}
 	private static int readBits(int[] bits,int at,int count){int value=0;for(int i=0;i<count;i++)value=(value<<1)|bits[at+i];return value;}
 	private static double[][] targetedBins(byte[] iq,int samples,int inputRate,double usefulStart,int fft,int[] carriers,boolean conjugate,double cfoHz){
@@ -725,8 +783,20 @@ final class LteSignalAnalyzer {
 	private static final class CellLock {
 		MibData mib=MibData.EMPTY;Sib1Data sib1=Sib1Data.EMPTY;SiData si=SiData.EMPTY;
 		int nid2=-1,orientation=1,pagingScanCursor;
+		final List<PdschData> sib1PdschHistory=new ArrayList<PdschData>();
+		final List<DciData> sib1DciHistory=new ArrayList<DciData>();
 		void capture(Candidate cell){nid2=cell.nid2;orientation=cell.iqOrientation;pagingScanCursor=cell.pagingScanCursor;if(cell.mib.valid)mib=cell.mib;if(cell.sib1.valid)sib1=cell.sib1;if(cell.si.valid)si=cell.si;}
 		void restore(Candidate cell){cell.pagingScanCursor=pagingScanCursor;if(sib1.valid)cell.sib1=sib1;if(si.valid)cell.si=si;}
+		Sib1TransportData combineSib1(List<PdschData> pdschList,List<DciData> dciList){
+			for(int q=0;q<pdschList.size()&&q<dciList.size();q++){sib1PdschHistory.add(pdschList.get(q));sib1DciHistory.add(dciList.get(q));}
+			while(sib1PdschHistory.size()>24){sib1PdschHistory.remove(0);sib1DciHistory.remove(0);}
+			int targetTbs=-1;for(int q=dciList.size()-1;q>=0;q--){targetTbs=sib1TransportBlockSize(dciList.get(q));if(targetTbs>=0)break;}
+			if(targetTbs<0||sib1PdschHistory.isEmpty())return Sib1TransportData.EMPTY;
+			List<PdschData> pdsch=new ArrayList<PdschData>();List<DciData> dci=new ArrayList<DciData>();
+			for(int q=0;q<sib1PdschHistory.size();q++)if(sib1TransportBlockSize(sib1DciHistory.get(q))==targetTbs){pdsch.add(sib1PdschHistory.get(q));dci.add(sib1DciHistory.get(q));}
+			return decodeSib1Transports(pdsch,dci);
+		}
+		void clearSib1Combiner(){sib1PdschHistory.clear();sib1DciHistory.clear();}
 	}
 	private static final class PssPeak { final int sample;final double correlation,halfFrameSamples,samplingPpm,cfoHz;PssPeak(int sample,double correlation,double halfFrameSamples,double samplingPpm,double cfoHz){this.sample=sample;this.correlation=correlation;this.halfFrameSamples=halfFrameSamples;this.samplingPpm=samplingPpm;this.cfoHz=cfoHz;} }
 	private static final class SssDetection {

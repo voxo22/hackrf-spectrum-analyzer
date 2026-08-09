@@ -22,7 +22,7 @@ final class LteCellTablePanel extends JPanel {
 	private static final String WAIT="wait\u2026";
 	private static final String[] COLUMNS = {
 			"PCI", "PLMN", "Country", "Operator / network", "TAC", "Cell ID",
-			"Band", "BW", "Ports", "PSS", "SSS", "CFO", "MIB", "SIB1", "SIB2/3"
+			"Band", "BW", "Ports", "Air load", "PSS", "SSS", "CFO", "MIB", "SIB1"
 	};
 	private final DefaultTableModel model = new DefaultTableModel(COLUMNS, 0) {
 		@Override public boolean isCellEditable(int row, int column) { return false; }
@@ -48,7 +48,7 @@ final class LteCellTablePanel extends JPanel {
 		header.setOpaque(true);header.setBackground(new Color(0x202020));header.setForeground(Color.WHITE);
 		header.setBorder(BorderFactory.createMatteBorder(0,0,1,1,new Color(0x555555)));
 		table.getTableHeader().setDefaultRenderer(header);
-		int[] widths={46,90,95,165,55,82,45,65,48,62,62,72,48,48,58};
+		int[] widths={46,90,95,165,55,82,45,65,48,70,62,62,72,48,48};
 		for(int q=0;q<widths.length;q++)table.getColumnModel().getColumn(q).setPreferredWidth(widths[q]);
 		DefaultTableCellRenderer centered=new DefaultTableCellRenderer();
 		centered.setHorizontalAlignment(SwingConstants.CENTER);
@@ -78,10 +78,11 @@ final class LteCellTablePanel extends JPanel {
 					c.sib1.valid?c.sib1.trackingAreaCode:WAIT,c.sib1.valid?c.sib1.cellIdentity:WAIT,
 					c.sib1.valid?c.sib1.frequencyBand:WAIT,c.mib.valid?bandwidth(c.mib.bandwidthRb):WAIT,
 					c.mib.valid?c.mib.antennaPorts:WAIT,
+					c.load.valid?String.format(Locale.US,"%.1f %%",c.load.percent):WAIT,
 					String.format(Locale.US,"%.1f %%",c.correlation*100),
 					String.format(Locale.US,"%.1f %%",c.sssCorrelation*100),
 					String.format(Locale.US,"%+.0f Hz",c.cfoHz),
-					c.mib.valid?"OK":WAIT,c.sib1.valid?"OK":WAIT,c.si.valid?"OK":WAIT
+					c.mib.valid?"OK":WAIT,c.sib1.valid?"OK":WAIT
 			});
 		}
 		if(model.getRowCount()>0){
