@@ -70,13 +70,19 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final boolean dvbtMode;
 	private final boolean dvbt2Mode;
 	private final boolean gsmMode;
+	private final boolean rdsMode;
 	private final boolean lteMode;
 	private final DvbtSignalAnalyzer dvbtAnalyzer = new DvbtSignalAnalyzer();
 	private final Dvbt2SignalAnalyzer dvbt2Analyzer = new Dvbt2SignalAnalyzer();
 	private final GsmSignalAnalyzer gsmAnalyzer = new GsmSignalAnalyzer();
+	private final RdsSignalAnalyzer rdsAnalyzer = new RdsSignalAnalyzer();
 	private final LteSignalAnalyzer lteAnalyzer = new LteSignalAnalyzer();
 	private volatile boolean gsmAnalysisRunning;
 	private volatile GsmSignalAnalyzer.Result latestGsmResult;
+	private volatile boolean rdsAnalysisRunning;
+	private volatile RdsSignalAnalyzer.Result latestRdsResult;
+	private String lastRdsDecodedSummary = "";
+	private long lastRdsChangeMillis;
 	private volatile boolean lteAnalysisRunning;
 	private volatile LteSignalAnalyzer.Result latestLteResult;
 	private final Map<Integer,LteSignalAnalyzer.Candidate> lteCells=new LinkedHashMap<Integer,LteSignalAnalyzer.Candidate>();
@@ -126,9 +132,15 @@ final class SignalQualityTesterFrame extends JFrame {
 		dvbtMode = mode.startsWith("DVB-T ") && !mode.startsWith("DVB-T2");
 		dvbt2Mode = mode.startsWith("DVB-T2");
 		gsmMode = mode.startsWith("GSM");
+		rdsMode = mode.startsWith("FM RDS");
 		lteMode = mode.startsWith("LTE");
 		if (gsmMode) {
 			latestGsmResult = GsmSignalAnalyzer.Result.empty("collecting GSM channel IQ");
+			prepareParameterLabel(gsmParameterLabel);
+			gsmParameterLabel.setFont(gsmParameterLabel.getFont().deriveFont(12f));
+		}
+		if (rdsMode) {
+			latestRdsResult = RdsSignalAnalyzer.Result.empty("collecting FM IQ");
 			prepareParameterLabel(gsmParameterLabel);
 			gsmParameterLabel.setFont(gsmParameterLabel.getFont().deriveFont(12f));
 		}
@@ -146,7 +158,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			prepareParameterLabel(dvbt2PostLabel);
 		}
 
-		titleLabel = new JLabel(mode + (dabMode || dvbtMode || dvbt2Mode || gsmMode || lteMode ? " signal quality" : " raw IQ monitor"));
+		titleLabel = new JLabel(mode + (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode ? " signal quality" : " raw IQ monitor"));
 		titleLabel.setForeground(TEXT_FG);
 		titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 14f));
 		statsLabel.setForeground(MUTED_FG);
@@ -177,10 +189,10 @@ final class SignalQualityTesterFrame extends JFrame {
 		JPanel footer = new JPanel(new BorderLayout(8, 4));
 		footer.setBackground(PANEL_BG);
 		footer.setBorder(new EmptyBorder(6, 10, 8, 10));
-		JPanel qualityRows = new JPanel(new GridLayout(dvbt2Mode ? 3 : dabMode || dvbtMode || gsmMode || lteMode ? 2 : 1, 1, 0, 2));
+		JPanel qualityRows = new JPanel(new GridLayout(dvbt2Mode ? 3 : dabMode || dvbtMode || gsmMode || rdsMode || lteMode ? 2 : 1, 1, 0, 2));
 		qualityRows.setBackground(PANEL_BG);
 		qualityRows.add(qualityPanel);
-		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || lteMode) {
+		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode) {
 			qualityRows.add(dabLockPanel);
 		}
 		if (dvbt2Mode) qualityRows.add(dvbt2CrcPanel);
@@ -197,7 +209,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (dvbt2Mode) {
 			plots.add(createDvbt2Column(dvbt2P2Panel, dvbt2PreLabel));
 			plots.add(createDvbt2Column(dabConstellationPanel, dvbt2PostLabel));
-		} else if (gsmMode) {
+		} else if (gsmMode || rdsMode) {
 			gsmParameterLabel.setBorder(BorderFactory.createCompoundBorder(
 					BorderFactory.createLineBorder(Color.DARK_GRAY), new EmptyBorder(14, 18, 14, 18)));
 			plots.add(gsmParameterLabel);
@@ -217,7 +229,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		add(header, BorderLayout.NORTH);
 		add(plots, BorderLayout.CENTER);
 		add(footer, BorderLayout.SOUTH);
-		setSize(dvbt2Mode ? 1100 : 760, dvbt2Mode ? 650 : lteMode ? 570 : gsmMode ? 445 : 420);
+		setSize(dvbt2Mode ? 1100 : 760, dvbt2Mode ? 650 : lteMode ? 570 : gsmMode || rdsMode ? 445 : 420);
 
 		repaintTimer = new Timer(100, e -> updateView());
 		repaintTimer.start();
@@ -297,12 +309,12 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (dvbt2Mode) offerDvbt2SignallingCapture(sampleRateHz, iqData, evenLength);
 		byte[] dabAnalysisData = iqData;
 		int dabAnalysisLength = evenLength;
-		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || lteMode) {
+		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode) {
 			dabAnalysisLength = appendDabHistory(iqData, evenLength);
 			dabAnalysisData = dabHistory;
 		}
 		long now = System.nanoTime();
-		long interval = gsmMode || lteMode ? GSM_MIN_ANALYSIS_INTERVAL_NANOS
+		long interval = gsmMode || rdsMode || lteMode ? GSM_MIN_ANALYSIS_INTERVAL_NANOS
 				: dabMode || dvbtMode || dvbt2Mode ? DAB_MIN_ANALYSIS_INTERVAL_NANOS : MIN_ANALYSIS_INTERVAL_NANOS;
 		if (now - lastAnalysisNanos < interval) {
 			return;
@@ -357,10 +369,12 @@ final class SignalQualityTesterFrame extends JFrame {
 		Dvbt2SignalAnalyzer.Result dvbt2Result = dvbt2Mode ? latestDvbt2Result : null;
 		if (gsmMode) scheduleGsmAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
 		GsmSignalAnalyzer.Result gsmResult = gsmMode ? latestGsmResult : null;
+		if (rdsMode) scheduleRdsAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
+		RdsSignalAnalyzer.Result rdsResult = rdsMode ? latestRdsResult : null;
 		if (lteMode) scheduleLteAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
 		LteSignalAnalyzer.Result lteResult = lteMode ? latestLteResult : null;
 		snapshot = new Snapshot(centerFreqHz, sampleRateHz, samples, sampleCount, dbfs, peak, dcPercent,
-				clippingPercent, stabilityDb, quality, spectrum, dabMetrics, dvbtResult, dvbt2Result, gsmResult, lteResult,
+				clippingPercent, stabilityDb, quality, spectrum, dabMetrics, dvbtResult, dvbt2Result, gsmResult, rdsResult, lteResult,
 				System.currentTimeMillis());
 	}
 
@@ -395,6 +409,24 @@ final class SignalQualityTesterFrame extends JFrame {
 				gsmAnalysisRunning = false;
 			}
 		}, "GSM FCCH analyzer");
+		worker.setDaemon(true);
+		worker.setPriority(Thread.MIN_PRIORITY);
+		worker.start();
+	}
+
+	private synchronized void scheduleRdsAnalysis(byte[] iqData, int length, int sampleRateHz) {
+		if (rdsAnalysisRunning || length < 2) return;
+		int wanted = Math.min(length & ~1, Math.max(131_072, sampleRateHz * 4));
+		final byte[] capture = new byte[wanted];
+		System.arraycopy(iqData, (length - wanted) & ~1, capture, 0, wanted);
+		rdsAnalysisRunning = true;
+		Thread worker = new Thread(() -> {
+			try {
+				latestRdsResult = rdsAnalyzer.analyze(capture, capture.length, sampleRateHz);
+			} finally {
+				rdsAnalysisRunning = false;
+			}
+		}, "FM RDS analyzer");
 		worker.setDaemon(true);
 		worker.setPriority(Thread.MIN_PRIORITY);
 		worker.start();
@@ -1129,6 +1161,7 @@ final class SignalQualityTesterFrame extends JFrame {
 				dvbt2PostLabel.setText(parameterTable("L1-POST / PLP", "", "Waiting for L1-post lock..."));
 			}
 			if (gsmMode) gsmParameterLabel.setText(parameterTable("GSM DOWNLINK", "", "Waiting for GSM IQ..."));
+			if (rdsMode) gsmParameterLabel.setText(parameterTable("FM RDS", "", "Waiting for FM IQ..."));
 			if (lteMode) lteParameterLabel.setText(parameterTable("LTE CELL SEARCH", "", "Waiting for LTE IQ..."));
 			return;
 		}
@@ -1193,6 +1226,19 @@ final class SignalQualityTesterFrame extends JFrame {
 					gsm.candidates, active.centerFreqHz / 1_000_000d,
 					active.sampleRateHz / 1000d);
 			gsmParameterLabel.setText(parameterTable("GSM DOWNLINK ACQUISITION", details, gsm.state));
+		} else if (rdsMode && active.rdsResult != null) {
+			RdsSignalAnalyzer.Result rds = active.rdsResult;
+			detailLabel.setText(String.format(Locale.US,
+					"%s   quality %.0f%%   pilot %.1f dB   RDS 57 kHz %.1f dB   blocks %d/%d   groups %d",
+					rds.state, rds.quality, rds.pilotSnrDb, rds.rdsSnrDb,
+					rds.windowBlocks, rds.possibleBlocks, rds.windowGroups));
+			String decoded = rds.pi + "|" + rds.programService + "|" + rds.pty + "|" + rds.radioText + "|"
+					+ rds.clockText + "|" + rds.tp + "|" + rds.ta;
+			if (!decoded.equals(lastRdsDecodedSummary)) {
+				lastRdsDecodedSummary = decoded;
+				lastRdsChangeMillis = System.currentTimeMillis();
+			}
+			gsmParameterLabel.setText(rdsParameterTable(rds, active));
 		} else if (lteMode && active.lteResult != null) {
 			LteSignalAnalyzer.Result lte=active.lteResult;
 			lteConstellationPanel.setResult(lte);
@@ -1263,6 +1309,93 @@ final class SignalQualityTesterFrame extends JFrame {
 			html.append("<tr><td colspan='5'><i>").append(waiting).append("</i></td></tr>");
 		}
 		return html.append("</table></html>").toString();
+	}
+
+	private String rdsParameterTable(RdsSignalAnalyzer.Result rds, Snapshot active) {
+		String ps = rds.programService.length() == 0 ? "--" : rds.programService;
+		String rt = rds.radioText.length() == 0 ? "--" : rds.radioText;
+		String pty = rds.pty >= 0 ? rds.ptyName : "--";
+		String clock = rds.clockText.length() == 0 ? "--" : rds.clockText;
+		StringBuilder html = new StringBuilder(1200);
+		long ageMillis = lastRdsChangeMillis == 0L ? -1L : Math.max(0L, System.currentTimeMillis() - lastRdsChangeMillis);
+		html.append("<html><b>FM RDS DECODER</b><br>")
+				.append("<table style='table-layout:fixed' border='1' bordercolor='#e8eef5' ")
+				.append("cellspacing='0' cellpadding='1' width='690'>");
+		appendRdsPairRow(html, "Station name", ps, "Programme type", pty);
+		appendRdsPairRow(html, "Country", rds.countryName, "Coverage", rds.coverageAreaName);
+		appendRdsPairRow(html, "Audio mode", rds.audioMode, "Programme mode", rds.programmeMode);
+		appendRdsPairRow(html, "Traffic programme", rds.tp ? "Available" : "No",
+				"Traffic announcement", rds.ta ? "Active" : "No");
+		appendRdsPairRow(html, "Programme item", rds.programmeItem.length() == 0 ? "--" : rds.programmeItem,
+				"Last change", ageMillis < 0L ? "--" : String.format(Locale.US, "%d s ago",
+						ageMillis / 1000L));
+		appendRdsPairRow(html, "RT+", rds.rtPlusStatus, "TMC", rds.tmcStatus);
+		appendRdsPairRow(html, "EON", rds.eonStatus, "Other data",
+				otherRdsDataStatus(rds.tdcStatus, rds.inHouseStatus, rds.odaStatus));
+		appendRdsPairRow(html, "Clock", clock, "Corrected bits",
+				String.format(Locale.US, "%d (%.2f / block)", rds.windowCorrectedBits,
+						rds.windowBlocks <= 0 ? 0d : rds.windowCorrectedBits / (double) rds.windowBlocks));
+		appendRdsWideRow(html, "Alternative frequencies", rds.alternativeFrequencies);
+		appendRdsWideRow(html, "RadioText", rt);
+		return html.append("</table></html>").toString();
+	}
+
+	private static String otherRdsDataStatus(String tdc, String inHouse, String oda) {
+		StringBuilder out = new StringBuilder();
+		appendPresent(out, "TDC", tdc);
+		appendPresent(out, "IH", inHouse);
+		appendPresent(out, "ODA", oda);
+		return out.length() == 0 ? "--" : out.toString();
+	}
+
+	private static void appendPresent(StringBuilder out, String label, String status) {
+		if (status == null || status.length() == 0 || "--".equals(status)) return;
+		if (out.length() > 0) out.append(", ");
+		out.append(label);
+	}
+
+	private static void appendRdsPairRow(StringBuilder html, String leftKey, String leftValue,
+			String rightKey, String rightValue) {
+		html.append("<tr>");
+		appendRdsLabelCell(html, leftKey);
+		appendRdsValueCell(html, leftValue, "195");
+		appendRdsLabelCell(html, rightKey);
+		appendRdsValueCell(html, rightValue, "195");
+		html.append("</tr>");
+	}
+
+	private static void appendRdsWideRow(StringBuilder html, String key, String value) {
+		html.append("<tr>");
+		appendRdsLabelCell(html, key);
+		html.append("<td colspan='3'><font color='#ffffff'><b>").append(escapeHtml(value))
+				.append("</b></font></td></tr>");
+	}
+
+	private static void appendRdsLabelCell(StringBuilder html, String value) {
+		html.append("<td width='150' nowrap bgcolor='#41596c'><font color='#ffffff'>")
+				.append(escapeHtml(value)).append("</font></td>");
+	}
+
+	private static void appendRdsValueCell(StringBuilder html, String value, String width) {
+		html.append("<td width='").append(width).append("'><font color='#ffffff'><b>")
+				.append(escapeHtml(value)).append("</b></font></td>");
+	}
+
+	private static String escapeHtml(String value) {
+		if (value == null || value.length() == 0) return "--";
+		StringBuilder out = new StringBuilder(value.length());
+		for (int i = 0; i < value.length(); i++) {
+			char c = value.charAt(i);
+			switch (c) {
+			case '&': out.append("&amp;"); break;
+			case '<': out.append("&lt;"); break;
+			case '>': out.append("&gt;"); break;
+			case '"': out.append("&quot;"); break;
+			case '\'': out.append("&#39;"); break;
+			default: out.append(c); break;
+			}
+		}
+		return out.toString();
 	}
 
 	private static final class Average {
@@ -1389,6 +1522,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		final DvbtSignalAnalyzer.Result dvbtResult;
 		final Dvbt2SignalAnalyzer.Result dvbt2Result;
 		final GsmSignalAnalyzer.Result gsmResult;
+		final RdsSignalAnalyzer.Result rdsResult;
 		final LteSignalAnalyzer.Result lteResult;
 		final long createdMillis;
 
@@ -1396,7 +1530,7 @@ final class SignalQualityTesterFrame extends JFrame {
 				double dcPercent, double clippingPercent, double stabilityDb, double quality, float[] spectrumDb,
 				DabMetrics dabMetrics, DvbtSignalAnalyzer.Result dvbtResult,
 				Dvbt2SignalAnalyzer.Result dvbt2Result, GsmSignalAnalyzer.Result gsmResult,
-				LteSignalAnalyzer.Result lteResult, long createdMillis) {
+				RdsSignalAnalyzer.Result rdsResult, LteSignalAnalyzer.Result lteResult, long createdMillis) {
 			this.centerFreqHz = centerFreqHz;
 			this.sampleRateHz = sampleRateHz;
 			this.samples = samples;
@@ -1412,6 +1546,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			this.dvbtResult = dvbtResult;
 			this.dvbt2Result = dvbt2Result;
 			this.gsmResult = gsmResult;
+			this.rdsResult = rdsResult;
 			this.lteResult = lteResult;
 			this.createdMillis = createdMillis;
 		}
@@ -1501,7 +1636,8 @@ final class SignalQualityTesterFrame extends JFrame {
 				Color color = quality >= 70 ? QUALITY_GOOD : quality >= 40 ? QUALITY_WARN : QUALITY_BAD;
 				g.setColor(TEXT_FG);
 				String label = active != null && (active.dabMetrics != null || active.dvbtResult != null
-						|| active.dvbt2Result != null || active.gsmResult != null || active.lteResult != null) ? "INPUT" : "RAW";
+						|| active.dvbt2Result != null || active.gsmResult != null || active.rdsResult != null
+						|| active.lteResult != null) ? "INPUT" : "RAW";
 				g.drawString(active == null ? label + " --%" : String.format(Locale.US, "%s %.0f%%", label, quality), 4, 17);
 				g.setColor(GRID);
 				g.fillRect(barX, barY, barW, barH);
@@ -1545,15 +1681,18 @@ final class SignalQualityTesterFrame extends JFrame {
 				double lock = active != null && active.dvbtResult != null
 						? active.dvbtResult.quality : active != null && active.dvbt2Result != null
 								? active.dvbt2Result.quality : active != null && active.gsmResult != null
-										? active.gsmResult.quality : active != null && active.lteResult != null
+										? active.gsmResult.quality : active != null && active.rdsResult != null
+												? rdsLockQuality(active.rdsResult) : active != null && active.lteResult != null
 												? lteQpskQuality(active.lteResult) : constellation == null ? 0 : constellation.lockScore;
 				Color color = lock >= 55 ? QUALITY_GOOD : lock >= 35 ? QUALITY_WARN : QUALITY_BAD;
 				g.setColor(TEXT_FG);
 				String label = active != null && active.dvbt2Result != null ? "DEMOD"
 						: active != null && active.gsmResult != null ? "FCCH"
+						: active != null && active.rdsResult != null ? "RDS"
 						: active != null && active.lteResult != null ? "QPSK" : "QUALITY";
 				g.drawString(active == null || (constellation == null && active.dvbtResult == null
-						&& active.dvbt2Result == null && active.gsmResult == null && active.lteResult == null) ? label + " --%"
+						&& active.dvbt2Result == null && active.gsmResult == null && active.rdsResult == null
+						&& active.lteResult == null) ? label + " --%"
 						: String.format(Locale.US, "%s %.0f%%", label, lock), 4, 16);
 				g.setColor(GRID);
 				g.fillRect(barX, barY, barW, barH);
@@ -1576,6 +1715,10 @@ final class SignalQualityTesterFrame extends JFrame {
 				if(cell.sib1Pdsch.valid&&Double.isFinite(cell.sib1Pdsch.qpskEvm)){evm=cell.sib1Pdsch.qpskEvm;break;}
 			if(!Double.isFinite(evm))return 0;
 			return Math.max(0,Math.min(100,100*(1-evm)));
+		}
+
+		private static double rdsLockQuality(RdsSignalAnalyzer.Result result) {
+			return result == null ? 0d : result.quality;
 		}
 	}
 

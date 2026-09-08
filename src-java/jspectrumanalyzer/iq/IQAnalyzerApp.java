@@ -583,6 +583,7 @@ public class IQAnalyzerApp {
 				new PresetOption("NFM 12.5 kHz", 12_500, 48_000, 4096),
 				new PresetOption("NFM 25 kHz", 25_000, 96_000, 4096),
 				new PresetOption("WFM 200 kHz", 200_000, 250_000, 8192),
+				new PresetOption("FM RDS 250 kHz", 250_000, 500_000, 8192),
 				new PresetOption("Wide 1 MHz", 1_000_000, 1_000_000, 16384)
 		});
 		presetCombo.addActionListener(e -> applyPreset());
@@ -643,6 +644,7 @@ public class IQAnalyzerApp {
 				new SignalTestOption("DVB-T2 8 MHz"),
 				new SignalTestOption("GSM 200 kHz"),
 				new SignalTestOption("LTE"),
+				new SignalTestOption("FM RDS"),
 				new SignalTestOption("Generic QAM")
 		});
 		signalTestCombo.addActionListener(e -> applySignalTestPreset());
@@ -1140,11 +1142,16 @@ public class IQAnalyzerApp {
 			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
 			return;
 		}
-		if (!option.label.startsWith("GSM") || presetCombo == null) return;
+		if ((!option.label.startsWith("GSM") && !option.label.startsWith("FM RDS")) || presetCombo == null) return;
 		for (int i = 0; i < presetCombo.getItemCount(); i++) {
 			PresetOption preset = presetCombo.getItemAt(i);
-			if (preset.label.startsWith("GSM")) {
+			if (option.label.startsWith("GSM") && preset.label.startsWith("GSM")) {
 				presetCombo.setSelectedIndex(i);
+				return;
+			}
+			if (option.label.startsWith("FM RDS") && preset.label.startsWith("FM RDS")) {
+				presetCombo.setSelectedIndex(i);
+				if (audioModeCombo != null) audioModeCombo.setSelectedItem(IQAudioOutput.Mode.FM);
 				return;
 			}
 		}
