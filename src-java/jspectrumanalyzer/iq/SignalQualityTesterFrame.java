@@ -60,7 +60,9 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final JLabel dvbt2PostLabel = new JLabel();
 	private final JLabel gsmParameterLabel = new JLabel();
 	private final JLabel lteParameterLabel = new JLabel();
+	private final JLabel nrParameterLabel = new JLabel();
 	private final LteCellTablePanel lteCellTablePanel = new LteCellTablePanel();
+	private final NrCellTablePanel nrCellTablePanel = new NrCellTablePanel();
 	private final LteConstellationPanel lteConstellationPanel = new LteConstellationPanel();
 	private final JLabel titleLabel;
 	private final JLabel statsLabel = new JLabel("Waiting for IQ samples...");
@@ -72,11 +74,13 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final boolean gsmMode;
 	private final boolean rdsMode;
 	private final boolean lteMode;
+	private final boolean nrMode;
 	private final DvbtSignalAnalyzer dvbtAnalyzer = new DvbtSignalAnalyzer();
 	private final Dvbt2SignalAnalyzer dvbt2Analyzer = new Dvbt2SignalAnalyzer();
 	private final GsmSignalAnalyzer gsmAnalyzer = new GsmSignalAnalyzer();
 	private final RdsSignalAnalyzer rdsAnalyzer = new RdsSignalAnalyzer();
 	private final LteSignalAnalyzer lteAnalyzer = new LteSignalAnalyzer();
+	private final NrSignalAnalyzer nrAnalyzer = new NrSignalAnalyzer();
 	private volatile boolean gsmAnalysisRunning;
 	private volatile GsmSignalAnalyzer.Result latestGsmResult;
 	private volatile boolean rdsAnalysisRunning;
@@ -85,7 +89,11 @@ final class SignalQualityTesterFrame extends JFrame {
 	private long lastRdsChangeMillis;
 	private volatile boolean lteAnalysisRunning;
 	private volatile LteSignalAnalyzer.Result latestLteResult;
+	private volatile boolean nrAnalysisRunning;
+	private volatile NrSignalAnalyzer.Result latestNrResult;
 	private final Map<Integer,LteSignalAnalyzer.Candidate> lteCells=new LinkedHashMap<Integer,LteSignalAnalyzer.Candidate>();
+	private final Map<Integer,NrSignalAnalyzer.Result> nrCells=new LinkedHashMap<Integer,NrSignalAnalyzer.Result>();
+	private final Map<Integer,Double> nrLoadPercent=new LinkedHashMap<Integer,Double>();
 	private final Map<Integer,LteSignalAnalyzer.SiData> lteSystemInformation=new LinkedHashMap<Integer,LteSignalAnalyzer.SiData>();
 	private final Map<Integer,Long> ltePagingCounts=new LinkedHashMap<Integer,Long>();
 	private final Map<String,Long> ltePagingSeen=new LinkedHashMap<String,Long>();
@@ -93,6 +101,7 @@ final class SignalQualityTesterFrame extends JFrame {
 	private GsmPagingStatsFrame gsmPagingFrame;
 	private GsmBcchDetailsFrame gsmBcchFrame;
 	private LteCellDetailsFrame lteCellDetailsFrame;
+	private NrCellDetailsFrame nrCellDetailsFrame;
 	private volatile boolean dvbt2AnalysisRunning;
 	private volatile Dvbt2SignalAnalyzer.Result latestDvbt2Result;
 	private static final int DVBT2_SIGNALLING_CAPTURE_BYTES = 6_000_000;
@@ -134,6 +143,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		gsmMode = mode.startsWith("GSM");
 		rdsMode = mode.startsWith("FM RDS");
 		lteMode = mode.startsWith("LTE");
+		nrMode = mode.startsWith("5G NR") || mode.startsWith("NR");
 		if (gsmMode) {
 			latestGsmResult = GsmSignalAnalyzer.Result.empty("collecting GSM channel IQ");
 			prepareParameterLabel(gsmParameterLabel);
@@ -149,6 +159,11 @@ final class SignalQualityTesterFrame extends JFrame {
 			prepareParameterLabel(lteParameterLabel);
 			lteParameterLabel.setFont(lteParameterLabel.getFont().deriveFont(12f));
 		}
+		if (nrMode) {
+			latestNrResult = NrSignalAnalyzer.Result.empty("collecting 5G NR IQ");
+			prepareParameterLabel(nrParameterLabel);
+			nrParameterLabel.setFont(nrParameterLabel.getFont().deriveFont(12f));
+		}
 		if (dvbtMode) dvbtTpsCapture = new byte[DVBT_TPS_CAPTURE_BYTES];
 		if (dvbt2Mode) {
 			latestDvbt2Result = Dvbt2SignalAnalyzer.Result.empty("collecting DVB-T2 IQ");
@@ -158,7 +173,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			prepareParameterLabel(dvbt2PostLabel);
 		}
 
-		titleLabel = new JLabel(mode + (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode ? " signal quality" : " raw IQ monitor"));
+		titleLabel = new JLabel(mode + (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode ? " signal quality" : " raw IQ monitor"));
 		titleLabel.setForeground(TEXT_FG);
 		titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 14f));
 		statsLabel.setForeground(MUTED_FG);
@@ -184,15 +199,22 @@ final class SignalQualityTesterFrame extends JFrame {
 			JButton detailsButton=new JButton("CELL DETAILS");
 			detailsButton.addActionListener(e -> openLteCellDetails());
 			lteButtons.add(detailsButton);header.add(lteButtons,BorderLayout.EAST);
+		} else if (nrMode) {
+			JPanel nrButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+			nrButtons.setOpaque(false);
+			JButton detailsButton = new JButton("CELL INFO");
+			detailsButton.addActionListener(e -> openNrCellDetails());
+			nrButtons.add(detailsButton);
+			header.add(nrButtons, BorderLayout.EAST);
 		}
 
 		JPanel footer = new JPanel(new BorderLayout(8, 4));
 		footer.setBackground(PANEL_BG);
 		footer.setBorder(new EmptyBorder(6, 10, 8, 10));
-		JPanel qualityRows = new JPanel(new GridLayout(dvbt2Mode ? 3 : dabMode || dvbtMode || gsmMode || rdsMode || lteMode ? 2 : 1, 1, 0, 2));
+		JPanel qualityRows = new JPanel(new GridLayout(dvbt2Mode ? 3 : dabMode || dvbtMode || gsmMode || rdsMode || lteMode || nrMode ? 2 : 1, 1, 0, 2));
 		qualityRows.setBackground(PANEL_BG);
 		qualityRows.add(qualityPanel);
-		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode) {
+		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode) {
 			qualityRows.add(dabLockPanel);
 		}
 		if (dvbt2Mode) qualityRows.add(dvbt2CrcPanel);
@@ -221,6 +243,14 @@ final class SignalQualityTesterFrame extends JFrame {
 			lteColumn.add(lteParameterLabel,BorderLayout.NORTH);
 			lteColumn.add(lteCellTablePanel,BorderLayout.CENTER);
 			plots.add(lteColumn);
+		} else if (nrMode) {
+			nrParameterLabel.setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createLineBorder(Color.DARK_GRAY), new EmptyBorder(10, 18, 10, 18)));
+			JPanel nrColumn = new JPanel(new GridLayout(2, 1, 0, 6));
+			nrColumn.setBackground(PANEL_BG);
+			nrColumn.add(nrParameterLabel);
+			nrColumn.add(nrCellTablePanel);
+			plots.add(nrColumn);
 		} else {
 			plots.add(scatterPanel);
 			plots.add(dabMode || dvbtMode ? dabConstellationPanel : spectrumPanel);
@@ -229,7 +259,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		add(header, BorderLayout.NORTH);
 		add(plots, BorderLayout.CENTER);
 		add(footer, BorderLayout.SOUTH);
-		setSize(dvbt2Mode ? 1100 : 760, dvbt2Mode ? 650 : lteMode ? 570 : gsmMode || rdsMode ? 445 : 420);
+		setSize(dvbt2Mode ? 1100 : 760, dvbt2Mode ? 650 : lteMode ? 570 : nrMode ? 500 : gsmMode || rdsMode ? 445 : 420);
 
 		repaintTimer = new Timer(100, e -> updateView());
 		repaintTimer.start();
@@ -240,6 +270,7 @@ final class SignalQualityTesterFrame extends JFrame {
 				if (gsmPagingFrame != null) gsmPagingFrame.dispose();
 				if (gsmBcchFrame != null) gsmBcchFrame.dispose();
 				if (lteCellDetailsFrame != null) lteCellDetailsFrame.dispose();
+				if (nrCellDetailsFrame != null) nrCellDetailsFrame.dispose();
 				if (closedCallback != null) {
 					closedCallback.run();
 				}
@@ -258,6 +289,18 @@ final class SignalQualityTesterFrame extends JFrame {
 		lteCellDetailsFrame.setLocationRelativeTo(this);
 		lteCellDetailsFrame.setVisible(true);
 		lteCellDetailsFrame.toFront();
+	}
+
+	private void openNrCellDetails() {
+		if (nrCellDetailsFrame == null || !nrCellDetailsFrame.isDisplayable())
+			nrCellDetailsFrame = new NrCellDetailsFrame(
+					() -> nrCellTablePanel.selectedPci(),
+					pci -> nrCells.get(pci),
+					pci -> nrLoadPercent.containsKey(pci) ? nrLoadPercent.get(pci) : Double.NaN,
+					() -> snapshot == null ? -1L : snapshot.centerFreqHz);
+		nrCellDetailsFrame.setLocationRelativeTo(this);
+		nrCellDetailsFrame.setVisible(true);
+		nrCellDetailsFrame.toFront();
 	}
 
 	private void openGsmPagingStats() {
@@ -309,12 +352,12 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (dvbt2Mode) offerDvbt2SignallingCapture(sampleRateHz, iqData, evenLength);
 		byte[] dabAnalysisData = iqData;
 		int dabAnalysisLength = evenLength;
-		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode) {
+		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode) {
 			dabAnalysisLength = appendDabHistory(iqData, evenLength);
 			dabAnalysisData = dabHistory;
 		}
 		long now = System.nanoTime();
-		long interval = gsmMode || rdsMode || lteMode ? GSM_MIN_ANALYSIS_INTERVAL_NANOS
+		long interval = gsmMode || rdsMode || lteMode || nrMode ? GSM_MIN_ANALYSIS_INTERVAL_NANOS
 				: dabMode || dvbtMode || dvbt2Mode ? DAB_MIN_ANALYSIS_INTERVAL_NANOS : MIN_ANALYSIS_INTERVAL_NANOS;
 		if (now - lastAnalysisNanos < interval) {
 			return;
@@ -356,7 +399,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		double dcPercent = Math.sqrt(meanI * meanI + meanQ * meanQ) / 128d * 100d;
 		double clippingPercent = sampleCount <= 0 ? 0 : clipped * 100d / sampleCount;
 		double quality = calculateRawQuality(dbfs, clippingPercent, dcPercent);
-		float[] spectrum = gsmMode || lteMode ? new float[0] : computeSpectrum(iqData, totalSamples);
+		float[] spectrum = gsmMode || lteMode || nrMode ? new float[0] : computeSpectrum(iqData, totalSamples);
 		DabMetrics dabMetrics = dabMode ? computeDabMetrics(spectrum, sampleRateHz) : null;
 		if (dabMetrics != null) {
 			dabMetrics.constellation = computeDabConstellation(dabAnalysisData, dabAnalysisLength, sampleRateHz,
@@ -373,9 +416,25 @@ final class SignalQualityTesterFrame extends JFrame {
 		RdsSignalAnalyzer.Result rdsResult = rdsMode ? latestRdsResult : null;
 		if (lteMode) scheduleLteAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
 		LteSignalAnalyzer.Result lteResult = lteMode ? latestLteResult : null;
+		if (nrMode) scheduleNrAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
+		NrSignalAnalyzer.Result nrResult = nrMode ? latestNrResult : null;
 		snapshot = new Snapshot(centerFreqHz, sampleRateHz, samples, sampleCount, dbfs, peak, dcPercent,
-				clippingPercent, stabilityDb, quality, spectrum, dabMetrics, dvbtResult, dvbt2Result, gsmResult, rdsResult, lteResult,
+				clippingPercent, stabilityDb, quality, spectrum, dabMetrics, dvbtResult, dvbt2Result, gsmResult, rdsResult, lteResult, nrResult,
 				System.currentTimeMillis());
+	}
+
+	private synchronized void scheduleNrAnalysis(byte[] iqData, int length, int sampleRateHz) {
+		int minimumBytes = Math.max(2, sampleRateHz / 50);
+		if (nrAnalysisRunning || length < minimumBytes) return;
+		int wanted = Math.min(length & ~1, Math.max(131_072, sampleRateHz * 16 / 100));
+		final byte[] capture = new byte[wanted];
+		System.arraycopy(iqData, (length - wanted) & ~1, capture, 0, wanted);
+		nrAnalysisRunning = true;
+		Thread worker = new Thread(() -> {
+			try { latestNrResult = nrAnalyzer.analyze(capture, capture.length, sampleRateHz); }
+			finally { nrAnalysisRunning = false; }
+		}, "5G NR SSB cell search");
+		worker.setDaemon(true); worker.setPriority(Thread.MIN_PRIORITY); worker.start();
 	}
 
 	private synchronized void scheduleLteAnalysis(byte[] iqData, int length, int sampleRateHz) {
@@ -1163,6 +1222,8 @@ final class SignalQualityTesterFrame extends JFrame {
 			if (gsmMode) gsmParameterLabel.setText(parameterTable("GSM DOWNLINK", "", "Waiting for GSM IQ..."));
 			if (rdsMode) gsmParameterLabel.setText(parameterTable("FM RDS", "", "Waiting for FM IQ..."));
 			if (lteMode) lteParameterLabel.setText(parameterTable("LTE CELL SEARCH", "", "Waiting for LTE IQ..."));
+			if (nrMode) nrParameterLabel.setText(parameterTable("NR CELL ACQUISITION / SESSION STATUS", "",
+					"Waiting for NR IQ samples..."));
 			return;
 		}
 		statsLabel.setText(String.format(Locale.US, "%.3f MHz   %.3f MS/s   RMS %.1f dBFS   peak %d",
@@ -1275,6 +1336,35 @@ final class SignalQualityTesterFrame extends JFrame {
 					lte.state,lteCells.size(),lte.correlation*100d,lte.sssCorrelation*100d,
 					lte.iqOrientation>0?"normal":"conjugated",active.centerFreqHz/1e6,active.sampleRateHz/1e6);
 			lteParameterLabel.setText(parameterTable("LTE CELL ACQUISITION / SESSION STATUS",details,lte.state));
+		} else if (nrMode && active.nrResult != null) {
+			NrSignalAnalyzer.Result nr = active.nrResult;
+			if (nr.pci >= 0) {
+				if (nr.load.valid) {
+					Double previousLoad = nrLoadPercent.get(nr.pci);
+					nrLoadPercent.put(nr.pci, previousLoad == null ? nr.load.percent
+							: previousLoad * .7d + nr.load.percent * .3d);
+				}
+				NrSignalAnalyzer.Result previous = nrCells.get(nr.pci);
+				if (previous != null) {
+					NrSignalAnalyzer.MibData mib = nr.mib.valid ? nr.mib : previous.mib;
+					NrSignalAnalyzer.Sib1Data sib1 = nr.sib1.valid ? nr.sib1 : previous.sib1;
+					NrSignalAnalyzer.LoadData load = nr.load.valid ? nr.load : previous.load;
+					if (mib != nr.mib || sib1 != nr.sib1 || load != nr.load)
+						nr = nr.withMeasurements(mib, sib1, load);
+				}
+				nrCells.put(nr.pci, nr);
+			}
+			nrCellTablePanel.updateCells(nrCells.values(), active.centerFreqHz);
+			detailLabel.setText(String.format(Locale.US, "%s   PSS %.1f%%   detected cells %d",
+					nr.state, nr.pssCorrelation * 100d, nrCells.size()));
+			String details = String.format(Locale.US,
+					"Acquisition|%s\nDetected cells|%d\nCurrent PCI|%s\nPSS / SSS / PBCH DM-RS|%.1f %% / %.1f %% / %s\nMIB / SIB1|%s / %s\nIQ orientation|%s",
+					nr.state, nrCells.size(), nr.pci >= 0 ? Integer.toString(nr.pci) : "searching",
+					nr.pssCorrelation * 100d, nr.sssCorrelation * 100d,
+					nr.dmrsConfirmed ? String.format(Locale.US, "%.1f %%", nr.dmrsCorrelation * 100d) : "searching",
+					nr.mib.valid ? "decoded" : "waiting", nr.sib1.valid ? "decoded" : "waiting",
+					nr.iqOrientation > 0 ? "normal" : nr.iqOrientation < 0 ? "conjugated" : "searching");
+			nrParameterLabel.setText(parameterTable("NR CELL ACQUISITION / SESSION STATUS", details, nr.state));
 		} else {
 			detailLabel.setText(String.format(Locale.US, "DC %.1f%%   clipping %.2f%%   stability %.2f dB",
 					active.dcPercent, active.clippingPercent, active.stabilityDb));
@@ -1524,13 +1614,15 @@ final class SignalQualityTesterFrame extends JFrame {
 		final GsmSignalAnalyzer.Result gsmResult;
 		final RdsSignalAnalyzer.Result rdsResult;
 		final LteSignalAnalyzer.Result lteResult;
+		final NrSignalAnalyzer.Result nrResult;
 		final long createdMillis;
 
 		Snapshot(long centerFreqHz, int sampleRateHz, byte[] samples, int sampleCount, double dbfs, int peak,
 				double dcPercent, double clippingPercent, double stabilityDb, double quality, float[] spectrumDb,
 				DabMetrics dabMetrics, DvbtSignalAnalyzer.Result dvbtResult,
 				Dvbt2SignalAnalyzer.Result dvbt2Result, GsmSignalAnalyzer.Result gsmResult,
-				RdsSignalAnalyzer.Result rdsResult, LteSignalAnalyzer.Result lteResult, long createdMillis) {
+				RdsSignalAnalyzer.Result rdsResult, LteSignalAnalyzer.Result lteResult,
+				NrSignalAnalyzer.Result nrResult, long createdMillis) {
 			this.centerFreqHz = centerFreqHz;
 			this.sampleRateHz = sampleRateHz;
 			this.samples = samples;
@@ -1548,6 +1640,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			this.gsmResult = gsmResult;
 			this.rdsResult = rdsResult;
 			this.lteResult = lteResult;
+			this.nrResult = nrResult;
 			this.createdMillis = createdMillis;
 		}
 	}
@@ -1637,7 +1730,7 @@ final class SignalQualityTesterFrame extends JFrame {
 				g.setColor(TEXT_FG);
 				String label = active != null && (active.dabMetrics != null || active.dvbtResult != null
 						|| active.dvbt2Result != null || active.gsmResult != null || active.rdsResult != null
-						|| active.lteResult != null) ? "INPUT" : "RAW";
+						|| active.lteResult != null || active.nrResult != null) ? "INPUT" : "RAW";
 				g.drawString(active == null ? label + " --%" : String.format(Locale.US, "%s %.0f%%", label, quality), 4, 17);
 				g.setColor(GRID);
 				g.fillRect(barX, barY, barW, barH);
@@ -1683,16 +1776,18 @@ final class SignalQualityTesterFrame extends JFrame {
 								? active.dvbt2Result.quality : active != null && active.gsmResult != null
 										? active.gsmResult.quality : active != null && active.rdsResult != null
 												? rdsLockQuality(active.rdsResult) : active != null && active.lteResult != null
-												? lteQpskQuality(active.lteResult) : constellation == null ? 0 : constellation.lockScore;
+												? lteQpskQuality(active.lteResult) : active != null && active.nrResult != null
+												? active.nrResult.quality : constellation == null ? 0 : constellation.lockScore;
 				Color color = lock >= 55 ? QUALITY_GOOD : lock >= 35 ? QUALITY_WARN : QUALITY_BAD;
 				g.setColor(TEXT_FG);
 				String label = active != null && active.dvbt2Result != null ? "DEMOD"
 						: active != null && active.gsmResult != null ? "FCCH"
 						: active != null && active.rdsResult != null ? "RDS"
-						: active != null && active.lteResult != null ? "QPSK" : "QUALITY";
+						: active != null && active.lteResult != null ? "QPSK"
+						: active != null && active.nrResult != null ? "SSB" : "QUALITY";
 				g.drawString(active == null || (constellation == null && active.dvbtResult == null
 						&& active.dvbt2Result == null && active.gsmResult == null && active.rdsResult == null
-						&& active.lteResult == null) ? label + " --%"
+						&& active.lteResult == null && active.nrResult == null) ? label + " --%"
 						: String.format(Locale.US, "%s %.0f%%", label, lock), 4, 16);
 				g.setColor(GRID);
 				g.fillRect(barX, barY, barW, barH);

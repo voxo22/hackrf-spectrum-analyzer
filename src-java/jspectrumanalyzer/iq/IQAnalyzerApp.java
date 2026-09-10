@@ -642,8 +642,9 @@ public class IQAnalyzerApp {
 				new SignalTestOption("DAB"),
 				new SignalTestOption("DVB-T 8 MHz"),
 				new SignalTestOption("DVB-T2 8 MHz"),
-				new SignalTestOption("GSM 200 kHz"),
-				new SignalTestOption("LTE"),
+				new SignalTestOption("GSM 2G"),
+				new SignalTestOption("LTE 4G"),
+				new SignalTestOption("NR 5G"),
 				new SignalTestOption("FM RDS"),
 				new SignalTestOption("Generic QAM")
 		});
@@ -1138,7 +1139,7 @@ public class IQAnalyzerApp {
 		SignalTestOption option = signalTestCombo == null ? null
 				: (SignalTestOption) signalTestCombo.getSelectedItem();
 		if (option == null) return;
-		if (option.label.startsWith("LTE")) {
+		if (option.label.startsWith("LTE") || option.label.startsWith("NR")) {
 			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
 			return;
 		}

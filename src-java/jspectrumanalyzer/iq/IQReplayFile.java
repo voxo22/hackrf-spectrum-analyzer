@@ -126,8 +126,9 @@ public final class IQReplayFile implements AutoCloseable {
 				throw new IOException("WAV must be stereo 8-bit or 16-bit PCM I/Q");
 			}
 			long centerHz = parseWavCenterFrequency(file.getName());
+			boolean unsigned8Bit = bitsPerSample == 8 && looksLikeUnsigned8BitPcm(input, dataOffset, dataLength);
 			return new IQReplayFile(file, input, Type.WAV, centerHz, sampleRateHz, dataOffset, dataLength,
-					bitsPerSample, bitsPerSample == 8);
+					bitsPerSample, unsigned8Bit);
 		} catch (IOException | RuntimeException e) {
 			input.close();
 			throw e;
@@ -149,6 +150,29 @@ public final class IQReplayFile implements AutoCloseable {
 			input.close();
 			throw e;
 		}
+	}
+
+	private static boolean looksLikeUnsigned8BitPcm(RandomAccessFile input, long dataOffset, long dataLength)
+			throws IOException {
+		int count = (int)Math.min(131_072L, Math.max(0L, dataLength));
+		if (count <= 0) {
+			return true;
+		}
+		byte[] buffer = new byte[count];
+		long previous = input.getFilePointer();
+		input.seek(dataOffset);
+		input.readFully(buffer);
+		input.seek(previous);
+		long signedAbs = 0, unsignedAbs = 0;
+		for (byte value : buffer) {
+			int unsigned = value & 0xff;
+			signedAbs += Math.abs((int)value);
+			unsignedAbs += Math.abs(unsigned - 128);
+		}
+		/* IQ WAVs recorded by this application carry signed HackRF bytes in an
+		 * 8-bit PCM container. Standard 8-bit WAV PCM is unsigned and sits around
+		 * 128, so compare both possible zero points instead of trusting the header. */
+		return unsignedAbs <= signedAbs;
 	}
 
 	public synchronized int readLoopedSigned(byte[] destination) throws IOException {
