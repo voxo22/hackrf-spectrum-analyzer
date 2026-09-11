@@ -643,6 +643,7 @@ public class IQAnalyzerApp {
 				new SignalTestOption("DVB-T 8 MHz"),
 				new SignalTestOption("DVB-T2 8 MHz"),
 				new SignalTestOption("GSM 2G"),
+				new SignalTestOption("UMTS 3G"),
 				new SignalTestOption("LTE 4G"),
 				new SignalTestOption("NR 5G"),
 				new SignalTestOption("FM RDS"),
@@ -1139,7 +1140,7 @@ public class IQAnalyzerApp {
 		SignalTestOption option = signalTestCombo == null ? null
 				: (SignalTestOption) signalTestCombo.getSelectedItem();
 		if (option == null) return;
-		if (option.label.startsWith("LTE") || option.label.startsWith("NR")) {
+		if (option.label.startsWith("LTE") || option.label.startsWith("NR") || option.label.startsWith("UMTS")) {
 			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
 			return;
 		}

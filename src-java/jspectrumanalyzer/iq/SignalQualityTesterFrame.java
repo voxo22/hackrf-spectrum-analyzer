@@ -61,8 +61,10 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final JLabel gsmParameterLabel = new JLabel();
 	private final JLabel lteParameterLabel = new JLabel();
 	private final JLabel nrParameterLabel = new JLabel();
+	private final JLabel umtsParameterLabel = new JLabel();
 	private final LteCellTablePanel lteCellTablePanel = new LteCellTablePanel();
 	private final NrCellTablePanel nrCellTablePanel = new NrCellTablePanel();
+	private final UmtsCellTablePanel umtsCellTablePanel = new UmtsCellTablePanel();
 	private final LteConstellationPanel lteConstellationPanel = new LteConstellationPanel();
 	private final JLabel titleLabel;
 	private final JLabel statsLabel = new JLabel("Waiting for IQ samples...");
@@ -75,12 +77,14 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final boolean rdsMode;
 	private final boolean lteMode;
 	private final boolean nrMode;
+	private final boolean umtsMode;
 	private final DvbtSignalAnalyzer dvbtAnalyzer = new DvbtSignalAnalyzer();
 	private final Dvbt2SignalAnalyzer dvbt2Analyzer = new Dvbt2SignalAnalyzer();
 	private final GsmSignalAnalyzer gsmAnalyzer = new GsmSignalAnalyzer();
 	private final RdsSignalAnalyzer rdsAnalyzer = new RdsSignalAnalyzer();
 	private final LteSignalAnalyzer lteAnalyzer = new LteSignalAnalyzer();
 	private final NrSignalAnalyzer nrAnalyzer = new NrSignalAnalyzer();
+	private final UmtsSignalAnalyzer umtsAnalyzer = new UmtsSignalAnalyzer();
 	private volatile boolean gsmAnalysisRunning;
 	private volatile GsmSignalAnalyzer.Result latestGsmResult;
 	private volatile boolean rdsAnalysisRunning;
@@ -91,8 +95,12 @@ final class SignalQualityTesterFrame extends JFrame {
 	private volatile LteSignalAnalyzer.Result latestLteResult;
 	private volatile boolean nrAnalysisRunning;
 	private volatile NrSignalAnalyzer.Result latestNrResult;
+	private volatile boolean umtsAnalysisRunning;
+	private volatile UmtsSignalAnalyzer.Result latestUmtsResult;
 	private final Map<Integer,LteSignalAnalyzer.Candidate> lteCells=new LinkedHashMap<Integer,LteSignalAnalyzer.Candidate>();
 	private final Map<Integer,NrSignalAnalyzer.Result> nrCells=new LinkedHashMap<Integer,NrSignalAnalyzer.Result>();
+	private final Map<Integer,UmtsSignalAnalyzer.Candidate> umtsCells=new LinkedHashMap<Integer,UmtsSignalAnalyzer.Candidate>();
+	private final Map<Integer,Double> umtsLoadPercent=new LinkedHashMap<Integer,Double>();
 	private final Map<Integer,Double> nrLoadPercent=new LinkedHashMap<Integer,Double>();
 	private final Map<Integer,LteSignalAnalyzer.SiData> lteSystemInformation=new LinkedHashMap<Integer,LteSignalAnalyzer.SiData>();
 	private final Map<Integer,Long> ltePagingCounts=new LinkedHashMap<Integer,Long>();
@@ -102,6 +110,8 @@ final class SignalQualityTesterFrame extends JFrame {
 	private GsmBcchDetailsFrame gsmBcchFrame;
 	private LteCellDetailsFrame lteCellDetailsFrame;
 	private NrCellDetailsFrame nrCellDetailsFrame;
+	private UmtsCellDetailsFrame umtsCellDetailsFrame;
+	private UmtsPagingStatsFrame umtsPagingFrame;
 	private volatile boolean dvbt2AnalysisRunning;
 	private volatile Dvbt2SignalAnalyzer.Result latestDvbt2Result;
 	private static final int DVBT2_SIGNALLING_CAPTURE_BYTES = 6_000_000;
@@ -144,6 +154,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		rdsMode = mode.startsWith("FM RDS");
 		lteMode = mode.startsWith("LTE");
 		nrMode = mode.startsWith("5G NR") || mode.startsWith("NR");
+		umtsMode = mode.startsWith("UMTS") || mode.startsWith("WCDMA");
 		if (gsmMode) {
 			latestGsmResult = GsmSignalAnalyzer.Result.empty("collecting GSM channel IQ");
 			prepareParameterLabel(gsmParameterLabel);
@@ -164,6 +175,11 @@ final class SignalQualityTesterFrame extends JFrame {
 			prepareParameterLabel(nrParameterLabel);
 			nrParameterLabel.setFont(nrParameterLabel.getFont().deriveFont(12f));
 		}
+		if (umtsMode) {
+			latestUmtsResult = UmtsSignalAnalyzer.Result.empty("collecting UMTS IQ");
+			prepareParameterLabel(umtsParameterLabel);
+			umtsParameterLabel.setFont(umtsParameterLabel.getFont().deriveFont(12f));
+		}
 		if (dvbtMode) dvbtTpsCapture = new byte[DVBT_TPS_CAPTURE_BYTES];
 		if (dvbt2Mode) {
 			latestDvbt2Result = Dvbt2SignalAnalyzer.Result.empty("collecting DVB-T2 IQ");
@@ -173,7 +189,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			prepareParameterLabel(dvbt2PostLabel);
 		}
 
-		titleLabel = new JLabel(mode + (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode ? " signal quality" : " raw IQ monitor"));
+		titleLabel = new JLabel(mode + (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode || umtsMode ? " signal quality" : " raw IQ monitor"));
 		titleLabel.setForeground(TEXT_FG);
 		titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 14f));
 		statsLabel.setForeground(MUTED_FG);
@@ -206,15 +222,25 @@ final class SignalQualityTesterFrame extends JFrame {
 			detailsButton.addActionListener(e -> openNrCellDetails());
 			nrButtons.add(detailsButton);
 			header.add(nrButtons, BorderLayout.EAST);
+		} else if (umtsMode) {
+			JPanel umtsButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+			umtsButtons.setOpaque(false);
+			JButton detailsButton = new JButton("CELL DETAILS");
+			detailsButton.addActionListener(e -> openUmtsCellDetails());
+			JButton pagingButton = new JButton("PAGING / STATS");
+			pagingButton.addActionListener(e -> openUmtsPagingStats());
+			umtsButtons.add(detailsButton);
+			umtsButtons.add(pagingButton);
+			header.add(umtsButtons, BorderLayout.EAST);
 		}
 
 		JPanel footer = new JPanel(new BorderLayout(8, 4));
 		footer.setBackground(PANEL_BG);
 		footer.setBorder(new EmptyBorder(6, 10, 8, 10));
-		JPanel qualityRows = new JPanel(new GridLayout(dvbt2Mode ? 3 : dabMode || dvbtMode || gsmMode || rdsMode || lteMode || nrMode ? 2 : 1, 1, 0, 2));
+		JPanel qualityRows = new JPanel(new GridLayout(dvbt2Mode ? 3 : dabMode || dvbtMode || gsmMode || rdsMode || lteMode || nrMode || umtsMode ? 2 : 1, 1, 0, 2));
 		qualityRows.setBackground(PANEL_BG);
 		qualityRows.add(qualityPanel);
-		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode) {
+		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode || umtsMode) {
 			qualityRows.add(dabLockPanel);
 		}
 		if (dvbt2Mode) qualityRows.add(dvbt2CrcPanel);
@@ -251,6 +277,14 @@ final class SignalQualityTesterFrame extends JFrame {
 			nrColumn.add(nrParameterLabel);
 			nrColumn.add(nrCellTablePanel);
 			plots.add(nrColumn);
+		} else if (umtsMode) {
+			umtsParameterLabel.setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createLineBorder(Color.DARK_GRAY), new EmptyBorder(10, 18, 10, 18)));
+			JPanel umtsColumn = new JPanel(new GridLayout(2, 1, 0, 6));
+			umtsColumn.setBackground(PANEL_BG);
+			umtsColumn.add(umtsParameterLabel);
+			umtsColumn.add(umtsCellTablePanel);
+			plots.add(umtsColumn);
 		} else {
 			plots.add(scatterPanel);
 			plots.add(dabMode || dvbtMode ? dabConstellationPanel : spectrumPanel);
@@ -259,7 +293,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		add(header, BorderLayout.NORTH);
 		add(plots, BorderLayout.CENTER);
 		add(footer, BorderLayout.SOUTH);
-		setSize(dvbt2Mode ? 1100 : 760, dvbt2Mode ? 650 : lteMode ? 570 : nrMode ? 500 : gsmMode || rdsMode ? 445 : 420);
+		setSize(dvbt2Mode ? 1100 : 760, dvbt2Mode ? 650 : lteMode ? 570 : nrMode || umtsMode ? 500 : gsmMode || rdsMode ? 445 : 420);
 
 		repaintTimer = new Timer(100, e -> updateView());
 		repaintTimer.start();
@@ -271,6 +305,8 @@ final class SignalQualityTesterFrame extends JFrame {
 				if (gsmBcchFrame != null) gsmBcchFrame.dispose();
 				if (lteCellDetailsFrame != null) lteCellDetailsFrame.dispose();
 				if (nrCellDetailsFrame != null) nrCellDetailsFrame.dispose();
+				if (umtsCellDetailsFrame != null) umtsCellDetailsFrame.dispose();
+				if (umtsPagingFrame != null) umtsPagingFrame.dispose();
 				if (closedCallback != null) {
 					closedCallback.run();
 				}
@@ -301,6 +337,27 @@ final class SignalQualityTesterFrame extends JFrame {
 		nrCellDetailsFrame.setLocationRelativeTo(this);
 		nrCellDetailsFrame.setVisible(true);
 		nrCellDetailsFrame.toFront();
+	}
+
+	private void openUmtsCellDetails() {
+		if (umtsCellDetailsFrame == null || !umtsCellDetailsFrame.isDisplayable())
+			umtsCellDetailsFrame = new UmtsCellDetailsFrame(
+					() -> umtsCellTablePanel.selectedPsc(),
+					psc -> umtsCells.get(psc),
+					() -> snapshot == null ? -1L : snapshot.centerFreqHz,
+					psc -> umtsLoadPercent.containsKey(psc) ? umtsLoadPercent.get(psc) : Double.NaN);
+		umtsCellDetailsFrame.setLocationRelativeTo(this);
+		umtsCellDetailsFrame.setVisible(true);
+		umtsCellDetailsFrame.toFront();
+	}
+
+	private void openUmtsPagingStats() {
+		if (umtsPagingFrame == null || !umtsPagingFrame.isDisplayable())
+			umtsPagingFrame = new UmtsPagingStatsFrame(() ->
+					umtsCells.get(umtsCellTablePanel.selectedPsc()));
+		umtsPagingFrame.setLocationRelativeTo(this);
+		umtsPagingFrame.setVisible(true);
+		umtsPagingFrame.toFront();
 	}
 
 	private void openGsmPagingStats() {
@@ -352,12 +409,12 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (dvbt2Mode) offerDvbt2SignallingCapture(sampleRateHz, iqData, evenLength);
 		byte[] dabAnalysisData = iqData;
 		int dabAnalysisLength = evenLength;
-		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode) {
+		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode || umtsMode) {
 			dabAnalysisLength = appendDabHistory(iqData, evenLength);
 			dabAnalysisData = dabHistory;
 		}
 		long now = System.nanoTime();
-		long interval = gsmMode || rdsMode || lteMode || nrMode ? GSM_MIN_ANALYSIS_INTERVAL_NANOS
+		long interval = gsmMode || rdsMode || lteMode || nrMode || umtsMode ? GSM_MIN_ANALYSIS_INTERVAL_NANOS
 				: dabMode || dvbtMode || dvbt2Mode ? DAB_MIN_ANALYSIS_INTERVAL_NANOS : MIN_ANALYSIS_INTERVAL_NANOS;
 		if (now - lastAnalysisNanos < interval) {
 			return;
@@ -399,7 +456,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		double dcPercent = Math.sqrt(meanI * meanI + meanQ * meanQ) / 128d * 100d;
 		double clippingPercent = sampleCount <= 0 ? 0 : clipped * 100d / sampleCount;
 		double quality = calculateRawQuality(dbfs, clippingPercent, dcPercent);
-		float[] spectrum = gsmMode || lteMode || nrMode ? new float[0] : computeSpectrum(iqData, totalSamples);
+		float[] spectrum = gsmMode || lteMode || nrMode || umtsMode ? new float[0] : computeSpectrum(iqData, totalSamples);
 		DabMetrics dabMetrics = dabMode ? computeDabMetrics(spectrum, sampleRateHz) : null;
 		if (dabMetrics != null) {
 			dabMetrics.constellation = computeDabConstellation(dabAnalysisData, dabAnalysisLength, sampleRateHz,
@@ -418,9 +475,25 @@ final class SignalQualityTesterFrame extends JFrame {
 		LteSignalAnalyzer.Result lteResult = lteMode ? latestLteResult : null;
 		if (nrMode) scheduleNrAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
 		NrSignalAnalyzer.Result nrResult = nrMode ? latestNrResult : null;
+		if (umtsMode) scheduleUmtsAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
+		UmtsSignalAnalyzer.Result umtsResult = umtsMode ? latestUmtsResult : null;
 		snapshot = new Snapshot(centerFreqHz, sampleRateHz, samples, sampleCount, dbfs, peak, dcPercent,
-				clippingPercent, stabilityDb, quality, spectrum, dabMetrics, dvbtResult, dvbt2Result, gsmResult, rdsResult, lteResult, nrResult,
+				clippingPercent, stabilityDb, quality, spectrum, dabMetrics, dvbtResult, dvbt2Result, gsmResult, rdsResult, lteResult, nrResult, umtsResult,
 				System.currentTimeMillis());
+	}
+
+	private synchronized void scheduleUmtsAnalysis(byte[] iqData, int length, int sampleRateHz) {
+		int minimumBytes = Math.max(2, sampleRateHz / 50);
+		if (umtsAnalysisRunning || length < minimumBytes) return;
+		int wanted = Math.min(length & ~1, Math.max(262_144, sampleRateHz / 5));
+		final byte[] capture = new byte[wanted];
+		System.arraycopy(iqData, (length - wanted) & ~1, capture, 0, wanted);
+		umtsAnalysisRunning = true;
+		Thread worker = new Thread(() -> {
+			try { latestUmtsResult = umtsAnalyzer.analyze(capture, capture.length, sampleRateHz); }
+			finally { umtsAnalysisRunning = false; }
+		}, "UMTS CPICH PSC search");
+		worker.setDaemon(true); worker.setPriority(Thread.MIN_PRIORITY); worker.start();
 	}
 
 	private synchronized void scheduleNrAnalysis(byte[] iqData, int length, int sampleRateHz) {
@@ -1224,6 +1297,8 @@ final class SignalQualityTesterFrame extends JFrame {
 			if (lteMode) lteParameterLabel.setText(parameterTable("LTE CELL SEARCH", "", "Waiting for LTE IQ..."));
 			if (nrMode) nrParameterLabel.setText(parameterTable("NR CELL ACQUISITION / SESSION STATUS", "",
 					"Waiting for NR IQ samples..."));
+			if (umtsMode) umtsParameterLabel.setText(parameterTable("UMTS CPICH ACQUISITION", "",
+					"Waiting for UMTS IQ samples..."));
 			return;
 		}
 		statsLabel.setText(String.format(Locale.US, "%.3f MHz   %.3f MS/s   RMS %.1f dBFS   peak %d",
@@ -1365,6 +1440,52 @@ final class SignalQualityTesterFrame extends JFrame {
 					nr.mib.valid ? "decoded" : "waiting", nr.sib1.valid ? "decoded" : "waiting",
 					nr.iqOrientation > 0 ? "normal" : nr.iqOrientation < 0 ? "conjugated" : "searching");
 			nrParameterLabel.setText(parameterTable("NR CELL ACQUISITION / SESSION STATUS", details, nr.state));
+		} else if (umtsMode && active.umtsResult != null) {
+			UmtsSignalAnalyzer.Result umts = active.umtsResult;
+			for (UmtsSignalAnalyzer.Candidate candidate : umts.candidates) {
+				UmtsSignalAnalyzer.Candidate previous = umtsCells.get(candidate.psc);
+				if (candidate.load.valid) {
+					Double oldLoad = umtsLoadPercent.get(candidate.psc);
+					umtsLoadPercent.put(candidate.psc, oldLoad == null ? candidate.load.percent
+							: oldLoad * .7d + candidate.load.percent * .3d);
+				}
+				UmtsBchDecoder.BchData bch = candidate.bch.valid ? candidate.bch
+						: previous == null ? candidate.bch : previous.bch;
+				UmtsSystemInformationDecoder.Snapshot information = candidate.systemInformation.hasAny()
+						? candidate.systemInformation
+						: previous == null ? candidate.systemInformation : previous.systemInformation;
+				UmtsSignalAnalyzer.LoadData load = candidate.load.valid ? candidate.load
+						: previous == null ? candidate.load : previous.load;
+				UmtsPchDecoder.Snapshot paging = candidate.paging.supported
+						? candidate.paging : previous == null ? candidate.paging : previous.paging;
+				if (previous == null || candidate.cpichCorrelation >= previous.cpichCorrelation || candidate.bch.valid)
+					umtsCells.put(candidate.psc,
+							candidate.withBchAndSystemInformation(bch, information).withLoad(load)
+									.withPaging(paging));
+			}
+			umtsCellTablePanel.updateCells(umtsCells.values(), active.centerFreqHz, umts.psc);
+			long measuredCarrierHz = Math.round(active.centerFreqHz + umts.cfoHz);
+			int uarfcn = UmtsSignalAnalyzer.uarfcnFromFrequency(measuredCarrierHz);
+			detailLabel.setText(String.format(Locale.US,
+					"%s   P-SCH %.1f%%   CPICH %.1f%%   detected PSCs %d",
+					umts.state, umts.pschCorrelation * 100d, umts.cpichCorrelation * 100d, umtsCells.size()));
+			String details = String.format(Locale.US,
+					"Acquisition|%s\nDetected PSCs|%d\nCurrent PSC|%s\nScrambling code group|%s\nP-SCH / CPICH|%.1f %% / %.1f %%\nCPICH Ec/N0|%s\nCPICH RSCP|%s\nBCH|%s\nMIB / SIB1 / SIB3|%s\nUARFCN|%s\nChannel center|%.6f MHz\nIQ sample rate|%.3f MS/s\nCarrier offset|%+.1f Hz\nIQ orientation|%s",
+					umts.state, umtsCells.size(), umts.psc >= 0 ? Integer.toString(umts.psc) : "searching",
+					umts.codeGroup >= 0 ? Integer.toString(umts.codeGroup) : "--",
+					umts.pschCorrelation * 100d, umts.cpichCorrelation * 100d,
+					umts.candidates.isEmpty() ? "--" : String.format(Locale.US, "%.1f dB", umts.candidates.get(0).ecNoDb),
+					umts.candidates.isEmpty() ? "--" : String.format(Locale.US, "%.1f dBFS", umts.candidates.get(0).rscpDbfs),
+					!umts.candidates.isEmpty() && umts.candidates.get(0).bch.valid ? "CRC OK" : "waiting",
+					!umts.candidates.isEmpty()
+							? (umts.candidates.get(0).systemInformation.mibValid ? "OK" : "--") + " / "
+									+ (umts.candidates.get(0).systemInformation.sib1Valid ? "OK" : "--") + " / "
+									+ (umts.candidates.get(0).systemInformation.sib3Valid ? "OK" : "--")
+							: "-- / -- / --",
+					uarfcn >= 0 ? Integer.toString(uarfcn) : "--",
+					active.centerFreqHz / 1e6, active.sampleRateHz / 1e6, umts.cfoHz,
+					umts.iqOrientation > 0 ? "normal" : "conjugated");
+			umtsParameterLabel.setText(parameterTable("UMTS/WCDMA DOWNLINK ACQUISITION", details, umts.state));
 		} else {
 			detailLabel.setText(String.format(Locale.US, "DC %.1f%%   clipping %.2f%%   stability %.2f dB",
 					active.dcPercent, active.clippingPercent, active.stabilityDb));
@@ -1615,6 +1736,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		final RdsSignalAnalyzer.Result rdsResult;
 		final LteSignalAnalyzer.Result lteResult;
 		final NrSignalAnalyzer.Result nrResult;
+		final UmtsSignalAnalyzer.Result umtsResult;
 		final long createdMillis;
 
 		Snapshot(long centerFreqHz, int sampleRateHz, byte[] samples, int sampleCount, double dbfs, int peak,
@@ -1622,7 +1744,7 @@ final class SignalQualityTesterFrame extends JFrame {
 				DabMetrics dabMetrics, DvbtSignalAnalyzer.Result dvbtResult,
 				Dvbt2SignalAnalyzer.Result dvbt2Result, GsmSignalAnalyzer.Result gsmResult,
 				RdsSignalAnalyzer.Result rdsResult, LteSignalAnalyzer.Result lteResult,
-				NrSignalAnalyzer.Result nrResult, long createdMillis) {
+				NrSignalAnalyzer.Result nrResult, UmtsSignalAnalyzer.Result umtsResult, long createdMillis) {
 			this.centerFreqHz = centerFreqHz;
 			this.sampleRateHz = sampleRateHz;
 			this.samples = samples;
@@ -1641,6 +1763,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			this.rdsResult = rdsResult;
 			this.lteResult = lteResult;
 			this.nrResult = nrResult;
+			this.umtsResult = umtsResult;
 			this.createdMillis = createdMillis;
 		}
 	}
@@ -1730,7 +1853,7 @@ final class SignalQualityTesterFrame extends JFrame {
 				g.setColor(TEXT_FG);
 				String label = active != null && (active.dabMetrics != null || active.dvbtResult != null
 						|| active.dvbt2Result != null || active.gsmResult != null || active.rdsResult != null
-						|| active.lteResult != null || active.nrResult != null) ? "INPUT" : "RAW";
+						|| active.lteResult != null || active.nrResult != null || active.umtsResult != null) ? "INPUT" : "RAW";
 				g.drawString(active == null ? label + " --%" : String.format(Locale.US, "%s %.0f%%", label, quality), 4, 17);
 				g.setColor(GRID);
 				g.fillRect(barX, barY, barW, barH);
@@ -1777,17 +1900,19 @@ final class SignalQualityTesterFrame extends JFrame {
 										? active.gsmResult.quality : active != null && active.rdsResult != null
 												? rdsLockQuality(active.rdsResult) : active != null && active.lteResult != null
 												? lteQpskQuality(active.lteResult) : active != null && active.nrResult != null
-												? active.nrResult.quality : constellation == null ? 0 : constellation.lockScore;
+												? active.nrResult.quality : active != null && active.umtsResult != null
+												? active.umtsResult.quality : constellation == null ? 0 : constellation.lockScore;
 				Color color = lock >= 55 ? QUALITY_GOOD : lock >= 35 ? QUALITY_WARN : QUALITY_BAD;
 				g.setColor(TEXT_FG);
 				String label = active != null && active.dvbt2Result != null ? "DEMOD"
 						: active != null && active.gsmResult != null ? "FCCH"
 						: active != null && active.rdsResult != null ? "RDS"
 						: active != null && active.lteResult != null ? "QPSK"
-						: active != null && active.nrResult != null ? "SSB" : "QUALITY";
+						: active != null && active.nrResult != null ? "SSB"
+						: active != null && active.umtsResult != null ? "CPICH" : "QUALITY";
 				g.drawString(active == null || (constellation == null && active.dvbtResult == null
 						&& active.dvbt2Result == null && active.gsmResult == null && active.rdsResult == null
-						&& active.lteResult == null && active.nrResult == null) ? label + " --%"
+						&& active.lteResult == null && active.nrResult == null && active.umtsResult == null) ? label + " --%"
 						: String.format(Locale.US, "%s %.0f%%", label, lock), 4, 16);
 				g.setColor(GRID);
 				g.fillRect(barX, barY, barW, barH);

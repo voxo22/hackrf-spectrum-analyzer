@@ -1043,6 +1043,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private static final double IQ_SELECTION_MAX_BW_MHZ = 20.0d;
 	private static final double IQ_SELECTION_MIN_BW_MHZ = 0.001d;
 	private static final double IQ_SELECTION_SNAP_STEP_MHZ = 0.1d;
+	private static final int IQ_SELECTION_DRAG_THRESHOLD_PX = 4;
+	private static final int IQ_SELECTION_DOUBLE_CLICK_FLASH_MS = 250;
 	private static final double IQ_REPLAY_ZOOM_SNAP_STEP_MHZ = 0.1d;
 	private static final double LIVE_ZOOM_SNAP_STEP_MHZ = 1.0d;
 /*
@@ -1225,6 +1227,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private int										draggingBaseStopMHz;
 	private int										draggingPanDeltaMHz;
 	private IQSelection								iqSelection;
+	private int										iqSelectionAnchorX				= -1;
+	private boolean									iqSelectionHighlightVisible;
 	private double									dragZoomAnchorMHz				= Double.NaN;
 	private double									dragZoomCurrentMHz				= Double.NaN;
 	private int										dragZoomAnchorX				= -1;
@@ -4291,7 +4295,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 	private void drawIQSelectionOverlay(Graphics2D g2) {
 		IQSelection selection = iqSelection;
-		if (selection == null)
+		if (selection == null || !iqSelectionHighlightVisible)
 			return;
 		Rectangle2D area = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
 		if (area == null || area.getWidth() <= 0 || area.getHeight() <= 0)
@@ -4590,6 +4594,67 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		selection.compressedStartMHz = selectionToCompressedMHz(selection.startMHz, activePairs);
 		selection.compressedStopMHz = selectionToCompressedMHz(selection.stopMHz, activePairs);
 		chartPanel.repaint();
+	}
+
+	private IQSelection createVisibleIQSelection(MouseEvent event) {
+		int[] activePairs = parseRangePairs(getActiveRangesForDisplay());
+		XYPlot plot = chart.getXYPlot();
+		double lowerDomainMHz = Math.min(plot.getDomainAxis().getLowerBound(), plot.getDomainAxis().getUpperBound());
+		double upperDomainMHz = Math.max(plot.getDomainAxis().getLowerBound(), plot.getDomainAxis().getUpperBound());
+		double visibleLowerMHz = Math.min(domainToSelectionMHz(lowerDomainMHz, activePairs),
+				domainToSelectionMHz(upperDomainMHz, activePairs));
+		double visibleUpperMHz = Math.max(domainToSelectionMHz(lowerDomainMHz, activePairs),
+				domainToSelectionMHz(upperDomainMHz, activePairs));
+		double[] subRange = new double[] { visibleLowerMHz, visibleUpperMHz };
+
+		if (isIqReplayActive() && playbackIqFile != null) {
+			double[] sourceBounds = getIqReplaySourceBounds(playbackIqFile);
+			subRange[0] = Math.max(subRange[0], sourceBounds[0]);
+			subRange[1] = Math.min(subRange[1], sourceBounds[1]);
+		} else if (isMultiRange(activePairs)) {
+			double clickedMHz = domainToSelectionMHz(mouseToDomainMHz(event.getX()), activePairs);
+			int[] clickedRange = findRangeForFrequency(clickedMHz, activePairs);
+			subRange[0] = Math.max(subRange[0], Math.min(clickedRange[0], clickedRange[1]));
+			subRange[1] = Math.min(subRange[1], Math.max(clickedRange[0], clickedRange[1]));
+		}
+
+		if (subRange[1] - subRange[0] < IQ_SELECTION_MIN_BW_MHZ)
+			return null;
+		if (subRange[1] - subRange[0] > IQ_SELECTION_MAX_BW_MHZ) {
+			double centerMHz = (subRange[0] + subRange[1]) * 0.5d;
+			subRange[0] = centerMHz - IQ_SELECTION_MAX_BW_MHZ * 0.5d;
+			subRange[1] = centerMHz + IQ_SELECTION_MAX_BW_MHZ * 0.5d;
+		}
+
+		double anchorMHz = (subRange[0] + subRange[1]) * 0.5d;
+		IQSelection selection = new IQSelection(anchorMHz, subRange.clone(), false);
+		selection.startMHz = subRange[0];
+		selection.stopMHz = subRange[1];
+		int shift = isMultiRange(activePairs) ? getActiveFreqShiftForDisplay() : 0;
+		selection.displayStartMHz = selection.startMHz + shift;
+		selection.displayStopMHz = selection.stopMHz + shift;
+		selection.compressedStartMHz = selectionToCompressedMHz(selection.startMHz, activePairs);
+		selection.compressedStopMHz = selectionToCompressedMHz(selection.stopMHz, activePairs);
+		return selection;
+	}
+
+	private void flashIQSelectionAndOpen(IQSelection selection) {
+		if (selection == null)
+			return;
+		iqSelection = selection;
+		iqSelectionHighlightVisible = true;
+		chartPanel.repaint();
+		openIQAnalyzerForSelection(selection);
+
+		javax.swing.Timer clearHighlight = new javax.swing.Timer(IQ_SELECTION_DOUBLE_CLICK_FLASH_MS, event -> {
+			if (iqSelection == selection) {
+				iqSelection = null;
+				iqSelectionHighlightVisible = false;
+				chartPanel.repaint();
+			}
+		});
+		clearHighlight.setRepeats(false);
+		clearHighlight.start();
 	}
 
 	private void openIQAnalyzerForSelection(IQSelection selection) {
@@ -4976,6 +5041,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                 }
                 if (SwingUtilities.isRightMouseButton(e) && isInPlotRow(e.getY())) {
                 	iqSelection = startIQSelection(e);
+					iqSelectionAnchorX = clampMouseXToPlot(e.getX());
+					iqSelectionHighlightVisible = false;
                 	dragging = false;
                 	chartPanel.setDomainZoomable(false);
                 	chartPanel.requestFocus();
@@ -5023,16 +5090,26 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                 if (isDataReplayActive()) {
             		dragging = false;
             		iqSelection = null;
+					iqSelectionAnchorX = -1;
+					iqSelectionHighlightVisible = false;
             		chartPanel.repaint();
             		return;
             	}
             	if (iqSelection != null) {
             		IQSelection finishedSelection = iqSelection;
-					updateIQSelection(finishedSelection, e);
+					boolean doubleClick = SwingUtilities.isRightMouseButton(e) && e.getClickCount() >= 2;
+					boolean draggedSelection = iqSelectionHighlightVisible;
+					if (draggedSelection)
+						updateIQSelection(finishedSelection, e);
             		iqSelection = null;
+					iqSelectionAnchorX = -1;
+					iqSelectionHighlightVisible = false;
             		chartPanel.setDomainZoomable(true);
             		chartPanel.repaint();
-            		openIQAnalyzerForSelection(finishedSelection);
+					if (doubleClick)
+						flashIQSelectionAndOpen(createVisibleIQSelection(e));
+					else if (draggedSelection)
+						openIQAnalyzerForSelection(finishedSelection);
             		e.consume();
             		return;
                 }
@@ -5197,9 +5274,15 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
                 if (isDataReplayActive()) {
                 	dragging = false;
                 	iqSelection = null;
+					iqSelectionAnchorX = -1;
+					iqSelectionHighlightVisible = false;
                 	return;
                 }
                 if (iqSelection != null) {
+					if (!iqSelectionHighlightVisible
+							&& Math.abs(clampMouseXToPlot(e.getX()) - iqSelectionAnchorX) < IQ_SELECTION_DRAG_THRESHOLD_PX)
+						return;
+					iqSelectionHighlightVisible = true;
 					updateIQSelection(iqSelection, e);
                 	e.consume();
                 	return;
