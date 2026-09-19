@@ -29,6 +29,7 @@ final class LteCellDetailsFrame extends JFrame {
 	private final DefaultTableModel radio=model("Parameter","Value","Meaning");
 	private final DefaultTableModel reselection=model("Parameter","Value","Meaning");
 	private final DefaultTableModel paging=model("Statistic","Value","Meaning");
+	private final JTabbedPane tabs=new JTabbedPane();
 	private final JLabel status=new JLabel("Select an LTE cell in the main window.");
 	private final Timer timer;
 
@@ -42,14 +43,10 @@ final class LteCellDetailsFrame extends JFrame {
 		setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 		status.setBorder(new EmptyBorder(8,10,8,10));status.setForeground(Color.WHITE);
 		status.setOpaque(true);status.setBackground(Color.BLACK);
-		JTabbedPane tabs=new JTabbedPane();
 		tabs.addTab("SYSTEM",panel(system));
 		tabs.addTab("RADIO",panel(radio));
 		tabs.addTab("RESELECTION",panel(reselection));
 		tabs.addTab("PAGING",panel(paging));
-		tabs.setEnabledAt(1,false);
-		tabs.setEnabledAt(2,false);
-		tabs.setEnabledAt(3,false);
 		add(status,BorderLayout.NORTH);add(tabs,BorderLayout.CENTER);
 		setSize(820,500);setMinimumSize(new Dimension(680,380));
 		timer=new Timer(500,e->refresh());timer.start();refresh();
@@ -60,7 +57,11 @@ final class LteCellDetailsFrame extends JFrame {
 	private void refresh() {
 		int pci=pciSupplier.getAsInt();LteSignalAnalyzer.Candidate c=pci<0?null:cellSupplier.apply(pci);
 		system.setRowCount(0);radio.setRowCount(0);reselection.setRowCount(0);paging.setRowCount(0);
-		if(c==null){status.setText("Select an LTE cell in the main window.");return;}
+		if(c==null){
+			status.setText("Select an LTE cell in the main window.");
+			setTabAvailability(false,false,false);
+			return;
+		}
 		status.setText("PCI "+pci+" - last CRC-verified MIB and System Information retained during this session");
 		add(system,"Physical Cell ID",Integer.toString(c.pci),"Radio-layer identity; it is not a globally unique BTS identifier.");
 		add(system,"PSS / SSS quality",String.format(Locale.US,"%.1f %% / %.1f %%",c.correlation*100,c.sssCorrelation*100),"Synchronization quality for this PCI.");
@@ -84,6 +85,7 @@ final class LteCellDetailsFrame extends JFrame {
 
 		LteSignalAnalyzer.SiData retained=siSupplier.apply(pci);
 		LteSignalAnalyzer.SiData s=retained!=null?retained:c.si;
+		setTabAvailability(s.valid,s.sib3Valid,true);
 		add(radio,"Paging cycle",s.valid?"RF"+s.pagingCycle+"; nB "+pagingNb(s.pagingNb):WAIT,"Controls paging occasions; it is not a paging-event count.");
 		add(radio,"Random-access preambles",s.valid?Integer.toString(s.rachPreambles):WAIT,"Number of contention-based RACH signatures configured by the cell.");
 		add(radio,"PRACH configuration",s.valid?"Index "+s.prachConfig+", frequency offset "+s.prachOffset:WAIT,"Time/frequency placement used for initial uplink access.");
@@ -105,6 +107,13 @@ final class LteCellDetailsFrame extends JFrame {
 		add(paging,"Configured paging cycle",s.valid?"RF"+s.pagingCycle:WAIT,"Broadcast configuration from SIB2.");
 		add(paging,"Observed paging allocations",Long.toString(pagingCountSupplier.applyAsLong(pci)),"CRC-verified P-RNTI scheduling events; UE identifiers are not decoded or stored.");
 		add(paging,"Observation scope","Current program session","Statistics are not written to disk.");
+	}
+
+	private void setTabAvailability(boolean radioReady,boolean reselectionReady,boolean pagingReady){
+		tabs.setEnabledAt(1,radioReady);
+		tabs.setEnabledAt(2,reselectionReady);
+		tabs.setEnabledAt(3,pagingReady);
+		if(!tabs.isEnabledAt(tabs.getSelectedIndex()))tabs.setSelectedIndex(0);
 	}
 
 	private static JPanel panel(DefaultTableModel model){

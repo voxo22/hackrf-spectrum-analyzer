@@ -2,11 +2,14 @@ package jspectrumanalyzer.iq;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import javax.swing.BorderFactory;
 import javax.swing.JLabel;
@@ -16,6 +19,7 @@ import javax.swing.JTable;
 import javax.swing.SwingConstants;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.table.TableCellRenderer;
 
 /** Compact, session-scoped LTE cell list. Detailed SIB fields live in the cell-details window. */
 final class LteCellTablePanel extends JPanel {
@@ -54,6 +58,10 @@ final class LteCellTablePanel extends JPanel {
 		centered.setHorizontalAlignment(SwingConstants.CENTER);
 		centered.setBackground(Color.BLACK);centered.setForeground(Color.WHITE);
 		for(int q=0;q<COLUMNS.length;q++)table.getColumnModel().getColumn(q).setCellRenderer(centered);
+		TableCellRenderer wrapped=new WrapRenderer();
+		table.getColumnModel().getColumn(1).setCellRenderer(wrapped);
+		table.getColumnModel().getColumn(2).setCellRenderer(wrapped);
+		table.getColumnModel().getColumn(3).setCellRenderer(wrapped);
 		status.setBorder(BorderFactory.createEmptyBorder(3,7,3,7));
 		status.setForeground(new Color(0xdddddd));status.setBackground(Color.BLACK);status.setOpaque(true);
 		JScrollPane scroll=new JScrollPane(table);
@@ -69,12 +77,10 @@ final class LteCellTablePanel extends JPanel {
 				:new ArrayList<LteSignalAnalyzer.Candidate>(values);
 		model.setRowCount(0);
 		for(LteSignalAnalyzer.Candidate c:snapshot) {
-			String firstPlmn=c.sib1.valid&&!c.sib1.plmns.isEmpty()?c.sib1.plmns.get(0):WAIT;
-			String plmn=c.sib1.valid&&!c.sib1.plmns.isEmpty()?String.join(", ",c.sib1.plmns):WAIT;
-			String[] key=firstPlmn.split("-",2);
-			PlmnDatabase.Entry network=key.length==2?PlmnDatabase.lookup(key[0],key[1]):null;
+			String plmn=c.sib1.valid&&!c.sib1.plmns.isEmpty()?String.join("\n",c.sib1.plmns):WAIT;
+			List<PlmnDatabase.Entry> networks=networks(c.sib1.plmns);
 			model.addRow(new Object[]{
-					c.pci,plmn,network==null?WAIT:network.country,network==null?WAIT:network.networkName(),
+					c.pci,plmn,c.sib1.valid?countries(networks):WAIT,c.sib1.valid?networkNames(networks):WAIT,
 					c.sib1.valid?c.sib1.trackingAreaCode:WAIT,c.sib1.valid?c.sib1.cellIdentity:WAIT,
 					c.sib1.valid?c.sib1.frequencyBand:WAIT,c.mib.valid?bandwidth(c.mib.bandwidthRb):WAIT,
 					c.mib.valid?c.mib.antennaPorts:WAIT,
@@ -92,6 +98,7 @@ final class LteCellTablePanel extends JPanel {
 		}
 		status.setText(snapshot.size()+" LTE cell"+(snapshot.size()==1?"":"s")
 				+" - select a row and open Cell details");
+		resizeRows();
 	}
 
 	int selectedPci() {
@@ -103,5 +110,61 @@ final class LteCellTablePanel extends JPanel {
 	private static String bandwidth(int rb) {
 		switch(rb){case 6:return"1.4 MHz";case 15:return"3 MHz";case 25:return"5 MHz";
 			case 50:return"10 MHz";case 75:return"15 MHz";case 100:return"20 MHz";default:return rb+" RB";}
+	}
+
+	private static List<PlmnDatabase.Entry> networks(List<String> plmns) {
+		List<PlmnDatabase.Entry> result=new ArrayList<PlmnDatabase.Entry>();
+		for(String plmn:plmns) {
+			String[] key=plmn.split("-",2);
+			result.add(key.length==2?PlmnDatabase.lookup(key[0],key[1]):null);
+		}
+		return result;
+	}
+
+	private static String countries(List<PlmnDatabase.Entry> networks) {
+		Set<String> values=new LinkedHashSet<String>();
+		for(PlmnDatabase.Entry network:networks) if(network!=null&&network.country.length()>0) values.add(network.country);
+		return values.isEmpty()?WAIT:String.join("\n",values);
+	}
+
+	private static String networkNames(List<PlmnDatabase.Entry> networks) {
+		List<String> values=new ArrayList<String>();
+		for(PlmnDatabase.Entry network:networks) values.add(network==null?WAIT:network.networkName());
+		return values.isEmpty()?WAIT:String.join("\n",values);
+	}
+
+	private void resizeRows() {
+		for(int row=0;row<table.getRowCount();row++) {
+			int height=23;
+			for(int column=1;column<=3;column++) {
+				TableCellRenderer renderer=table.getCellRenderer(row,column);
+				Component component=table.prepareRenderer(renderer,row,column);
+				height=Math.max(height,component.getPreferredSize().height+2);
+			}
+			if(table.getRowHeight(row)!=height)table.setRowHeight(row,height);
+		}
+	}
+
+	private static final class WrapRenderer extends DefaultTableCellRenderer {
+		WrapRenderer() {
+			setOpaque(true);
+			setBorder(BorderFactory.createEmptyBorder(0,0,0,0));
+			setHorizontalAlignment(SwingConstants.CENTER);
+			setVerticalAlignment(SwingConstants.CENTER);
+		}
+
+		@Override public Component getTableCellRendererComponent(JTable table,Object value,
+				boolean selected,boolean focus,int row,int column) {
+			super.getTableCellRendererComponent(table,value,selected,focus,row,column);
+			setText("<html><center>"+html(value==null?"":value.toString()).replace("\n","<br>")+"</center></html>");
+			setForeground(selected?table.getSelectionForeground():table.getForeground());
+			setBackground(selected?table.getSelectionBackground():table.getBackground());
+			setFont(table.getFont());
+			return this;
+		}
+	}
+
+	private static String html(String value) {
+		return value.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;");
 	}
 }

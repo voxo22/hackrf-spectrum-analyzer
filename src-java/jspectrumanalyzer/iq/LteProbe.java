@@ -37,7 +37,7 @@ final class LteProbe {
 							: "--";
 					int transportBits = c.sib1Transport.transportBlockBits;
 					System.out.println(String.format(Locale.US,
-							"%5d ms PCI %3d MIB %s %dRB %dp SSS %.1f CFI %s PDCCH %s DCI %s PDSCH %dRE EVM %.1f TB %db K %s CRC %s PLMN %s hint %s PBCH %s",
+							"%5d ms PCI %3d MIB %s %dRB %dp SSS %.1f CFI %s PDCCH %s DCI %s PDSCH %dRE EVM %.1f TB %db K %s CRC %s PLMN %s asn %s hint %s PBCH %s",
 							position, c.pci, c.mib.valid ? "OK" : "--", c.mib.bandwidthRb, c.mib.antennaPorts,
 							c.sssCorrelation * 100, c.sib1Cfi.valid ? Integer.toString(c.sib1Cfi.cfi) : "--",
 							c.sib1Pdcch.valid ? String.format(Locale.US, "EVM %.1f", c.sib1Pdcch.qpskEvm * 100) : "--",
@@ -45,6 +45,7 @@ final class LteProbe {
 							transportBits, transportBits >= 0 ? Integer.toString(transportBits + 24) : "--",
 							c.sib1Transport.valid ? "OK" : "fail",
 							c.sib1.valid && !c.sib1.plmns.isEmpty() ? c.sib1.plmns.get(0) : "--",
+							c.sib1.valid ? "OK" : "--",
 							LteSignalAnalyzer.sib1DciDiagnostics(), LteSignalAnalyzer.pbchDiagnostics()));
 				}
 				if (!printed) {

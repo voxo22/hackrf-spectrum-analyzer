@@ -6,7 +6,7 @@ import java.util.Locale;
 final class NrProbe {
 	public static void main(String[] args) throws Exception {
 		if (args.length == 0) {
-			System.err.println("Usage: NrProbe <iq.wav> [maxMillis] [stepMillis] [windowMillis] [expectedPci] [startMillis] [surveyOnly]");
+			System.err.println("Usage: NrProbe <iq.wav> [maxMillis] [stepMillis] [windowMillis] [expectedPci] [startMillis] [surveyOnly] [fastAnalyze]");
 			return;
 		}
 		File file = new File(args[0]);
@@ -16,6 +16,7 @@ final class NrProbe {
 		int expectedPci = args.length > 4 ? Integer.parseInt(args[4]) : -1;
 		int startMillis = args.length > 5 ? Integer.parseInt(args[5]) : 0;
 		boolean surveyOnly = args.length <= 6 || Boolean.parseBoolean(args[6]);
+		boolean fastAnalyze = args.length > 7 && Boolean.parseBoolean(args[7]);
 		try (IQReplayFile replay = IQReplayFile.open(file)) {
 			int rate = replay.getSampleRateHz();
 			int windowSamples = (int)Math.min(Integer.MAX_VALUE / 2,
@@ -30,13 +31,14 @@ final class NrProbe {
 					position < Math.min(maxMillis, replay.getDurationMillis()); position += stepMillis) {
 				replay.seekMillis(position);
 				replay.readLoopedSigned(iq);
-				NrSignalAnalyzer.PssSurvey survey = analyzer.surveyPss(iq, iq.length, rate);
-				System.out.println(String.format(Locale.US, "%5d ms wide PSS survey: %d CP candidates",
-						position, survey.cpCandidates));
+				NrSignalAnalyzer.PssSurvey survey = fastAnalyze ? null : analyzer.surveyPss(iq, iq.length, rate);
+				if (survey != null) {
+					System.out.println(String.format(Locale.US, "%5d ms wide PSS survey: %d CP candidates",
+							position, survey.cpCandidates));
 				for (NrSignalAnalyzer.PssSurveyCandidate c : survey.candidates) {
 					System.out.println(String.format(Locale.US,
-							"%5d ms PSS NID2 %d score %.1f CP %.1f repeats %d mean %.1f offset %+7.1f kHz CFO %+6.1f Hz %s SSS %.1f/%.1f rawNID1 %d PCI %s dt %+d (%d bursts) DMRS %.1f/%.1f iBar %d iSSB %d nHF %d %s (%d bursts)",
-							position, c.nid2, c.pssCorrelation * 100d, c.cpCorrelation * 100d,
+							"%5d ms PSS SCS %d kHz NID2 %d score %.1f CP %.1f repeats %d mean %.1f offset %+7.1f kHz CFO %+6.1f Hz %s SSS %.1f/%.1f rawNID1 %d PCI %s dt %+d (%d bursts) DMRS %.1f/%.1f iBar %d iSSB %d nHF %d %s (%d bursts)",
+							position, c.ssbSubcarrierSpacingKhz, c.nid2, c.pssCorrelation * 100d, c.cpCorrelation * 100d,
 							c.periodicRepeats, c.periodicCorrelation * 100d, c.freqOffsetHz / 1000d,
 							c.cfoHz, c.iqOrientation > 0 ? "normal" : "conjugated",
 							c.sssCorrelation * 100d, c.secondSssCorrelation * 100d, c.rawNid1,
@@ -56,9 +58,14 @@ final class NrProbe {
 					}
 					if (c.pdcch.slot >= 0) {
 						System.out.println(String.format(Locale.US,
-								"          CORESET0 48 RB x 1 symbol, slot %d, DMRS %.1f%%, first bin %+d (%d pilots)",
-								c.pdcch.slot, c.pdcch.correlation * 100d, c.pdcch.coresetBin0,
-								c.pdcch.pilots));
+								"          CORESET0 %d RB x %d symbol%s, slot %d, DMRS %.1f%%, first bin %+d (%d pilots)",
+								c.pdcch.coresetRb, c.pdcch.coresetDuration,
+								c.pdcch.coresetDuration == 1 ? "" : "s", c.pdcch.slot,
+								c.pdcch.correlation * 100d, c.pdcch.coresetBin0, c.pdcch.pilots));
+						if (c.pdcch.debug.length() > 0) {
+							for (String line : c.pdcch.debug.split("\\n"))
+								System.out.println("          PDCCH debug " + line);
+						}
 					}
 					if (c.pdcch.dci.valid) {
 						NrPdcchDecoder.Dci d = c.pdcch.dci;
@@ -108,8 +115,10 @@ final class NrProbe {
 						}
 					}
 				}
+				}
 				if (surveyOnly) continue;
-				NrSignalAnalyzer.Result result = analyzer.analyze(iq, iq.length, rate);
+				NrSignalAnalyzer.Result result = fastAnalyze ? analyzer.analyzeFast(iq, iq.length, rate)
+						: analyzer.analyze(iq, iq.length, rate);
 				System.out.println(String.format(Locale.US,
 						"%5d ms result: %s, PCI %s, DMRS %.1f/%.1f, iSSB %d, nHF %d, airload %s",
 						position, result.state, result.pci >= 0 ? Integer.toString(result.pci) : "--",

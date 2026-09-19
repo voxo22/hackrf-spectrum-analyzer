@@ -5,9 +5,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-/** Small SC polar decoder for the downlink N=512 control-channel profiles used here. */
+/** SC and CRC-aided-list front end for NR downlink polar control-channel profiles. */
 final class NrPolarDecoder {
-	private static final int N = 512;
 	private static final int[] SUBBLOCK_PATTERN = {
 			0, 1, 2, 4, 3, 5, 6, 7, 8, 16, 9, 17, 10, 18, 11, 19,
 			12, 20, 13, 21, 14, 22, 15, 23, 24, 25, 26, 28, 27, 29, 30, 31
@@ -60,24 +59,67 @@ final class NrPolarDecoder {
 	private NrPolarDecoder() {}
 
 	static int[] decode(double[] rateMatched, int k) {
+		Prepared prepared = prepare(rateMatched, k);
+		if (prepared == null) return null;
+		int[] decoded = new int[prepared.mother.length];
+		polarDecode(prepared.mother, 0, prepared.information, decoded);
+		return message(decoded, prepared.informationSet, k);
+	}
+
+	static int[][] decodeList(double[] rateMatched, int k, int listSize) {
+		Prepared prepared = prepare(rateMatched, k);
+		if (prepared == null || listSize <= 0) return new int[0][];
+		List<Path> paths = new ArrayList<Path>();
+		paths.add(new Path(new int[prepared.mother.length], 0));
+		for (int bit = 0; bit < prepared.mother.length; bit++) {
+			List<Path> next = new ArrayList<Path>(prepared.information[bit]
+					? paths.size() * 2 : paths.size());
+			for (Path path : paths) {
+				double llr = bitLlr(prepared.mother, path.bits, 0, bit);
+				if (prepared.information[bit]) {
+					for (int value = 0; value <= 1; value++) {
+						int[] bits = path.bits.clone();
+						bits[bit] = value;
+						next.add(new Path(bits, path.metric + penalty(llr, value)));
+					}
+				} else {
+					path.bits[bit] = 0;
+					next.add(new Path(path.bits, path.metric + penalty(llr, 0)));
+				}
+			}
+			Collections.sort(next);
+			if (next.size() > listSize) next = new ArrayList<Path>(next.subList(0, listSize));
+			paths = next;
+		}
+		int[][] result = new int[paths.size()][];
+		for (int i = 0; i < paths.size(); i++)
+			result[i] = message(paths.get(i).bits, prepared.informationSet, k);
+		return result;
+	}
+
+	private static Prepared prepare(double[] rateMatched, int k) {
 		int e = rateMatched.length;
 		if (k < 36 || k > 164 || e <= k || e > 8192) return null;
-		double[] y = new double[N];
-		if (e >= N) {
-			for (int i = 0; i < e; i++) y[i % N] += rateMatched[i];
+		int n = codeLength(k, e);
+		if (n <= k) return null;
+		double[] y = new double[n];
+		if (e >= n) {
+			for (int i = 0; i < e; i++) y[i % n] += rateMatched[i];
 		} else if (16 * k <= 7 * e) {
-			System.arraycopy(rateMatched, 0, y, N - e, e);
+			System.arraycopy(rateMatched, 0, y, n - e, e);
 		} else {
 			System.arraycopy(rateMatched, 0, y, 0, e);
-			Arrays.fill(y, e, N, 1e9);
+			Arrays.fill(y, e, n, 1e9);
 		}
-		double[] mother = new double[N];
-		for (int j = 0; j < N; j++) mother[subblockIndex(j)] = y[j];
-		int[] informationSet = informationSet(k, e);
-		boolean[] information = new boolean[N];
+		double[] mother = new double[n];
+		for (int j = 0; j < n; j++) mother[subblockIndex(j, n)] = y[j];
+		int[] informationSet = informationSet(k, e, n);
+		boolean[] information = new boolean[n];
 		for (int value : informationSet) information[value] = true;
-		int[] decoded = new int[N];
-		polarDecode(mother, 0, information, decoded);
+		return new Prepared(mother, informationSet, information);
+	}
+
+	private static int[] message(int[] decoded, int[] informationSet, int k) {
 		int[] interleaved = new int[k];
 		for (int i = 0; i < k; i++) interleaved[i] = decoded[informationSet[i]];
 		int[] message = new int[k];
@@ -88,20 +130,32 @@ final class NrPolarDecoder {
 		return at == k ? message : null;
 	}
 
-	private static int[] informationSet(int k, int e) {
-		boolean[] excluded = new boolean[N];
-		int frozenByRate = Math.max(0, N - e);
+	private static int codeLength(int k, int e) {
+		int ceilLogE = 0;
+		while ((1 << ceilLogE) < e) ceilLogE++;
+		int n1 = 8 * e <= 9 * (1 << (ceilLogE - 1)) && 16 * k < 9 * e
+				? ceilLogE - 1 : ceilLogE;
+		int ceilLogK = 0;
+		while ((1 << ceilLogK) < k) ceilLogK++;
+		int exponent = Math.max(5, Math.min(9, Math.min(n1, ceilLogK + 3)));
+		return 1 << exponent;
+	}
+
+	private static int[] informationSet(int k, int e, int n) {
+		boolean[] excluded = new boolean[n];
+		int frozenByRate = Math.max(0, n - e);
 		int threshold = -1;
 		if (frozenByRate > 0) {
 			if (16 * k <= 7 * e) {
-				threshold = e >= 3 * N / 4 ? 3 * N / 4 - e / 2 - 1 : 9 * N / 16 - e / 4;
-				for (int j = 0; j < frozenByRate; j++) excluded[subblockIndex(j)] = true;
+				threshold = e >= 3 * n / 4 ? 3 * n / 4 - e / 2 - 1 : 9 * n / 16 - e / 4;
+				for (int j = 0; j < frozenByRate; j++) excluded[subblockIndex(j, n)] = true;
 			} else {
-				for (int j = e; j < N; j++) excluded[subblockIndex(j)] = true;
+				for (int j = e; j < n; j++) excluded[subblockIndex(j, n)] = true;
 			}
 		}
-		List<Integer> available = new ArrayList<Integer>(N);
-		for (int value : RELIABILITY) if (value > threshold && !excluded[value]) available.add(value);
+		List<Integer> available = new ArrayList<Integer>(n);
+		for (int value : RELIABILITY)
+			if (value < n && value > threshold && !excluded[value]) available.add(value);
 		List<Integer> selected = new ArrayList<Integer>(available.subList(available.size() - k, available.size()));
 		Collections.sort(selected);
 		int[] result = new int[k];
@@ -109,8 +163,9 @@ final class NrPolarDecoder {
 		return result;
 	}
 
-	private static int subblockIndex(int j) {
-		return SUBBLOCK_PATTERN[j / 16] * 16 + (j & 15);
+	private static int subblockIndex(int j, int n) {
+		int block = n / 32;
+		return SUBBLOCK_PATTERN[j / block] * block + j % block;
 	}
 
 	private static int[] polarDecode(double[] alpha, int offset, boolean[] information, int[] decoded) {
@@ -123,7 +178,7 @@ final class NrPolarDecoder {
 		double[] leftLlr = new double[half];
 		for (int i = 0; i < half; i++) {
 			double a = alpha[i], b = alpha[i + half];
-			leftLlr[i] = Math.copySign(Math.min(Math.abs(a), Math.abs(b)), a * b);
+			leftLlr[i] = combineF(a, b);
 		}
 		int[] left = polarDecode(leftLlr, offset, information, decoded);
 		double[] rightLlr = new double[half];
@@ -135,5 +190,69 @@ final class NrPolarDecoder {
 			beta[i + half] = right[i];
 		}
 		return beta;
+	}
+
+	private static double bitLlr(double[] alpha, int[] decisions, int offset, int target) {
+		if (alpha.length == 1) return alpha[0];
+		int half = alpha.length / 2;
+		if (target < offset + half) {
+			double[] left = new double[half];
+			for (int i = 0; i < half; i++) {
+				double a = alpha[i], b = alpha[i + half];
+				left[i] = combineF(a, b);
+			}
+			return bitLlr(left, decisions, offset, target);
+		}
+		int[] beta = new int[half];
+		System.arraycopy(decisions, offset, beta, 0, half);
+		polarTransform(beta);
+		double[] right = new double[half];
+		for (int i = 0; i < half; i++)
+			right[i] = alpha[i + half] + (1 - 2 * beta[i]) * alpha[i];
+		return bitLlr(right, decisions, offset + half, target);
+	}
+
+	private static void polarTransform(int[] bits) {
+		for (int step = 1; step < bits.length; step <<= 1)
+			for (int base = 0; base < bits.length; base += step << 1)
+				for (int i = 0; i < step; i++) bits[base + i] ^= bits[base + step + i];
+	}
+
+	private static double combineF(double a, double b) {
+		double absA = Math.abs(a), absB = Math.abs(b);
+		double value = Math.min(absA, absB)
+				+ Math.log1p(Math.exp(-Math.abs(a + b)))
+				- Math.log1p(Math.exp(-Math.abs(a - b)));
+		return Math.copySign(value, a * b);
+	}
+
+	private static double penalty(double llr, int bit) {
+		double signed = (bit == 0 ? 1 : -1) * llr;
+		return signed >= 0 ? Math.log1p(Math.exp(-signed))
+				: -signed + Math.log1p(Math.exp(signed));
+	}
+
+	private static final class Prepared {
+		final double[] mother;
+		final int[] informationSet;
+		final boolean[] information;
+		Prepared(double[] mother, int[] informationSet, boolean[] information) {
+			this.mother = mother;
+			this.informationSet = informationSet;
+			this.information = information;
+		}
+	}
+
+	private static final class Path implements Comparable<Path> {
+		final int[] bits;
+		final double metric;
+		Path(int[] bits, double metric) {
+			this.bits = bits;
+			this.metric = metric;
+		}
+		@Override
+		public int compareTo(Path other) {
+			return Double.compare(metric, other.metric);
+		}
 	}
 }

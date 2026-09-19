@@ -2981,6 +2981,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		currentSpectrumPlaybackFile = file;
 		resetTriggerRangeOnPlaybackStart = true;
 		clearPlaybackTriggerEvents();
+		// A pause left over from live capture must not make a newly selected replay
+		// appear to have failed before its first frame is shown.
+		parameterIsCapturingPaused.setValue(false);
 		stopSpectrumPlayback = false;
 		hwProcessingQueue.clear();
 		threadSpectrumPlayback = new Thread(() -> playReplayFile(file));

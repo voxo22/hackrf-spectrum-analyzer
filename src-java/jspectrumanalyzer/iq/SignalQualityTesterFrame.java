@@ -272,10 +272,18 @@ final class SignalQualityTesterFrame extends JFrame {
 		} else if (nrMode) {
 			nrParameterLabel.setBorder(BorderFactory.createCompoundBorder(
 					BorderFactory.createLineBorder(Color.DARK_GRAY), new EmptyBorder(10, 18, 10, 18)));
-			JPanel nrColumn = new JPanel(new GridLayout(2, 1, 0, 6));
+			JPanel nrColumn = new JPanel(new BorderLayout(0, 8));
+			JPanel nrParameters = new JPanel(new BorderLayout()) {
+				@Override public Dimension getPreferredSize() {
+					Dimension size = super.getPreferredSize();
+					return new Dimension(size.width, Math.max(120, size.height - 40));
+				}
+			};
+			nrParameters.setOpaque(false);
+			nrParameters.add(nrParameterLabel, BorderLayout.CENTER);
 			nrColumn.setBackground(PANEL_BG);
-			nrColumn.add(nrParameterLabel);
-			nrColumn.add(nrCellTablePanel);
+			nrColumn.add(nrParameters, BorderLayout.NORTH);
+			nrColumn.add(nrCellTablePanel, BorderLayout.CENTER);
 			plots.add(nrColumn);
 		} else if (umtsMode) {
 			umtsParameterLabel.setBorder(BorderFactory.createCompoundBorder(
@@ -504,7 +512,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		System.arraycopy(iqData, (length - wanted) & ~1, capture, 0, wanted);
 		nrAnalysisRunning = true;
 		Thread worker = new Thread(() -> {
-			try { latestNrResult = nrAnalyzer.analyze(capture, capture.length, sampleRateHz); }
+			try { latestNrResult = nrAnalyzer.analyzeFast(capture, capture.length, sampleRateHz); }
 			finally { nrAnalysisRunning = false; }
 		}, "5G NR SSB cell search");
 		worker.setDaemon(true); worker.setPriority(Thread.MIN_PRIORITY); worker.start();
@@ -1406,10 +1414,12 @@ final class SignalQualityTesterFrame extends JFrame {
 			lteCellTablePanel.updateCells(lteCells.values());
 			detailLabel.setText(String.format(Locale.US,"%s   PSS %.1f%%   detected cells %d",
 					lte.state,lte.correlation*100d,lteCells.size()));
+			LteSignalAnalyzer.Candidate selectedLte=lteCells.get(lteCellTablePanel.selectedPci());
 			String details=String.format(Locale.US,
 					"Acquisition|%s\nDetected cells|%d\nCurrent PSS / SSS|%.1f %% / %.1f %%\nIQ orientation|%s\nChannel center|%.6f MHz\nIQ sample rate|%.3f MS/s",
 					lte.state,lteCells.size(),lte.correlation*100d,lte.sssCorrelation*100d,
 					lte.iqOrientation>0?"normal":"conjugated",active.centerFreqHz/1e6,active.sampleRateHz/1e6);
+			if(selectedLte!=null)details+="\n"+lteDecodeBreadcrumb(selectedLte);
 			lteParameterLabel.setText(parameterTable("LTE CELL ACQUISITION / SESSION STATUS",details,lte.state));
 		} else if (nrMode && active.nrResult != null) {
 			NrSignalAnalyzer.Result nr = active.nrResult;
@@ -1439,6 +1449,7 @@ final class SignalQualityTesterFrame extends JFrame {
 					nr.dmrsConfirmed ? String.format(Locale.US, "%.1f %%", nr.dmrsCorrelation * 100d) : "searching",
 					nr.mib.valid ? "decoded" : "waiting", nr.sib1.valid ? "decoded" : "waiting",
 					nr.iqOrientation > 0 ? "normal" : nr.iqOrientation < 0 ? "conjugated" : "searching");
+			if(nr.pci>=0)details+="\n"+nrDecodeBreadcrumb(nr);
 			nrParameterLabel.setText(parameterTable("NR CELL ACQUISITION / SESSION STATUS", details, nr.state));
 		} else if (umtsMode && active.umtsResult != null) {
 			UmtsSignalAnalyzer.Result umts = active.umtsResult;
@@ -1563,6 +1574,117 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (status == null || status.length() == 0 || "--".equals(status)) return;
 		if (out.length() > 0) out.append(", ");
 		out.append(label);
+	}
+
+	private static String lteDecodeBreadcrumb(LteSignalAnalyzer.Candidate c) {
+		StringBuilder out=new StringBuilder();
+		out.append("Selected PCI|").append(c.pci);
+		out.append("\nLTE MIB|").append(c.mib.valid
+				? "CRC OK, "+c.mib.bandwidthRb+" RB, "+c.mib.antennaPorts+" ports, SFN "+c.mib.systemFrameNumber
+				: "waiting");
+		out.append("\nSIB1 CFI|").append(c.sib1Cfi.valid
+				? "CFI "+c.sib1Cfi.cfi+String.format(Locale.US,", confidence %.0f %%",c.sib1Cfi.confidence*100d)
+				: "waiting");
+		out.append("\nSIB1 PDCCH|").append(c.sib1Pdcch.valid
+				? String.format(Locale.US,"QPSK EVM %.1f %%, CCE %d",c.sib1Pdcch.qpskEvm*100d,c.sib1Pdcch.cceCount)
+				: "waiting");
+		out.append("\nSIB1 DCI|").append(dciSummary(c.sib1Pdcch.systemDci));
+		out.append("\nSIB1 PDSCH|").append(c.sib1Pdsch.valid
+				? String.format(Locale.US,"%d RE, QPSK EVM %.1f %%",c.sib1Pdsch.resourceElements,c.sib1Pdsch.qpskEvm*100d)
+				: "waiting");
+		out.append("\nSIB1 TB CRC|").append(transportSummary(c.sib1Transport));
+		out.append("\nSIB1 ASN.1|").append(c.sib1.valid
+				? "OK, PLMN "+String.join(", ",c.sib1.plmns)+", TAC "+c.sib1.trackingAreaCode
+				: c.sib1Transport.valid ? "decode failed" : "waiting");
+		out.append("\nSI/SIB2 DCI|").append(c.siSubframe>=0
+				? "SF offset "+c.siFrameOffset+", subframe "+c.siSubframe+", "+dciSummary(c.siPdcch.systemDci)
+				: c.sib1.valid ? "searching SI window" : "waiting for SIB1");
+		out.append("\nSI/SIB2 PDSCH|").append(c.siPdsch.valid
+				? String.format(Locale.US,"%d RE, QPSK EVM %.1f %%",c.siPdsch.resourceElements,c.siPdsch.qpskEvm*100d)
+				: c.siSubframe>=0 ? "not extracted" : "waiting");
+		out.append("\nSI/SIB2 TB CRC|").append(transportSummary(c.siTransport));
+		out.append("\nSI/SIB2 ASN.1|").append(c.si.valid
+				? "OK, SIB items "+c.si.itemCount+", paging RF"+c.si.pagingCycle
+				: c.siTransport.valid ? "decode failed"+(LteSignalAnalyzer.siDiagnostics().length()>0?": "+LteSignalAnalyzer.siDiagnostics():"") : "waiting");
+		return out.toString();
+	}
+
+	private static String dciSummary(LteSignalAnalyzer.DciData dci) {
+		if(dci==null||!dci.format1A)return "waiting";
+		return "CRC OK, L"+dci.aggregation+"/CCE"+dci.firstCce
+				+", RB "+dci.rbStart+"+"+dci.rbLength
+				+", MCS "+dci.mcs+", RV "+dci.rv+", N1A "+dci.nPrb1a;
+	}
+
+	private static String transportSummary(LteSignalAnalyzer.Sib1TransportData transport) {
+		if(transport==null||transport.transportBlockBits<0)return "waiting";
+		return (transport.valid?"CRC OK":"CRC fail")
+				+", TBS "+transport.transportBlockBits+" b"
+				+", K "+(transport.transportBlockBits+24)
+				+", repeats "+transport.transmissions
+				+", turbo "+transport.iterations+" it";
+	}
+
+	private static String nrDecodeBreadcrumb(NrSignalAnalyzer.Result nr) {
+		StringBuilder out=new StringBuilder();
+		NrPdcchDecoder.Survey pdcch=nr.pdcch;
+		out.append("Selected PCI|").append(nr.pci);
+		out.append("\nNR PSS / SSS|").append(String.format(Locale.US,
+				"OK, %.1f %% / %.1f %%",nr.pssCorrelation*100d,nr.sssCorrelation*100d));
+		out.append("\nPBCH DM-RS|").append(nr.dmrsConfirmed
+				? String.format(Locale.US,"OK, %.1f %%, iSSB %d, nHF %d",
+						nr.dmrsCorrelation*100d,nr.iBarSsb>=0?nr.iBarSsb&3:-1,
+						nr.iBarSsb>=0?nr.iBarSsb/4:-1)
+				: "waiting");
+		out.append("\nPBCH / MIB|").append(nr.mib.valid
+				? "CRC OK, SCS "+nr.mib.subcarrierSpacingCommonKhz+" kHz, PDCCH 0x"
+						+String.format(Locale.US,"%02X",nr.mib.pdcchConfigSib1)
+				: "waiting");
+		out.append("\nCORESET0|").append(pdcch.slot>=0
+				? String.format(Locale.US,"OK, %d RB x %d sym, slot %d, %.1f %%",
+						pdcch.coresetRb,pdcch.coresetDuration,pdcch.slot,pdcch.correlation*100d)
+				: nr.mib.valid ? "searching Type0 CSS" : "waiting for MIB");
+		out.append("\nPDCCH SI-RNTI DCI|").append(nrDciSummary(pdcch.dci));
+		out.append("\nPDCCH best candidate|").append(pdcch.dci.valid?"CRC OK":pdcch.debug.length()>0?shortPdcchCandidate(firstLine(pdcch.debug)):pdcch.slot>=0?"no CRC OK":"waiting");
+		NrPdschDecoder.Decoded pdsch=pdcch.pdsch;
+		out.append("\nSIB1 PDSCH|").append(pdsch.demodulated
+				? String.format(Locale.US,"OK, EVM %.1f %%, RE %d",pdsch.evm*100d,pdsch.dataResourceElements)
+				: pdcch.dci.valid ? "waiting" : "waiting for DCI");
+		out.append("\nSIB1 LDPC / CRC|").append(pdsch.demodulated
+				? String.format(Locale.US,"%s, TBS %d b, %d it",
+						pdsch.transportBlock.crcOk?"CRC OK":"CRC fail",pdsch.transportBlockBits,
+						pdsch.transportBlock.iterations)
+				: "waiting");
+		out.append("\nSIB1 ASN.1|").append(nr.sib1.valid
+				? "OK, PLMN "+String.join(", ",nr.sib1.plmns)
+				: pdsch.transportBlock.crcOk ? "decode failed" : "waiting");
+		return out.toString();
+	}
+
+	private static String nrDciSummary(NrPdcchDecoder.Dci dci) {
+		if(dci==null||!dci.valid)return "waiting";
+		return "CRC OK, AL"+dci.aggregation+"/nCCE"+dci.ncce
+				+", RB "+dci.rbStart+"+"+dci.rbLength
+				+", MCS "+dci.mcs+", RV "+dci.rv;
+	}
+
+	private static String firstLine(String value) {
+		int at=value.indexOf('\n');
+		return at<0?value:value.substring(0,at);
+	}
+
+	private static String shortPdcchCandidate(String value) {
+		if(value==null||value.length()==0)return "searching";
+		String[] parts=value.split(" ");
+		StringBuilder out=new StringBuilder();
+		for(String part:parts) {
+			if(part.startsWith("crcW")||part.startsWith("AL")||part.startsWith("nCCE")
+					||part.startsWith("MCS")||part.startsWith("RV")) {
+				if(out.length()>0)out.append(' ');
+				out.append(part);
+			}
+		}
+		return out.length()>0?out.toString():value;
 	}
 
 	private static void appendRdsPairRow(StringBuilder html, String leftKey, String leftValue,

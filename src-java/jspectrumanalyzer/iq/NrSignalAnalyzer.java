@@ -6,7 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Lightweight 5G NR SSB acquisition: PSS/SSS cell search for FR1 15 kHz SCS captures. */
+/** Lightweight 5G NR SSB acquisition: PSS/SSS cell search for FR1 15/30 kHz SSB captures. */
 final class NrSignalAnalyzer {
 	private static final int BASE_RATE = 7_680_000;
 	private static final int FFT_SIZE = 512;
@@ -16,6 +16,10 @@ final class NrSignalAnalyzer {
 	private static final int SURVEY_MAX_OFFSET = 260;
 	private static final int SURVEY_CP_CANDIDATES = 1400;
 	private static final int PSS_LENGTH = 127;
+	private static final SurveyConfig[] SURVEY_CONFIGS = {
+			new SurveyConfig(15, 15_360_000, SURVEY_CP, SURVEY_MAX_OFFSET),
+			new SurveyConfig(30, 30_720_000, SURVEY_CP, 340)
+	};
 	private static final int[] CP_CANDIDATES = { 36, 40, 32, 44 };
 	private static final int[] FREQ_OFFSETS = {
 			0, -24, 24, -48, 48, -72, 72, -96, 96, -120, 120, -144, 144, -168, 168, -192, 192
@@ -27,23 +31,63 @@ final class NrSignalAnalyzer {
 	private static final double[][][] SURVEY_FILTERS = buildSurveyFilters();
 
 	PssSurvey surveyPss(byte[] iq, int length, int sampleRateHz) {
+		return surveyPss(iq, length, sampleRateHz, true, true);
+	}
+
+	private PssSurvey surveyPss(byte[] iq, int length, int sampleRateHz,
+			boolean decodePdcch15, boolean decodePdcch30) {
+		List<PssSurveyCandidate> merged = new ArrayList<PssSurveyCandidate>();
+		int cpCount = 0;
+		for (SurveyConfig config : SURVEY_CONFIGS) {
+			boolean decodePdcch = config.ssbSubcarrierSpacingKhz == 15 ? decodePdcch15 : decodePdcch30;
+			PssSurvey survey = surveyPss(iq, length, sampleRateHz, config, decodePdcch);
+			cpCount += survey.cpCandidates;
+			merged.addAll(survey.candidates);
+		}
+		Collections.sort(merged, (a, b) -> {
+			if ((a.pci >= 0) != (b.pci >= 0)) return a.pci >= 0 ? -1 : 1;
+			if (a.dmrsConfirmed != b.dmrsConfirmed) return a.dmrsConfirmed ? -1 : 1;
+			int repeatCompare = Integer.compare(b.periodicRepeats, a.periodicRepeats);
+			if (repeatCompare != 0) return repeatCompare;
+			return Double.compare(b.sssCorrelation, a.sssCorrelation);
+		});
+		List<PssSurveyCandidate> unique = new ArrayList<PssSurveyCandidate>();
+		for (PssSurveyCandidate candidate : merged) {
+			boolean duplicate = false;
+			for (PssSurveyCandidate kept : unique) {
+				if (candidate.pci >= 0 && candidate.pci == kept.pci
+						&& candidate.ssbSubcarrierSpacingKhz == kept.ssbSubcarrierSpacingKhz
+						&& Math.abs(candidate.freqOffsetHz - kept.freqOffsetHz)
+								<= candidate.ssbSubcarrierSpacingKhz * 1000) {
+					duplicate = true;
+					break;
+				}
+			}
+			if (!duplicate) unique.add(candidate);
+			if (unique.size() >= 16) break;
+		}
+		return new PssSurvey(Collections.unmodifiableList(unique), cpCount);
+	}
+
+	private PssSurvey surveyPss(byte[] iq, int length, int sampleRateHz, SurveyConfig config,
+			boolean decodePdcch) {
 		int inputSamples = Math.min(length, iq == null ? 0 : iq.length) / 2;
 		if (sampleRateHz < 5_000_000 || inputSamples < sampleRateHz / 50) {
 			return new PssSurvey(Collections.<PssSurveyCandidate>emptyList(), 0);
 		}
-		double[][] resampled = resample(iq, inputSamples, sampleRateHz, SURVEY_RATE);
+		double[][] resampled = resample(iq, inputSamples, sampleRateHz, config.sampleRateHz);
 		double[] inI = resampled[0], inQ = resampled[1];
-		List<CpCandidate> cpCandidates = findCpCandidates(inI, inQ);
+		List<CpCandidate> cpCandidates = findCpCandidates(inI, inQ, config);
 		List<PssSurveyCandidate> detected = new ArrayList<PssSurveyCandidate>();
 		for (CpCandidate cp : cpCandidates) {
 			for (int orientation = 0; orientation < 2; orientation++) {
-				PssSurveyCandidate best = spectralPss(inI, inQ, cp, orientation);
+				PssSurveyCandidate best = spectralPss(inI, inQ, cp, orientation, config);
 				if (best != null) detected.add(best);
 			}
 		}
 		Collections.sort(detected, (a, b) -> Double.compare(b.pssCorrelation, a.pssCorrelation));
 		if (detected.size() > 300) detected = new ArrayList<PssSurveyCandidate>(detected.subList(0, 300));
-		int period = SURVEY_RATE / 50;
+		int period = config.sampleRateHz / 50;
 		List<PssSurveyCandidate> confirmed = new ArrayList<PssSurveyCandidate>();
 		for (PssSurveyCandidate candidate : detected) {
 			int repeats = 1;
@@ -67,7 +111,8 @@ final class NrSignalAnalyzer {
 			boolean duplicate = false;
 			for (PssSurveyCandidate kept : unique) {
 				if (candidate.nid2 == kept.nid2 && candidate.iqOrientation == kept.iqOrientation
-						&& Math.abs(candidate.freqOffsetHz - kept.freqOffsetHz) <= 30_000
+						&& Math.abs(candidate.freqOffsetHz - kept.freqOffsetHz)
+								<= config.ssbSubcarrierSpacingKhz * 1000
 						&& Math.abs(Math.floorMod(candidate.sample - kept.sample, period)) <= 160) {
 					duplicate = true;
 					break;
@@ -77,7 +122,8 @@ final class NrSignalAnalyzer {
 			if (unique.size() >= 12) break;
 		}
 		List<PssSurveyCandidate> decoded = new ArrayList<PssSurveyCandidate>();
-		for (PssSurveyCandidate candidate : unique) decoded.add(decodeSurveySss(inI, inQ, candidate));
+		for (PssSurveyCandidate candidate : unique)
+			decoded.add(decodeSurveySss(inI, inQ, candidate, config, decodePdcch));
 		Collections.sort(decoded, (a, b) -> {
 			if ((a.pci >= 0) != (b.pci >= 0)) return a.pci >= 0 ? -1 : 1;
 			int repeatCompare = Integer.compare(b.periodicRepeats, a.periodicRepeats);
@@ -88,12 +134,12 @@ final class NrSignalAnalyzer {
 	}
 
 	private static PssSurveyCandidate decodeSurveySss(double[] inI, double[] inQ,
-			PssSurveyCandidate candidate) {
+			PssSurveyCandidate candidate, SurveyConfig config, boolean decodePdcch) {
 		int bestNid1 = -1, bestDelta = 0, bestRepeats = 0;
 		double best = 0, second = 0;
-		int period = SURVEY_RATE / 50;
-		int sssSpacing = 2 * (SURVEY_FFT + SURVEY_CP);
-		double omega = candidate.cfoHz * 2d * Math.PI / SURVEY_RATE;
+		int period = config.sampleRateHz / 50;
+		int sssSpacing = 2 * (SURVEY_FFT + config.cpSamples);
+		double omega = candidate.cfoHz * 2d * Math.PI / config.sampleRateHz;
 		for (int delta = -12; delta <= 12; delta++) {
 			double[] scoreSum = new double[336];
 			int repeats = 0;
@@ -150,24 +196,24 @@ final class NrSignalAnalyzer {
 		}
 		int pci = best >= 0.45 && best >= second * 1.35 ? 3 * bestNid1 + candidate.nid2 : -1;
 		PssSurveyCandidate withSss = candidate.withSss(pci, bestNid1, best, second, bestDelta, bestRepeats);
-		return pci >= 0 ? decodePbchDmrs(inI, inQ, withSss) : withSss;
+		return pci >= 0 ? decodePbchDmrs(inI, inQ, withSss, config, decodePdcch) : withSss;
 	}
 
 	private static PssSurveyCandidate decodePbchDmrs(double[] inI, double[] inQ,
-			PssSurveyCandidate candidate) {
+			PssSurveyCandidate candidate, SurveyConfig config, boolean decodePdcch) {
 		double[] sums = new double[8];
 		int[] counts = new int[8];
 		double[][][] references = new double[8][][];
 		for (int iBarSsb = 0; iBarSsb < 8; iBarSsb++) references[iBarSsb] = pbchDmrs(candidate.pci, iBarSsb);
-		int period = SURVEY_RATE / 50;
-		double omega = candidate.cfoHz * 2d * Math.PI / SURVEY_RATE;
+		int period = config.sampleRateHz / 50;
+		double omega = candidate.cfoHz * 2d * Math.PI / config.sampleRateHz;
 		for (int repeat = -3; repeat <= 3; repeat++) {
 			int pssAt = candidate.sample + repeat * period + candidate.sssTimingDelta;
-			if (pssAt < 0 || pssAt + 3 * (SURVEY_FFT + SURVEY_CP) + SURVEY_FFT > inI.length) continue;
+			if (pssAt < 0 || pssAt + 3 * (SURVEY_FFT + config.cpSamples) + SURVEY_FFT > inI.length) continue;
 			double[][][] symbols = new double[3][][];
 			for (int symbol = 1; symbol <= 3; symbol++) {
 				symbols[symbol - 1] = surveySymbol(inI, inQ,
-						pssAt + symbol * (SURVEY_FFT + SURVEY_CP), candidate.sample, omega,
+						pssAt + symbol * (SURVEY_FFT + config.cpSamples), candidate.sample, omega,
 						candidate.iqOrientation);
 			}
 			for (int iBarSsb = 0; iBarSsb < 8; iBarSsb++) {
@@ -229,11 +275,11 @@ final class NrSignalAnalyzer {
 		NrPbchDecoder.Decoded bestPbch = NrPbchDecoder.Decoded.EMPTY;
 		for (int repeat = -3; repeat <= 3; repeat++) {
 			int pssAt = candidate.sample + repeat * period + candidate.sssTimingDelta;
-			if (pssAt < 0 || pssAt + 3 * (SURVEY_FFT + SURVEY_CP) + SURVEY_FFT > inI.length) continue;
+			if (pssAt < 0 || pssAt + 3 * (SURVEY_FFT + config.cpSamples) + SURVEY_FFT > inI.length) continue;
 			double[][][] symbols = new double[3][][];
 			for (int symbol = 1; symbol <= 3; symbol++) {
 				symbols[symbol - 1] = surveySymbol(inI, inQ,
-						pssAt + symbol * (SURVEY_FFT + SURVEY_CP), candidate.sample, omega,
+						pssAt + symbol * (SURVEY_FFT + config.cpSamples), candidate.sample, omega,
 						candidate.iqOrientation);
 			}
 			NrPbchDecoder.Decoded decoded = NrPbchDecoder.decode(symbols, candidate.pci, bestIBar,
@@ -244,7 +290,7 @@ final class NrSignalAnalyzer {
 			if (decoded.crcOk) break;
 		}
 		result = result.withPbch(bestPbch);
-		if (bestPbch.mib.valid) {
+		if (decodePdcch && bestPbch.mib.valid) {
 			result = result.withPdcch(NrPdcchDecoder.survey(inI, inQ, result, bestPbch.mib));
 			result.load = estimateDownlinkLoad(inI, inQ, result);
 		}
@@ -359,13 +405,13 @@ final class NrSignalAnalyzer {
 		return result;
 	}
 
-	private static List<CpCandidate> findCpCandidates(double[] inI, double[] inQ) {
+	private static List<CpCandidate> findCpCandidates(double[] inI, double[] inQ, SurveyConfig config) {
 		List<CpCandidate> blocks = new ArrayList<CpCandidate>();
-		int first = SURVEY_CP, last = inI.length - SURVEY_FFT - 1;
+		int first = config.cpSamples, last = inI.length - SURVEY_FFT - 1;
 		if (last <= first) return blocks;
 		double cr = 0, ci = 0, pa = 0, pb = 0;
-		for (int n = 0; n < SURVEY_CP; n++) {
-			int a = first - SURVEY_CP + n, b = first + SURVEY_FFT - SURVEY_CP + n;
+		for (int n = 0; n < config.cpSamples; n++) {
+			int a = first - config.cpSamples + n, b = first + SURVEY_FFT - config.cpSamples + n;
 			double ar = inI[a], ai = inQ[a], br = inI[b], bi = inQ[b];
 			cr += ar * br + ai * bi;
 			ci += ai * br - ar * bi;
@@ -384,7 +430,7 @@ final class NrSignalAnalyzer {
 				blockBest = null;
 			}
 			if (useful == last) break;
-			int oldA = useful - SURVEY_CP, oldB = useful + SURVEY_FFT - SURVEY_CP;
+			int oldA = useful - config.cpSamples, oldB = useful + SURVEY_FFT - config.cpSamples;
 			int newA = useful, newB = useful + SURVEY_FFT;
 			double ar = inI[oldA], ai = inQ[oldA], br = inI[oldB], bi = inQ[oldB];
 			cr -= ar * br + ai * bi;
@@ -412,7 +458,8 @@ final class NrSignalAnalyzer {
 		return result;
 	}
 
-	private static PssSurveyCandidate spectralPss(double[] inI, double[] inQ, CpCandidate cp, int orientation) {
+	private static PssSurveyCandidate spectralPss(double[] inI, double[] inQ, CpCandidate cp, int orientation,
+			SurveyConfig config) {
 		double[] binsR = new double[SURVEY_FFT], binsI = new double[SURVEY_FFT];
 		for (int n = 0; n < SURVEY_FFT; n++) {
 			double phase = -cp.omega * n, ca = Math.cos(phase), sa = Math.sin(phase);
@@ -435,7 +482,7 @@ final class NrSignalAnalyzer {
 				corrI[n] = ar * bi + ai * br;
 			}
 			fft(corrR, corrI, true);
-			for (int center = -SURVEY_MAX_OFFSET; center <= SURVEY_MAX_OFFSET; center++) {
+			for (int center = -config.maxOffsetBins; center <= config.maxOffsetBins; center++) {
 				double power = 0;
 				for (int d = -63; d <= 63; d++) {
 					int bin = Math.floorMod(center + d, SURVEY_FFT);
@@ -452,12 +499,14 @@ final class NrSignalAnalyzer {
 			}
 		}
 		if (bestNid2 < 0) return null;
-		double cfoHz = cp.omega * SURVEY_RATE / (2d * Math.PI);
-		int frequency = (int)Math.round((orientation == 0 ? bestCenter : -bestCenter) * 15_000d + cfoHz);
+		double cfoHz = cp.omega * config.sampleRateHz / (2d * Math.PI);
+		int frequency = (int)Math.round((orientation == 0 ? bestCenter : -bestCenter)
+				* config.ssbSubcarrierSpacingKhz * 1000d + cfoHz);
 		return new PssSurveyCandidate(bestNid2, best, cp.cpCorrelation, cp.sample, frequency,
 				orientation == 0 ? 1 : -1, cfoHz, 1, best, bestCenter,
 				-1, -1, 0, 0, 0, 0, false, -1, 0, 0, 0,
-				false, 0, MibData.EMPTY, NrPdcchDecoder.Survey.EMPTY);
+				false, 0, MibData.EMPTY, NrPdcchDecoder.Survey.EMPTY,
+				config.ssbSubcarrierSpacingKhz, config.sampleRateHz, config.cpSamples);
 	}
 
 	private static PssSurveyCandidate periodicMatch(List<PssSurveyCandidate> candidates,
@@ -469,7 +518,8 @@ final class NrSignalAnalyzer {
 				if (candidate == anchor || candidate.nid2 != anchor.nid2
 						|| candidate.iqOrientation != anchor.iqOrientation) continue;
 				if (Math.abs(candidate.sample - expected) > 180
-						|| Math.abs(candidate.freqOffsetHz - anchor.freqOffsetHz) > 30_000) continue;
+						|| Math.abs(candidate.freqOffsetHz - anchor.freqOffsetHz)
+								> anchor.ssbSubcarrierSpacingKhz * 1000) continue;
 				if (best == null || candidate.pssCorrelation > best.pssCorrelation) best = candidate;
 			}
 		}
@@ -522,14 +572,24 @@ final class NrSignalAnalyzer {
 
 	Result analyze(byte[] iq, int length, int sampleRateHz) {
 		PssSurvey survey = surveyPss(iq, length, sampleRateHz);
+		return resultFromSurvey(survey);
+	}
+
+	Result analyzeFast(byte[] iq, int length, int sampleRateHz) {
+		PssSurvey survey = surveyPss(iq, length, sampleRateHz, true, false);
+		return resultFromSurvey(survey);
+	}
+
+	private static Result resultFromSurvey(PssSurvey survey) {
 		if (survey.candidates.isEmpty()) return Result.empty("Searching 5G NR PSS");
 		List<Candidate> candidates = new ArrayList<Candidate>();
 		for (PssSurveyCandidate value : survey.candidates) {
 			int rawPci = value.rawNid1 >= 0 ? 3 * value.rawNid1 + value.nid2 : -1;
+			int surveyToBase = Math.max(1, value.surveySampleRateHz / BASE_RATE);
 			candidates.add(new Candidate(value.pci, value.pci >= 0 ? value.rawNid1 : -1, value.nid2,
 					rawPci, value.rawNid1, value.nid2, value.pssCorrelation, value.sssCorrelation,
-					value.sample / 2, value.freqOffsetHz, value.iqOrientation,
-					(SURVEY_CP + value.sssTimingDelta) / 2, value.cfoHz));
+					value.sample / surveyToBase, value.freqOffsetHz, value.iqOrientation,
+					(value.surveyCpSamples + value.sssTimingDelta) / surveyToBase, value.cfoHz));
 		}
 		Candidate primary = candidates.get(0);
 		PssSurveyCandidate surveyPrimary = survey.candidates.get(0);
@@ -552,7 +612,7 @@ final class NrSignalAnalyzer {
 				primary.iqOrientation, quality, state, Collections.unmodifiableList(candidates),
 				surveyPrimary.dmrsConfirmed, surveyPrimary.dmrsCorrelation,
 				surveyPrimary.secondDmrsCorrelation, surveyPrimary.iBarSsb, surveyPrimary.dmrsBursts,
-				surveyPrimary.mib, sib1, surveyPrimary.load);
+				surveyPrimary.mib, sib1, surveyPrimary.load, surveyPrimary.pdcch);
 	}
 
 	@SuppressWarnings("unused")
@@ -635,7 +695,8 @@ final class NrSignalAnalyzer {
 				primary == null ? strongestPss == null ? -1 : strongestPss.nid2 : primary.nid2,
 				pss, sss, primary == null ? -1 : primary.sample, primary == null ? 0 : primary.freqOffsetHz,
 				primary == null ? 1 : primary.iqOrientation, quality, state, Collections.unmodifiableList(unique),
-				false, 0, 0, -1, 0, MibData.EMPTY, Sib1Data.EMPTY, LoadData.EMPTY);
+				false, 0, 0, -1, 0, MibData.EMPTY, Sib1Data.EMPTY, LoadData.EMPTY,
+				NrPdcchDecoder.Survey.EMPTY);
 	}
 
 	private static Peak findPeak(double[] inI, double[] inQ, int nid2, int freqOffset, int orientation, boolean reversed,
@@ -1096,9 +1157,20 @@ final class NrSignalAnalyzer {
 		}
 	}
 
+	private static final class SurveyConfig {
+		final int ssbSubcarrierSpacingKhz, sampleRateHz, cpSamples, maxOffsetBins;
+		SurveyConfig(int ssbSubcarrierSpacingKhz, int sampleRateHz, int cpSamples, int maxOffsetBins) {
+			this.ssbSubcarrierSpacingKhz = ssbSubcarrierSpacingKhz;
+			this.sampleRateHz = sampleRateHz;
+			this.cpSamples = cpSamples;
+			this.maxOffsetBins = maxOffsetBins;
+		}
+	}
+
 	static final class PssSurveyCandidate {
 		final int nid2, sample, freqOffsetHz, iqOrientation, periodicRepeats, centerBin;
 		final int pci, rawNid1, sssTimingDelta, sssRepeats, iBarSsb, dmrsBursts;
+		final int ssbSubcarrierSpacingKhz, surveySampleRateHz, surveyCpSamples;
 		final double pssCorrelation, cpCorrelation, cfoHz, periodicCorrelation;
 		final double sssCorrelation, secondSssCorrelation, dmrsCorrelation, secondDmrsCorrelation, pbchEvm;
 		final boolean dmrsConfirmed, pbchCrcOk;
@@ -1111,7 +1183,8 @@ final class NrSignalAnalyzer {
 				double sssCorrelation, double secondSssCorrelation, int sssTimingDelta, int sssRepeats,
 				boolean dmrsConfirmed, int iBarSsb, double dmrsCorrelation,
 				double secondDmrsCorrelation, int dmrsBursts, boolean pbchCrcOk, double pbchEvm,
-				MibData mib, NrPdcchDecoder.Survey pdcch) {
+				MibData mib, NrPdcchDecoder.Survey pdcch,
+				int ssbSubcarrierSpacingKhz, int surveySampleRateHz, int surveyCpSamples) {
 			this.nid2 = nid2;
 			this.pssCorrelation = pssCorrelation;
 			this.cpCorrelation = cpCorrelation;
@@ -1137,20 +1210,25 @@ final class NrSignalAnalyzer {
 			this.pbchEvm = pbchEvm;
 			this.mib = mib;
 			this.pdcch = pdcch;
+			this.ssbSubcarrierSpacingKhz = ssbSubcarrierSpacingKhz;
+			this.surveySampleRateHz = surveySampleRateHz;
+			this.surveyCpSamples = surveyCpSamples;
 		}
 		PssSurveyCandidate withPeriodicity(int repeats, double correlation) {
 			return new PssSurveyCandidate(nid2, pssCorrelation, cpCorrelation, sample, freqOffsetHz,
 					iqOrientation, cfoHz, repeats, correlation, centerBin, pci, rawNid1,
 					sssCorrelation, secondSssCorrelation, sssTimingDelta, sssRepeats,
 					dmrsConfirmed, iBarSsb, dmrsCorrelation, secondDmrsCorrelation, dmrsBursts,
-					pbchCrcOk, pbchEvm, mib, pdcch);
+					pbchCrcOk, pbchEvm, mib, pdcch,
+					ssbSubcarrierSpacingKhz, surveySampleRateHz, surveyCpSamples);
 		}
 		PssSurveyCandidate withSss(int decodedPci, int nid1, double score, double second,
 				int timingDelta, int repeats) {
 			return new PssSurveyCandidate(nid2, pssCorrelation, cpCorrelation, sample, freqOffsetHz,
 					iqOrientation, cfoHz, periodicRepeats, periodicCorrelation, centerBin, decodedPci,
 					nid1, score, second, timingDelta, repeats, false, -1, 0, 0, 0,
-					false, 0, MibData.EMPTY, NrPdcchDecoder.Survey.EMPTY);
+					false, 0, MibData.EMPTY, NrPdcchDecoder.Survey.EMPTY,
+					ssbSubcarrierSpacingKhz, surveySampleRateHz, surveyCpSamples);
 		}
 		PssSurveyCandidate withDmrs(boolean confirmed, int barSsb, double score, double second,
 				int bursts) {
@@ -1158,21 +1236,24 @@ final class NrSignalAnalyzer {
 					iqOrientation, cfoHz, periodicRepeats, periodicCorrelation, centerBin, pci,
 					rawNid1, sssCorrelation, secondSssCorrelation, sssTimingDelta, sssRepeats,
 					confirmed, barSsb, score, second, bursts, false, 0, MibData.EMPTY,
-					NrPdcchDecoder.Survey.EMPTY);
+					NrPdcchDecoder.Survey.EMPTY,
+					ssbSubcarrierSpacingKhz, surveySampleRateHz, surveyCpSamples);
 		}
 		PssSurveyCandidate withPbch(NrPbchDecoder.Decoded decoded) {
 			return new PssSurveyCandidate(nid2, pssCorrelation, cpCorrelation, sample, freqOffsetHz,
 					iqOrientation, cfoHz, periodicRepeats, periodicCorrelation, centerBin, pci,
 					rawNid1, sssCorrelation, secondSssCorrelation, sssTimingDelta, sssRepeats,
 					dmrsConfirmed, iBarSsb, dmrsCorrelation, secondDmrsCorrelation, dmrsBursts,
-					decoded.crcOk, decoded.evm, decoded.mib, pdcch);
+					decoded.crcOk, decoded.evm, decoded.mib, pdcch,
+					ssbSubcarrierSpacingKhz, surveySampleRateHz, surveyCpSamples);
 		}
 		PssSurveyCandidate withPdcch(NrPdcchDecoder.Survey decoded) {
 			return new PssSurveyCandidate(nid2, pssCorrelation, cpCorrelation, sample, freqOffsetHz,
 					iqOrientation, cfoHz, periodicRepeats, periodicCorrelation, centerBin, pci,
 					rawNid1, sssCorrelation, secondSssCorrelation, sssTimingDelta, sssRepeats,
 					dmrsConfirmed, iBarSsb, dmrsCorrelation, secondDmrsCorrelation, dmrsBursts,
-					pbchCrcOk, pbchEvm, mib, decoded);
+					pbchCrcOk, pbchEvm, mib, decoded,
+					ssbSubcarrierSpacingKhz, surveySampleRateHz, surveyCpSamples);
 		}
 	}
 
@@ -1317,13 +1398,14 @@ final class NrSignalAnalyzer {
 		final MibData mib;
 		final Sib1Data sib1;
 		final LoadData load;
+		final NrPdcchDecoder.Survey pdcch;
 		final String state;
 		final List<Candidate> candidates;
 		Result(boolean detected, int pci, int nid1, int nid2, double pssCorrelation, double sssCorrelation,
 				int sample, int freqOffsetHz, int iqOrientation, double quality, String state,
 				List<Candidate> candidates, boolean dmrsConfirmed, double dmrsCorrelation,
 				double secondDmrsCorrelation, int iBarSsb, int dmrsBursts, MibData mib, Sib1Data sib1,
-				LoadData load) {
+				LoadData load, NrPdcchDecoder.Survey pdcch) {
 			this.detected = detected;
 			this.pci = pci;
 			this.nid1 = nid1;
@@ -1344,11 +1426,12 @@ final class NrSignalAnalyzer {
 			this.mib = mib;
 			this.sib1 = sib1;
 			this.load = load == null ? LoadData.EMPTY : load;
+			this.pdcch = pdcch == null ? NrPdcchDecoder.Survey.EMPTY : pdcch;
 		}
 		static Result empty(String state) {
 			return new Result(false, -1, -1, -1, 0, 0, -1, 0, 1, 0, state,
 					Collections.<Candidate>emptyList(), false, 0, 0, -1, 0, MibData.EMPTY, Sib1Data.EMPTY,
-					LoadData.EMPTY);
+					LoadData.EMPTY, NrPdcchDecoder.Survey.EMPTY);
 		}
 		Result withSystemInformation(MibData decodedMib, Sib1Data decodedSib1) {
 			return withMeasurements(decodedMib, decodedSib1, load);
@@ -1359,7 +1442,7 @@ final class NrSignalAnalyzer {
 					dmrsCorrelation, secondDmrsCorrelation, iBarSsb, dmrsBursts,
 					decodedMib == null ? MibData.EMPTY : decodedMib,
 					decodedSib1 == null ? Sib1Data.EMPTY : decodedSib1,
-					decodedLoad == null ? LoadData.EMPTY : decodedLoad);
+					decodedLoad == null ? LoadData.EMPTY : decodedLoad, pdcch);
 		}
 	}
 }
