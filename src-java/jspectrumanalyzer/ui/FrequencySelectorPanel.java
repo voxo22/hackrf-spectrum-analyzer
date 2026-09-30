@@ -131,6 +131,14 @@ public class FrequencySelectorPanel extends JPanel
 		return value;
 	}
 
+	public void setMaximumValue(int maxValue)
+	{
+		this.maxValue = maxValue;
+		if (value > maxValue) {
+			setValue(maxValue);
+		}
+	}
+
 	/**
 	 * Sets a new value
 	 * @param newValue

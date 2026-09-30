@@ -4,23 +4,37 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Container;
+import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Font;
-import java.awt.event.ActionListener;
+import java.awt.Graphics2D;
+import java.awt.Point;
+import java.awt.Toolkit;
+import java.awt.Window;
 import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 
-import java.beans.PropertyChangeEvent;
 import java.io.FileNotFoundException;
 import java.math.BigDecimal;
 import java.util.Vector;
-import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultBoundedRangeModel;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
+import javax.swing.JComponent;
 import javax.swing.JPanel;
+import javax.swing.Popup;
+import javax.swing.PopupFactory;
+import javax.swing.RootPaneContainer;
 import javax.swing.JSeparator;
 import javax.swing.JSlider;
 import javax.swing.JSpinner;
@@ -53,9 +67,16 @@ public class HackRFSweepSettingsUI extends JPanel
 	 */
 	private HackRFSettings hRF;
 	private static final long serialVersionUID = 7721079457485020637L;
+	public static final String CONTEXT_HELP_PROPERTY = "jspectrumanalyzer.contextHelp";
+	private static final Pattern FREQUENCY_RANGE_INTERVAL = Pattern.compile("\\s*(-?\\d+)\\s*-\\s*(-?\\d+)\\s*");
+	private static final int CONTEXT_HELP_HOVER_DELAY_MS = 650;
+	private static final int CONTEXT_HELP_AUTO_HIDE_MS = 9000;
 	private FrequencyRange FrequencyRange;
 	private FrequencySelectorPanel frequencySelectorStart;
 	private FrequencySelectorPanel frequencySelectorEnd;
+	private JLabel frequencySelectorStartPrefix;
+	private JLabel frequencySelectorEndPrefix;
+	private boolean updatingShiftedFrequencyControls;
 	private JSpinner spinnerFFTBinHz;
 	private JSlider sliderGain;
 	private JSpinner spinner_numberOfSamples;
@@ -81,11 +102,21 @@ public class HackRFSweepSettingsUI extends JPanel
 	private JButton btnPlaySpectrum;
 	private JButton btnTrigger;
 	private JButton btnReset;
+	private JButton btnContextHelp;
+	private Cursor contextHelpCursor;
+	private Cursor contextHelpPreviousCursor;
+	private JComponent contextHelpPreviewGlassPane;
+	private MouseAdapter contextHelpPreviewMouseListener;
+	private KeyAdapter contextHelpPreviewKeyListener;
+	private javax.swing.Timer contextHelpHoverTimer;
+	private javax.swing.Timer contextHelpAutoHideTimer;
+	private Popup contextHelpPopup;
+	private Component contextHelpHoverComponent;
+	private Point contextHelpHoverPoint;
 	private JButton button_plus;
 	private JButton button_minus;
 	private SpinnerListModel spinnerModelFFTBinHz;
 	private boolean updatingRbwSpinner;
-	private FrequencySelectorRangeBinder frequencyRangeSelector;
 	private JCheckBox chckbxFilterSpectrum;
 	private JSpinner spinnerPeakFallSpeed;
 	private JSpinner spinnerMarkerCount;
@@ -156,37 +187,45 @@ public class HackRFSweepSettingsUI extends JPanel
 		JPanel panelMainSettings	= new JPanel(new MigLayout("", "[190.00px,grow,leading]", "[][][::0px][][]"));
 		panelMainSettings.setBorder(new EmptyBorder(UIManager.getInsets("TabbedPane.tabAreaInsets")));;
 		panelMainSettings.setBackground(Color.BLACK);
+
+		JPanel headerPanel = new JPanel(new BorderLayout(4, 0));
+		headerPanel.setBackground(Color.BLACK);
 		JLabel lblNewLabel = new JLabel("Frequency start [MHz]");
 		lblNewLabel.setForeground(Color.WHITE);
-		panelMainSettings.add(lblNewLabel, "cell 0 0,growx,aligny center");
+		headerPanel.add(lblNewLabel, BorderLayout.CENTER);
+		btnContextHelp = createContextHelpButton();
+		headerPanel.add(btnContextHelp, BorderLayout.EAST);
+		panelMainSettings.add(headerPanel, "cell 0 0,growx,aligny center");
 
-		frequencySelectorStart = new FrequencySelectorPanel(minFreq, maxFreq, freqStep, minFreq);
-		panelMainSettings.add(frequencySelectorStart, "cell 0 1,alignx center");
+		frequencySelectorStart = new FrequencySelectorPanel(minFreq, 9999, freqStep, minFreq);
+		frequencySelectorStartPrefix = createFrequencySelectorPrefixLabel();
+		panelMainSettings.add(createShiftedFrequencySelectorPreview(frequencySelectorStart,
+				frequencySelectorStartPrefix), "cell 0 1,alignx center");
 
 		JLabel lblFrequencyEndmhz = new JLabel("Frequency stop [MHz]");
 		lblFrequencyEndmhz.setForeground(Color.WHITE);
 		panelMainSettings.add(lblFrequencyEndmhz, "cell 0 3,alignx left,aligny center");
 
-		frequencySelectorEnd = new FrequencySelectorPanel(minFreq, maxFreq, freqStep, maxFreq);
-		panelMainSettings.add(frequencySelectorEnd, "cell 0 4,alignx center");
+		frequencySelectorEnd = new FrequencySelectorPanel(minFreq, 9999, freqStep, maxFreq);
+		frequencySelectorEndPrefix = createFrequencySelectorPrefixLabel();
+		panelMainSettings.add(createShiftedFrequencySelectorPreview(frequencySelectorEnd,
+				frequencySelectorEndPrefix), "cell 0 4,alignx center");
 		
 		button_minus = new JButton("<---");
 		button_minus.setBackground(Color.BLACK);
 		button_minus.addActionListener(e -> {
-			int dif = (int) Math.round((frequencySelectorEnd.getValue() - frequencySelectorStart.getValue()) * 0.9);
-			textFieldFreqRange.setText((frequencySelectorStart.getValue() - dif) + "-" + (frequencySelectorEnd.getValue() - dif));
-			frequencySelectorStart.setValue(frequencySelectorStart.getValue() - dif);
-			frequencySelectorEnd.setValue(frequencySelectorEnd.getValue() - dif);
+			FrequencyRange current = hRF.getFrequency().getValue();
+			int dif = (int) Math.round((current.getEndMHz() - current.getStartMHz()) * 0.9);
+			applyHardwareFrequencyRange(current.getStartMHz() - dif, current.getEndMHz() - dif);
 		});
 		panelMainSettings.add(button_minus, "cell 0 6,alignx left,growx");
 
 		button_plus = new JButton("--->");
 		button_plus.setBackground(Color.BLACK);
 		button_plus.addActionListener(e -> {
-			int dif = (int) Math.round((frequencySelectorEnd.getValue() - frequencySelectorStart.getValue()) * 0.9);
-			textFieldFreqRange.setText((frequencySelectorStart.getValue() + dif) + "-" + (frequencySelectorEnd.getValue() + dif));
-			frequencySelectorStart.setValue(frequencySelectorStart.getValue() + dif);
-			frequencySelectorEnd.setValue(frequencySelectorEnd.getValue() + dif);
+			FrequencyRange current = hRF.getFrequency().getValue();
+			int dif = (int) Math.round((current.getEndMHz() - current.getStartMHz()) * 0.9);
+			applyHardwareFrequencyRange(current.getStartMHz() + dif, current.getEndMHz() + dif);
 		});
 		panelMainSettings.add(button_plus, "flowx,cell 0 6,growx,alignx right");
 		
@@ -200,11 +239,6 @@ public class HackRFSweepSettingsUI extends JPanel
 		textFieldFreqRange.setBackground(Color.BLACK);
 		textFieldFreqRange.setCaretColor(Color.WHITE);
 		textFieldFreqRange.setText(hRF.getparamFreqRange().getValue());
-		textFieldFreqRange.addActionListener(e -> {
-			Ranges range = new Ranges(textFieldFreqRange.getText());
-			frequencySelectorStart.setValue(range.getFreqStart());
-			frequencySelectorEnd.setValue(range.getFreqStop());
-		});
 		panelMainSettings.add(textFieldFreqRange, "cell 0 7,growx,alignx right");
 		
 		JLabel lblFrequencyPreset = new JLabel("Presets ");
@@ -329,17 +363,13 @@ public class HackRFSweepSettingsUI extends JPanel
 		comboBoxFrequencyPresets = new JComboBox(presetValues);
 		comboBoxFrequencyPresets.addActionListener(e -> {
 			Preset preset = (Preset)comboBoxFrequencyPresets.getSelectedItem();
-			frequencySelectorStart.setValue(preset.getStartFreq());
-			frequencySelectorEnd.setValue(preset.getStopFreq());
 			spinnerFFTBinHz.setValue(preset.getFFTBinWidth());
 			spinner_FrequencyShift.setValue(preset.getFreqShift());
 			slider_AmplitudeOffset.setValue(preset.getAmplitudeOffset());
-			System.out.println(preset.getFreqRange());
-			textFieldFreqRange.setText(preset.getFreqRange());
-
-		    for (ActionListener al : textFieldFreqRange.getActionListeners()) {
-		        al.actionPerformed(new ActionEvent(textFieldFreqRange, ActionEvent.ACTION_PERFORMED, null));
-		    }
+			String presetRange = preset.getFreqRange();
+			hRF.getparamFreqRange().setValue(presetRange);
+			Ranges range = new Ranges(presetRange);
+			hRF.getFrequency().setValue(new FrequencyRange(range.getFreqStart(), range.getFreqStop()));
 
 		});
 		panelMainSettings.add(comboBoxFrequencyPresets, "cell 0 8,growx,alignx right");
@@ -484,7 +514,7 @@ public class HackRFSweepSettingsUI extends JPanel
 			JSeparator separator2 = new JSeparator();
 			tab1.add(separator2,"cell 0 8,growx");
 			
-			JLabel lblCALC = new JLabel("CHART");
+			JLabel lblCALC = new JLabel("TRACE");
 			lblCALC.setForeground(Color.WHITE);
 			tab1.add(lblCALC, "growx,cell 0 9");
 			
@@ -1004,8 +1034,648 @@ public class HackRFSweepSettingsUI extends JPanel
 			tab3.add(spinnerVideoFormat, "cell 0 13, alignx right");
 
 		}
+		installContextHelpTexts(tabbedPane);
 		compactSliders();
 		bindViewToModel();
+	}
+
+	private void installContextHelpTexts(JTabbedPane tabbedPane) {
+		setContextHelp("spectrum.help", btnContextHelp);
+		setContextHelp("spectrum.tabs", tabbedPane);
+
+		setContextHelp("frequency.start", frequencySelectorStart, frequencySelectorStartPrefix);
+		setContextHelp("frequency.stop", frequencySelectorEnd, frequencySelectorEndPrefix);
+		setContextHelp("frequency.panLeft", button_minus);
+		setContextHelp("frequency.panRight", button_plus);
+		setContextHelp("frequency.ranges", textFieldFreqRange);
+		setContextHelp("frequency.presets", comboBoxFrequencyPresets);
+		setContextHelp("frequency.savePreset", btnSavePreset);
+
+		setContextHelp("capture.pause", btnPause);
+		setContextHelp("capture.trigger", btnTrigger);
+		setContextHelp("capture.replay", btnPlaySpectrum);
+		setContextHelp("capture.video", btnRecVideo);
+		setContextHelp("capture.stats", btnRecData);
+		setContextHelp("capture.data", btnRecSpectrum);
+
+		setContextHelp("sweep.gain", sliderGain, lblGain, lblGainValue);
+		setContextHelp("sweep.lnaGain", sliderGainLNA, lblLnaGain);
+		setContextHelp("sweep.vgaGain", sliderGainVGA, lblVgaGain);
+		setContextHelp("sweep.rfAmp", chckbxAntennaLNA);
+		setContextHelp("sweep.biasT", chckbxAntennaPower);
+		setContextHelp("sweep.noDc", chckbxRemoveSpurs);
+		setContextHelp("chart.realTime", chckbxShowRealtime);
+		setContextHelp("chart.persist", checkBoxPersistentDisplay);
+		setContextHelp("chart.average", chckbxShowAverage);
+		setContextHelp("chart.peak", chckbxShowPeaks);
+		setContextHelp("chart.maxHold", chckbxShowMaxHold);
+		setContextHelp("marker.peak", chckbxShowPeakMarker);
+		setContextHelp("marker.hold", chckbxShowHoldMarker);
+		setContextHelp("freq.rbw", spinnerFFTBinHz);
+		setContextHelp("freq.shift", spinner_FrequencyShift);
+		setContextHelp("amplitude.offset", slider_AmplitudeOffset);
+		setContextHelp("power.calibration", slider_PowerFluxCal);
+
+		setContextHelp("iq.audio", panelIqReplayAudio, checkBoxIqReplayAudio);
+		setContextHelp("iq.audioVolume", sliderIqReplayAudioVolume);
+		setContextHelp("iq.audioMode", comboBoxIqReplayAudioMode);
+		setContextHelp("iq.burstDetect", checkBoxIqReplayBurstCapture);
+		setContextHelp("iq.customTxFrequency", checkBoxIqReplayTxCustomFrequency);
+		setContextHelp("iq.tx", panelIqReplayTx, checkBoxIqReplayTx);
+		setContextHelp("iq.txPower", sliderIqReplayTxPower, labelIqReplayTxPower);
+		setContextHelp("iq.txCenter", textFieldIqReplayTxCenter);
+
+		setContextHelp("params.reset", btnReset);
+		setContextHelp("params.spline", checkBoxSpectrumSpline);
+		setContextHelp("params.lineThickness", spinnerLineThickness);
+		setContextHelp("params.peakFallTime", spinnerPeakFallSpeed, lblPeakFall);
+		setContextHelp("params.peakFallThreshold", spinnerPeakFallTrs, lblPeakFallTrs);
+		setContextHelp("params.peakHoldTime", spinnerPeakHoldTime, lblPeakHoldTime);
+		setContextHelp("params.markerCount", spinnerMarkerCount, lblMarkerCount);
+		setContextHelp("params.persistDecay", spinnerDecayRate, lblDecayRate);
+		setContextHelp("params.avgIterations", spinnerAvgIterations, lblAvgIterations);
+		setContextHelp("params.avgOffset", sliderAvgOffset, lblAvgOffset, lblAvgOffset2);
+		setContextHelp("params.allocations", comboBoxFrequencyAllocationBands);
+
+		setContextHelp("waterfall.date", chckbxDatestamp);
+		setContextHelp("waterfall.infoBox", checkBoxInfoBoxEnabled);
+		setContextHelp("waterfall.enable", checkBoxWaterfallEnabled);
+		setContextHelp("waterfall.paletteStart", slider_waterfallPaletteStart);
+		setContextHelp("waterfall.paletteLength", slider_waterfallPaletteSize);
+		setContextHelp("waterfall.speed", slider_WaterfallSpeed);
+		setContextHelp("record.statsInterval", spinnerLogDetail);
+		setContextHelp("record.dataFps", spinnerSpectrumRecordFrameRate);
+		setContextHelp("record.videoArea", spinnerVideoArea);
+		setContextHelp("record.videoResolution", spinnerVideoResolution);
+		setContextHelp("record.videoFps", spinnerVideoFrameRate);
+		setContextHelp("record.videoFormat", spinnerVideoFormat);
+	}
+
+	private JButton createContextHelpButton() {
+		JButton button = new JButton("HELP");
+		Dimension size = new Dimension(50, 16);
+		button.setPreferredSize(size);
+		button.setMinimumSize(size);
+		button.setMaximumSize(size);
+		button.setMargin(new java.awt.Insets(0, 4, 0, 4));
+		button.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 9));
+		button.setBackground(Color.BLACK);
+		button.setForeground(Color.BLACK);
+		button.setBorder(UIManager.getBorder("Button.border"));
+		button.setFocusPainted(false);
+		button.setFocusable(false);
+		button.setToolTipText("Context help");
+		button.addActionListener(e -> startContextHelpCursorPreview());
+		return button;
+	}
+
+	private JLabel createFrequencySelectorPrefixLabel() {
+		JLabel prefix = new JLabel("");
+		prefix.setForeground(Color.WHITE);
+		prefix.setFont(new Font(Font.MONOSPACED, Font.BOLD, 16));
+		prefix.setHorizontalAlignment(JLabel.CENTER);
+		prefix.setPreferredSize(new Dimension(0, 65));
+		return prefix;
+	}
+
+	private JPanel createShiftedFrequencySelectorPreview(FrequencySelectorPanel selector, JLabel prefix) {
+		JPanel panel = new JPanel(new BorderLayout(2, 0));
+		panel.setBackground(Color.BLACK);
+		panel.add(prefix, BorderLayout.WEST);
+		panel.add(selector, BorderLayout.CENTER);
+		return panel;
+	}
+
+	public static void setContextHelp(Component component, String key) {
+		if (component instanceof JComponent) {
+			((JComponent) component).putClientProperty(CONTEXT_HELP_PROPERTY, key);
+		}
+	}
+
+	private void setContextHelp(String key, Component... components) {
+		for (Component component : components) {
+			setContextHelp(component, key);
+		}
+	}
+
+	private void startContextHelpCursorPreview() {
+		Window window = SwingUtilities.getWindowAncestor(this);
+		if (!(window instanceof RootPaneContainer)) {
+			return;
+		}
+		if (contextHelpPreviewGlassPane != null && contextHelpPreviewGlassPane.isVisible()) {
+			stopContextHelpCursorPreview();
+			return;
+		}
+		JComponent glassPane = (JComponent) ((RootPaneContainer) window).getGlassPane();
+		contextHelpPreviewGlassPane = glassPane;
+		contextHelpPreviousCursor = glassPane.getCursor();
+		contextHelpPreviewMouseListener = new MouseAdapter() {
+			@Override
+			public void mousePressed(MouseEvent e) {
+				showContextHelp(e, true);
+				e.consume();
+			}
+
+			@Override
+			public void mouseMoved(MouseEvent e) {
+				scheduleHoverContextHelp(e);
+			}
+
+			@Override
+			public void mouseDragged(MouseEvent e) {
+				scheduleHoverContextHelp(e);
+			}
+
+			@Override
+			public void mouseExited(MouseEvent e) {
+				contextHelpHoverComponent = null;
+				stopContextHelpHoverTimer();
+				hideContextHelpPopup();
+			}
+		};
+		contextHelpPreviewKeyListener = new KeyAdapter() {
+			@Override
+			public void keyPressed(KeyEvent e) {
+				if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
+					stopContextHelpCursorPreview();
+					e.consume();
+				}
+			}
+		};
+		glassPane.setCursor(getContextHelpCursor());
+		glassPane.addMouseListener(contextHelpPreviewMouseListener);
+		glassPane.addMouseMotionListener(contextHelpPreviewMouseListener);
+		glassPane.addKeyListener(contextHelpPreviewKeyListener);
+		glassPane.setFocusable(true);
+		glassPane.setVisible(true);
+		glassPane.requestFocusInWindow();
+	}
+
+	private void stopContextHelpCursorPreview() {
+		stopContextHelpCursorPreview(true);
+	}
+
+	private void stopContextHelpCursorPreview(boolean hidePopup) {
+		JComponent glassPane = contextHelpPreviewGlassPane;
+		if (glassPane == null) {
+			if (hidePopup) {
+				hideContextHelpPopup();
+			}
+			return;
+		}
+		if (contextHelpPreviewMouseListener != null) {
+			glassPane.removeMouseListener(contextHelpPreviewMouseListener);
+			glassPane.removeMouseMotionListener(contextHelpPreviewMouseListener);
+		}
+		if (contextHelpPreviewKeyListener != null) {
+			glassPane.removeKeyListener(contextHelpPreviewKeyListener);
+		}
+		stopContextHelpHoverTimer();
+		glassPane.setCursor(contextHelpPreviousCursor == null
+				? Cursor.getDefaultCursor()
+				: contextHelpPreviousCursor);
+		glassPane.setVisible(false);
+		contextHelpPreviewGlassPane = null;
+		contextHelpPreviousCursor = null;
+		contextHelpPreviewMouseListener = null;
+		contextHelpPreviewKeyListener = null;
+		contextHelpHoverComponent = null;
+		contextHelpHoverPoint = null;
+		if (hidePopup) {
+			hideContextHelpPopup();
+		}
+	}
+
+	private void scheduleHoverContextHelp(MouseEvent event) {
+		Component component = findContextHelpComponent(event);
+		if (component == null) {
+			contextHelpHoverComponent = null;
+			stopContextHelpHoverTimer();
+			hideContextHelpPopup();
+			return;
+		}
+		Point point = event.getPoint();
+		if (component == contextHelpHoverComponent && contextHelpHoverPoint != null
+				&& contextHelpHoverPoint.distance(point) < 4d) {
+			return;
+		}
+		contextHelpHoverComponent = component;
+		contextHelpHoverPoint = point;
+		stopContextHelpHoverTimer();
+		contextHelpHoverTimer = new javax.swing.Timer(CONTEXT_HELP_HOVER_DELAY_MS,
+				e -> showContextHelpForComponent(component, point, false));
+		contextHelpHoverTimer.setRepeats(false);
+		contextHelpHoverTimer.start();
+	}
+
+	private void stopContextHelpHoverTimer() {
+		if (contextHelpHoverTimer != null) {
+			contextHelpHoverTimer.stop();
+			contextHelpHoverTimer = null;
+		}
+	}
+
+	private void stopContextHelpAutoHideTimer() {
+		if (contextHelpAutoHideTimer != null) {
+			contextHelpAutoHideTimer.stop();
+			contextHelpAutoHideTimer = null;
+		}
+	}
+
+	private void showContextHelp(MouseEvent event, boolean deactivateAfterShow) {
+		Component component = findContextHelpComponent(event);
+		Point point = event.getPoint();
+		if (component == null) {
+			showContextHelpPopup("No context help is available for this part of the window.", point);
+			startContextHelpAutoHideTimer();
+		} else {
+			showContextHelpForComponent(component, point, true);
+		}
+		if (deactivateAfterShow) {
+			stopContextHelpCursorPreview(false);
+		}
+	}
+
+	private void showContextHelpForComponent(Component component, Point glassPanePoint, boolean autoHide) {
+		String text = getContextHelpText(component);
+		if (text == null || text.trim().length() == 0) {
+			return;
+		}
+		showContextHelpPopup(text, glassPanePoint);
+		if (autoHide) {
+			startContextHelpAutoHideTimer();
+		}
+	}
+
+	private void startContextHelpAutoHideTimer() {
+		stopContextHelpAutoHideTimer();
+		contextHelpAutoHideTimer = new javax.swing.Timer(CONTEXT_HELP_AUTO_HIDE_MS, e -> hideContextHelpPopup());
+		contextHelpAutoHideTimer.setRepeats(false);
+		contextHelpAutoHideTimer.start();
+	}
+
+	private Component findContextHelpComponent(MouseEvent event) {
+		if (contextHelpPreviewGlassPane == null) {
+			return null;
+		}
+		Window window = SwingUtilities.getWindowAncestor(this);
+		if (!(window instanceof RootPaneContainer)) {
+			return null;
+		}
+		Container contentPane = ((RootPaneContainer) window).getContentPane();
+		Point contentPoint = SwingUtilities.convertPoint(contextHelpPreviewGlassPane, event.getPoint(), contentPane);
+		Component deepest = SwingUtilities.getDeepestComponentAt(contentPane, contentPoint.x, contentPoint.y);
+		while (deepest != null) {
+			if (getContextHelpText(deepest) != null) {
+				return deepest;
+			}
+			deepest = deepest.getParent();
+		}
+		return null;
+	}
+
+	private String getContextHelpText(Component component) {
+		if (!(component instanceof JComponent)) {
+			return null;
+		}
+		Object key = ((JComponent) component).getClientProperty(CONTEXT_HELP_PROPERTY);
+		if (key == null) {
+			return null;
+		}
+		String text = ContextHelpLibrary.get(key.toString());
+		return text == null ? key.toString() : text;
+	}
+
+	private void showContextHelpPopup(String text, Point glassPanePoint) {
+		if (contextHelpPreviewGlassPane == null) {
+			return;
+		}
+		hideContextHelpPopup();
+		JLabel label = new JLabel(toContextHelpHtml(text));
+		label.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 12));
+		label.setForeground(Color.BLACK);
+		label.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+		JPanel panel = new JPanel(new BorderLayout());
+		panel.setBackground(new Color(255, 255, 220));
+		panel.setBorder(BorderFactory.createLineBorder(Color.BLACK));
+		panel.add(label, BorderLayout.CENTER);
+		Point screenPoint = new Point(glassPanePoint);
+		SwingUtilities.convertPointToScreen(screenPoint, contextHelpPreviewGlassPane);
+		Dimension popupSize = panel.getPreferredSize();
+		java.awt.Rectangle screenBounds = contextHelpPreviewGlassPane.getGraphicsConfiguration().getBounds();
+		java.awt.Insets screenInsets = Toolkit.getDefaultToolkit()
+				.getScreenInsets(contextHelpPreviewGlassPane.getGraphicsConfiguration());
+		int minX = screenBounds.x + screenInsets.left;
+		int maxX = screenBounds.x + screenBounds.width - screenInsets.right;
+		int minY = screenBounds.y + screenInsets.top;
+		int maxY = screenBounds.y + screenBounds.height - screenInsets.bottom;
+		int popupX = screenPoint.x + 14;
+		if (popupX + popupSize.width > maxX) {
+			popupX = screenPoint.x - popupSize.width - 14;
+		}
+		popupX = Math.max(minX, Math.min(maxX - popupSize.width, popupX));
+		int popupY = screenPoint.y + 18;
+		if (popupY + popupSize.height > maxY) {
+			popupY = screenPoint.y - popupSize.height - 18;
+		}
+		popupY = Math.max(minY, Math.min(maxY - popupSize.height, popupY));
+		contextHelpPopup = PopupFactory.getSharedInstance().getPopup(contextHelpPreviewGlassPane, panel,
+				popupX, popupY);
+		contextHelpPopup.show();
+	}
+
+	private String toContextHelpHtml(String text) {
+		String[] lines = text.split("\\r?\\n");
+		StringBuilder html = new StringBuilder("<html><div style='width: 280px;'>");
+		boolean inList = false;
+		for (String line : lines) {
+			String trimmed = line.trim();
+			if (trimmed.startsWith("- ")) {
+				if (!inList) {
+					html.append("<ul style='margin-left: 14px;'>");
+					inList = true;
+				}
+				html.append("<li>").append(escapeContextHelpHtml(trimmed.substring(2).trim())).append("</li>");
+			} else {
+				if (inList) {
+					html.append("</ul>");
+					inList = false;
+				}
+				if (trimmed.length() == 0) {
+					html.append("<br>");
+				} else {
+					html.append(escapeContextHelpHtml(trimmed)).append("<br>");
+				}
+			}
+		}
+		if (inList) {
+			html.append("</ul>");
+		}
+		html.append("</div></html>");
+		return html.toString();
+	}
+
+	private String escapeContextHelpHtml(String text) {
+		return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+	}
+
+	private void hideContextHelpPopup() {
+		stopContextHelpAutoHideTimer();
+		if (contextHelpPopup != null) {
+			contextHelpPopup.hide();
+			contextHelpPopup = null;
+		}
+	}
+
+	private Cursor getContextHelpCursor() {
+		if (contextHelpCursor == null) {
+			contextHelpCursor = createContextHelpCursor();
+		}
+		return contextHelpCursor;
+	}
+
+	private Cursor createContextHelpCursor() {
+		Toolkit toolkit = Toolkit.getDefaultToolkit();
+		Dimension bestSize = toolkit.getBestCursorSize(32, 32);
+		if (bestSize.width <= 0 || bestSize.height <= 0) {
+			return Cursor.getDefaultCursor();
+		}
+		BufferedImage image = new BufferedImage(bestSize.width, bestSize.height, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D g = image.createGraphics();
+		try {
+			int[] arrowX = { 0, 0, 5, 8, 11, 8, 14 };
+			int[] arrowY = { 0, 20, 14, 23, 22, 13, 13 };
+			g.setColor(Color.WHITE);
+			g.fillPolygon(arrowX, arrowY, arrowX.length);
+			g.setColor(Color.BLACK);
+			g.drawPolygon(arrowX, arrowY, arrowX.length);
+			g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
+			g.setColor(Color.BLACK);
+			g.drawString("?", 16, 14);
+			g.drawString("?", 14, 14);
+			g.drawString("?", 15, 15);
+			g.drawString("?", 15, 13);
+			g.setColor(Color.WHITE);
+			g.drawString("?", 15, 14);
+		} finally {
+			g.dispose();
+		}
+		return toolkit.createCustomCursor(image, new Point(0, 0), "Context help");
+	}
+
+	private int getFrequencyShiftMHz() {
+		return hRF.getFreqShift().getValue();
+	}
+
+	private int toDisplayFrequencyMHz(int hardwareMHz) {
+		return hardwareMHz + getFrequencyShiftMHz();
+	}
+
+	private int toHardwareFrequencyMHz(int displayMHz) {
+		return displayMHz - getFrequencyShiftMHz();
+	}
+
+	private int clampHardwareFrequencyMHz(int frequencyMHz) {
+		return Math.max(0, Math.min(7250, frequencyMHz));
+	}
+
+	private int getSelectorDisplayFrequency(FrequencySelectorPanel selector, JLabel prefix) {
+		int prefixValue = 0;
+		if (prefix != null && prefix.isVisible() && prefix.getText() != null && prefix.getText().trim().length() > 0) {
+			try {
+				prefixValue = Integer.parseInt(prefix.getText().trim());
+			} catch (NumberFormatException e) {
+				prefixValue = 0;
+			}
+		}
+		return prefixValue * 10000 + selector.getValue();
+	}
+
+	private void setFrequencySelectorDisplayValue(FrequencySelectorPanel selector, JLabel prefix, int displayMHz) {
+		int safeDisplayMHz = Math.max(0, displayMHz);
+		int prefixValue = safeDisplayMHz / 10000;
+		int selectorValue = safeDisplayMHz % 10000;
+		if (prefixValue > 0) {
+			prefix.setText(Integer.toString(prefixValue));
+			prefix.setPreferredSize(new Dimension(Math.max(10, prefix.getFontMetrics(prefix.getFont())
+					.stringWidth(prefix.getText()) + 2), selector.getPreferredSize().height));
+			prefix.setVisible(true);
+			selector.setMaximumValue(9999);
+		} else {
+			prefix.setText("");
+			prefix.setPreferredSize(new Dimension(0, selector.getPreferredSize().height));
+			prefix.setVisible(false);
+			selector.setMaximumValue(7250);
+		}
+		if (selector.getValue() != selectorValue) {
+			selector.setValue(selectorValue);
+		}
+	}
+
+	private String convertFrequencyRangeText(String ranges, int deltaMHz, boolean clampToHardwareRange) {
+		if (ranges == null || ranges.trim().length() == 0) {
+			return ranges;
+		}
+		StringBuilder result = new StringBuilder();
+		String[] intervals = ranges.split(",");
+		for (int i = 0; i < intervals.length; i++) {
+			String interval = intervals[i].trim();
+			Matcher matcher = FREQUENCY_RANGE_INTERVAL.matcher(interval);
+			if (!matcher.matches()) {
+				return ranges;
+			}
+			try {
+				int start = Integer.parseInt(matcher.group(1)) + deltaMHz;
+				int stop = Integer.parseInt(matcher.group(2)) + deltaMHz;
+				if (clampToHardwareRange) {
+					int low = clampHardwareFrequencyMHz(Math.min(start, stop));
+					int high = clampHardwareFrequencyMHz(Math.max(start, stop));
+					if (low >= high) {
+						if (low >= 7250) {
+							low = 7249;
+							high = 7250;
+						} else {
+							high = Math.min(7250, low + 1);
+						}
+					}
+					start = low;
+					stop = high;
+				}
+				if (i > 0) {
+					result.append(",");
+				}
+				result.append(start).append("-").append(stop);
+			} catch (NumberFormatException e) {
+				return ranges;
+			}
+		}
+		return result.toString();
+	}
+
+	private String hardwareRangesToDisplayRanges(String hardwareRanges) {
+		return convertFrequencyRangeText(hardwareRanges, getFrequencyShiftMHz(), false);
+	}
+
+	private String displayRangesToHardwareRanges(String displayRanges) {
+		return convertFrequencyRangeText(displayRanges, -getFrequencyShiftMHz(), true);
+	}
+
+	private FrequencyRange getDisplayFrequencyBounds(String ranges) {
+		if (ranges == null || ranges.trim().length() == 0) {
+			return null;
+		}
+		int minMHz = Integer.MAX_VALUE;
+		int maxMHz = Integer.MIN_VALUE;
+		String[] intervals = ranges.split(",");
+		for (String interval : intervals) {
+			Matcher matcher = FREQUENCY_RANGE_INTERVAL.matcher(interval.trim());
+			if (!matcher.matches()) {
+				return null;
+			}
+			try {
+				int start = Integer.parseInt(matcher.group(1));
+				int stop = Integer.parseInt(matcher.group(2));
+				minMHz = Math.min(minMHz, Math.min(start, stop));
+				maxMHz = Math.max(maxMHz, Math.max(start, stop));
+			} catch (NumberFormatException e) {
+				return null;
+			}
+		}
+		if (minMHz == Integer.MAX_VALUE || maxMHz == Integer.MIN_VALUE) {
+			return null;
+		}
+		return new FrequencyRange(minMHz, maxMHz);
+	}
+
+	private boolean updateReplayFrequencyControlsFromDisplayRange() {
+		String displayRanges = hRF.getDisplayFreqRange().getValue();
+		FrequencyRange displayBounds = getDisplayFrequencyBounds(displayRanges);
+		if (displayBounds == null) {
+			return false;
+		}
+		setFrequencySelectorDisplayValue(frequencySelectorStart, frequencySelectorStartPrefix,
+				displayBounds.getStartMHz());
+		setFrequencySelectorDisplayValue(frequencySelectorEnd, frequencySelectorEndPrefix,
+				displayBounds.getEndMHz());
+		if (!displayRanges.equals(textFieldFreqRange.getText())) {
+			textFieldFreqRange.setText(displayRanges);
+		}
+		return true;
+	}
+
+	private void updateShiftedFrequencyControlsFromModel() {
+		if (frequencySelectorStart == null || frequencySelectorEnd == null || textFieldFreqRange == null) {
+			return;
+		}
+		updatingShiftedFrequencyControls = true;
+		try {
+			if (hRF.isPlayingSpectrum().getValue() && updateReplayFrequencyControlsFromDisplayRange()) {
+				return;
+			}
+			FrequencyRange hardwareRange = hRF.getFrequency().getValue();
+			setFrequencySelectorDisplayValue(frequencySelectorStart, frequencySelectorStartPrefix,
+					toDisplayFrequencyMHz(hardwareRange.getStartMHz()));
+			setFrequencySelectorDisplayValue(frequencySelectorEnd, frequencySelectorEndPrefix,
+					toDisplayFrequencyMHz(hardwareRange.getEndMHz()));
+			String displayRanges = hardwareRangesToDisplayRanges(hRF.getparamFreqRange().getValue());
+			if (!displayRanges.equals(textFieldFreqRange.getText())) {
+				textFieldFreqRange.setText(displayRanges);
+			}
+		} finally {
+			updatingShiftedFrequencyControls = false;
+		}
+	}
+
+	private void applyShiftedSelectorValuesToModel(boolean changedStart) {
+		if (updatingShiftedFrequencyControls) {
+			return;
+		}
+		int displayStart = getSelectorDisplayFrequency(frequencySelectorStart, frequencySelectorStartPrefix);
+		int displayEnd = getSelectorDisplayFrequency(frequencySelectorEnd, frequencySelectorEndPrefix);
+		if (displayStart >= displayEnd) {
+			if (changedStart) {
+				displayEnd = displayStart + 1;
+			} else {
+				displayStart = Math.max(0, displayEnd - 1);
+			}
+		}
+		int hardwareStart = clampHardwareFrequencyMHz(toHardwareFrequencyMHz(displayStart));
+		int hardwareEnd = clampHardwareFrequencyMHz(toHardwareFrequencyMHz(displayEnd));
+		if (hardwareStart >= hardwareEnd) {
+			if (changedStart) {
+				hardwareEnd = Math.min(7250, hardwareStart + 1);
+			} else {
+				hardwareStart = Math.max(0, hardwareEnd - 1);
+			}
+		}
+		FrequencyRange range = new FrequencyRange(hardwareStart, hardwareEnd);
+		hRF.getFrequency().setValue(range);
+		hRF.getparamFreqRange().setValue(hardwareStart + "-" + hardwareEnd);
+	}
+
+	private void applyHardwareFrequencyRange(int startMHz, int stopMHz) {
+		int hardwareStart = clampHardwareFrequencyMHz(Math.min(startMHz, stopMHz));
+		int hardwareEnd = clampHardwareFrequencyMHz(Math.max(startMHz, stopMHz));
+		if (hardwareStart >= hardwareEnd) {
+			hardwareEnd = Math.min(7250, hardwareStart + 1);
+			if (hardwareStart >= hardwareEnd) {
+				hardwareStart = Math.max(0, hardwareEnd - 1);
+			}
+		}
+		hRF.getFrequency().setValue(new FrequencyRange(hardwareStart, hardwareEnd));
+		hRF.getparamFreqRange().setValue(hardwareStart + "-" + hardwareEnd);
+	}
+
+	private void applyDisplayRangeTextToModel() {
+		if (updatingShiftedFrequencyControls) {
+			return;
+		}
+		String hardwareRanges = displayRangesToHardwareRanges(textFieldFreqRange.getText());
+		Ranges range = new Ranges(hardwareRanges);
+		hRF.getparamFreqRange().setValue(hardwareRanges);
+		hRF.getFrequency().setValue(new FrequencyRange(clampHardwareFrequencyMHz(range.getFreqStart()),
+				clampHardwareFrequencyMHz(range.getFreqStop())));
 	}
 
 	private void compactSliders() {
@@ -1032,8 +1702,6 @@ public class HackRFSweepSettingsUI extends JPanel
 	}
 
 	private void bindViewToModel() {
-		frequencyRangeSelector = new FrequencySelectorRangeBinder(frequencySelectorStart, frequencySelectorEnd);
-
 		spinnerFFTBinHz.addChangeListener(e -> applyRbwSpinnerValue());
 		hRF.getFFTBinHz().addListener(value -> SwingUtilities.invokeLater(this::updateRbwSpinnerValue));
 		hRF.getIqReplayRbwHz().addListener(value -> SwingUtilities.invokeLater(this::updateRbwSpinnerValue));
@@ -1047,22 +1715,28 @@ public class HackRFSweepSettingsUI extends JPanel
 		new MVCController(slider_waterfallPaletteStart, hRF.getSpectrumPaletteStart());
 		new MVCController(slider_waterfallPaletteSize, hRF.getSpectrumPaletteSize());
 		new MVCController(slider_AmplitudeOffset, hRF.getAmplitudeOffset());
-		new MVCController(textFieldFreqRange, hRF.getparamFreqRange());
-		hRF.getDisplayFreqRange().addListener((ranges) -> SwingUtilities.invokeLater(() -> textFieldFreqRange.setText(ranges)));
+		textFieldFreqRange.addActionListener(e -> {
+			try {
+				applyDisplayRangeTextToModel();
+			} catch (Exception ex) {
+				ex.printStackTrace();
+				updateShiftedFrequencyControlsFromModel();
+			}
+		});
+		frequencySelectorStart.addPropertyChangeListener("value",
+				event -> applyShiftedSelectorValuesToModel(true));
+		frequencySelectorEnd.addPropertyChangeListener("value",
+				event -> applyShiftedSelectorValuesToModel(false));
+		hRF.getFrequency().addListener(value -> SwingUtilities.invokeLater(this::updateShiftedFrequencyControlsFromModel));
+		hRF.getparamFreqRange().addListener(value -> SwingUtilities.invokeLater(this::updateShiftedFrequencyControlsFromModel));
+		hRF.getFreqShift().addListener(value -> SwingUtilities.invokeLater(this::updateShiftedFrequencyControlsFromModel));
+		hRF.getDisplayFreqRange().addListener((ranges) -> SwingUtilities.invokeLater(() -> {
+			if (hRF.isPlayingSpectrum().getValue()) {
+				updateShiftedFrequencyControlsFromModel();
+			}
+		}));
 		new MVCController(slider_WaterfallSpeed, hRF.getWaterfallSpeed());
-		new MVCController(	(Consumer<FrequencyRange> valueChangedCall) ->  
-								frequencyRangeSelector.addPropertyChangeListener((PropertyChangeEvent evt) -> valueChangedCall.accept(frequencyRangeSelector.getFrequencyRange()) ) ,
-							(FrequencyRange newComponentValue) -> {
-								if(frequencyRangeSelector.selFreqStart.getValue() != newComponentValue.getStartMHz())
-									frequencyRangeSelector.selFreqStart.setValue(newComponentValue.getStartMHz());
-								if(frequencyRangeSelector.selFreqEnd.getValue() != newComponentValue.getEndMHz())
-									frequencyRangeSelector.selFreqEnd.setValue(newComponentValue.getEndMHz());
-								Ranges range = new Ranges(textFieldFreqRange.getText());		
-								if (!range.isMultipleRanges())
-								textFieldFreqRange.setText((newComponentValue.getStartMHz()) + "-" + (newComponentValue.getEndMHz()));
-							},
-							hRF.getFrequency()
-		);
+		updateShiftedFrequencyControlsFromModel();
 		new MVCController(chckbxShowRealtime, hRF.isChartsRealtimeVisible());
 		new MVCController(chckbxShowAverage, hRF.isChartsAverageVisible());
 		new MVCController(chckbxShowPeaks, hRF.isChartsPeaksVisible());
@@ -1237,6 +1911,7 @@ public class HackRFSweepSettingsUI extends JPanel
 		panelIqReplayAudio.setVisible(iqReplay);
 		panelIqReplayOptions.setVisible(iqReplay);
 		panelIqReplayTx.setVisible(iqReplay);
+		updateShiftedFrequencyControlsFromModel();
 		revalidate();
 		repaint();
 		if (playingSpectrum) {

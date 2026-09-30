@@ -29,18 +29,25 @@ final class NrSignalAnalyzer {
 	private static final int[][] PSS_SEQUENCES = buildPssSequences();
 	private static final int[][][] SSS_SEQUENCES = buildSssSequences();
 	private static final double[][][] SURVEY_FILTERS = buildSurveyFilters();
+	private NrLdpcDecoder.SoftBuffer sib1SoftBuffer;
+	private int sib1SoftBufferPci = -1;
 
 	PssSurvey surveyPss(byte[] iq, int length, int sampleRateHz) {
-		return surveyPss(iq, length, sampleRateHz, true, true);
+		return surveyPss(iq, length, sampleRateHz, true, true, false);
 	}
 
 	private PssSurvey surveyPss(byte[] iq, int length, int sampleRateHz,
 			boolean decodePdcch15, boolean decodePdcch30) {
+		return surveyPss(iq, length, sampleRateHz, decodePdcch15, decodePdcch30, false);
+	}
+
+	private PssSurvey surveyPss(byte[] iq, int length, int sampleRateHz,
+			boolean decodePdcch15, boolean decodePdcch30, boolean fastPdcchOnly) {
 		List<PssSurveyCandidate> merged = new ArrayList<PssSurveyCandidate>();
 		int cpCount = 0;
 		for (SurveyConfig config : SURVEY_CONFIGS) {
 			boolean decodePdcch = config.ssbSubcarrierSpacingKhz == 15 ? decodePdcch15 : decodePdcch30;
-			PssSurvey survey = surveyPss(iq, length, sampleRateHz, config, decodePdcch);
+			PssSurvey survey = surveyPss(iq, length, sampleRateHz, config, decodePdcch, fastPdcchOnly);
 			cpCount += survey.cpCandidates;
 			merged.addAll(survey.candidates);
 		}
@@ -70,7 +77,7 @@ final class NrSignalAnalyzer {
 	}
 
 	private PssSurvey surveyPss(byte[] iq, int length, int sampleRateHz, SurveyConfig config,
-			boolean decodePdcch) {
+			boolean decodePdcch, boolean fastPdcchOnly) {
 		int inputSamples = Math.min(length, iq == null ? 0 : iq.length) / 2;
 		if (sampleRateHz < 5_000_000 || inputSamples < sampleRateHz / 50) {
 			return new PssSurvey(Collections.<PssSurveyCandidate>emptyList(), 0);
@@ -123,7 +130,8 @@ final class NrSignalAnalyzer {
 		}
 		List<PssSurveyCandidate> decoded = new ArrayList<PssSurveyCandidate>();
 		for (PssSurveyCandidate candidate : unique)
-			decoded.add(decodeSurveySss(inI, inQ, candidate, config, decodePdcch));
+			decoded.add(decodeSurveySss(inI, inQ, candidate, config, decodePdcch,
+					fastPdcchOnly));
 		Collections.sort(decoded, (a, b) -> {
 			if ((a.pci >= 0) != (b.pci >= 0)) return a.pci >= 0 ? -1 : 1;
 			int repeatCompare = Integer.compare(b.periodicRepeats, a.periodicRepeats);
@@ -134,7 +142,8 @@ final class NrSignalAnalyzer {
 	}
 
 	private static PssSurveyCandidate decodeSurveySss(double[] inI, double[] inQ,
-			PssSurveyCandidate candidate, SurveyConfig config, boolean decodePdcch) {
+			PssSurveyCandidate candidate, SurveyConfig config, boolean decodePdcch,
+			boolean fastPdcchOnly) {
 		int bestNid1 = -1, bestDelta = 0, bestRepeats = 0;
 		double best = 0, second = 0;
 		int period = config.sampleRateHz / 50;
@@ -194,13 +203,18 @@ final class NrSignalAnalyzer {
 				bestRepeats = repeats;
 			}
 		}
-		int pci = best >= 0.45 && best >= second * 1.35 ? 3 * bestNid1 + candidate.nid2 : -1;
+		double sssThreshold = candidate.pssCorrelation >= 0.75 && candidate.periodicRepeats >= 2
+				? 0.38 : 0.45;
+		int pci = best >= sssThreshold && best >= second * 1.35
+				? 3 * bestNid1 + candidate.nid2 : -1;
 		PssSurveyCandidate withSss = candidate.withSss(pci, bestNid1, best, second, bestDelta, bestRepeats);
-		return pci >= 0 ? decodePbchDmrs(inI, inQ, withSss, config, decodePdcch) : withSss;
+		return pci >= 0 ? decodePbchDmrs(inI, inQ, withSss, config, decodePdcch,
+				fastPdcchOnly) : withSss;
 	}
 
 	private static PssSurveyCandidate decodePbchDmrs(double[] inI, double[] inQ,
-			PssSurveyCandidate candidate, SurveyConfig config, boolean decodePdcch) {
+			PssSurveyCandidate candidate, SurveyConfig config, boolean decodePdcch,
+			boolean fastPdcchOnly) {
 		double[] sums = new double[8];
 		int[] counts = new int[8];
 		double[][][] references = new double[8][][];
@@ -290,11 +304,23 @@ final class NrSignalAnalyzer {
 			if (decoded.crcOk) break;
 		}
 		result = result.withPbch(bestPbch);
-		if (decodePdcch && bestPbch.mib.valid) {
+		if (decodePdcch && bestPbch.mib.valid
+				&& (!fastPdcchOnly || fastPdcchSupported(result, bestPbch.mib))) {
 			result = result.withPdcch(NrPdcchDecoder.survey(inI, inQ, result, bestPbch.mib));
 			result.load = estimateDownlinkLoad(inI, inQ, result);
 		}
 		return result;
+	}
+
+	private static boolean fastPdcchSupported(PssSurveyCandidate candidate, MibData mib) {
+		int coreSetIndex = (mib.pdcchConfigSib1 >>> 4) & 15;
+		int searchSpaceIndex = mib.pdcchConfigSib1 & 15;
+		if (candidate.ssbSubcarrierSpacingKhz == 15 && mib.subcarrierSpacingCommonKhz == 15)
+			return coreSetIndex == 7 || coreSetIndex == 6
+					&& (searchSpaceIndex == 2 || searchSpaceIndex == 4)
+					|| coreSetIndex == 3 && searchSpaceIndex == 0;
+		return candidate.ssbSubcarrierSpacingKhz == 30 && mib.subcarrierSpacingCommonKhz == 30
+				&& coreSetIndex == 0 && searchSpaceIndex == 4;
 	}
 
 	private static LoadData estimateDownlinkLoad(double[] inI, double[] inQ,
@@ -576,11 +602,34 @@ final class NrSignalAnalyzer {
 	}
 
 	Result analyzeFast(byte[] iq, int length, int sampleRateHz) {
-		PssSurvey survey = surveyPss(iq, length, sampleRateHz, true, false);
+		PssSurvey survey = surveyPss(iq, length, sampleRateHz, true, true, true);
 		return resultFromSurvey(survey);
 	}
 
-	private static Result resultFromSurvey(PssSurvey survey) {
+	Result analyzeFastWithContext(byte[] iq, int length, byte[] context, int contextLength,
+			int iqOffsetBytes, int sampleRateHz) {
+		PssSurvey survey = surveyPss(iq, length, sampleRateHz, true, false, true);
+		Result initial = resultFromSurvey(survey);
+		if (initial.sib1.valid || survey.candidates.isEmpty() || context == null
+				|| contextLength <= length || iqOffsetBytes < 0) return initial;
+		PssSurveyCandidate primary = survey.candidates.get(0);
+		if (!primary.mib.valid || !fastPdcchSupported(primary, primary.mib)) return initial;
+		int contextSamples = Math.min(contextLength, context.length) / 2;
+		double[][] resampled = resample(context, contextSamples, sampleRateHz,
+				primary.surveySampleRateHz);
+		int sampleOffset = (int)Math.round(iqOffsetBytes * .5d * primary.surveySampleRateHz
+				/ sampleRateHz);
+		PssSurveyCandidate anchored = primary.withSampleOffset(sampleOffset);
+		anchored = anchored.withPdcch(NrPdcchDecoder.survey(
+				resampled[0], resampled[1], anchored, anchored.mib));
+		anchored.load = estimateDownlinkLoad(resampled[0], resampled[1], anchored);
+		List<PssSurveyCandidate> extended = new ArrayList<PssSurveyCandidate>(survey.candidates);
+		extended.set(0, anchored);
+		return resultFromSurvey(new PssSurvey(Collections.unmodifiableList(extended),
+				survey.cpCandidates));
+	}
+
+	private Result resultFromSurvey(PssSurvey survey) {
 		if (survey.candidates.isEmpty()) return Result.empty("Searching 5G NR PSS");
 		List<Candidate> candidates = new ArrayList<Candidate>();
 		for (PssSurveyCandidate value : survey.candidates) {
@@ -599,8 +648,22 @@ final class NrSignalAnalyzer {
 						+ 33d * surveyPrimary.dmrsCorrelation)
 				: detected ? Math.min(90, 45d * primary.pssCorrelation + 45d * primary.sssCorrelation)
 				: Math.min(45, primary.pssCorrelation * 100d);
-		Sib1Data sib1 = surveyPrimary.pdcch.pdsch.transportBlock.crcOk
-				? NrSib1Decoder.decode(surveyPrimary.pdcch.pdsch.transportBlock.payload) : Sib1Data.EMPTY;
+		NrPdcchDecoder.Survey pdcch = surveyPrimary.pdcch;
+		NrPdschDecoder.Decoded pdsch = pdcch.pdsch;
+		if (primary.pci >= 0 && pdsch.rateMatchedLlrs.length > 0
+				&& NrLdpcDecoder.supportsTransportBlock(pdsch.transportBlockBits)) {
+			if (sib1SoftBuffer == null || sib1SoftBufferPci != primary.pci
+					|| sib1SoftBuffer.transportBlockBits != pdsch.transportBlockBits) {
+				sib1SoftBuffer = NrLdpcDecoder.softBuffer(pdsch.transportBlockBits);
+				sib1SoftBufferPci = primary.pci;
+			}
+			if (sib1SoftBuffer != null && sib1SoftBuffer.add(pdsch.rateMatchedLlrs, pdcch.dci.rv)) {
+				NrLdpcDecoder.Result combined = sib1SoftBuffer.decode();
+				if (combined.crcOk) pdcch = pdcch.withPdsch(pdsch.withTransportBlock(combined));
+			}
+		}
+		Sib1Data sib1 = pdcch.pdsch.transportBlock.crcOk
+				? NrSib1Decoder.decode(pdcch.pdsch.transportBlock.payload) : Sib1Data.EMPTY;
 		String state = sib1.valid ? "5G NR SIB1 decoded"
 				: surveyPrimary.mib.valid ? "5G NR MIB decoded"
 				: detected && surveyPrimary.dmrsConfirmed ? "5G NR PCI confirmed by PBCH DM-RS"
@@ -612,7 +675,7 @@ final class NrSignalAnalyzer {
 				primary.iqOrientation, quality, state, Collections.unmodifiableList(candidates),
 				surveyPrimary.dmrsConfirmed, surveyPrimary.dmrsCorrelation,
 				surveyPrimary.secondDmrsCorrelation, surveyPrimary.iBarSsb, surveyPrimary.dmrsBursts,
-				surveyPrimary.mib, sib1, surveyPrimary.load, surveyPrimary.pdcch);
+				surveyPrimary.mib, sib1, surveyPrimary.load, pdcch);
 	}
 
 	@SuppressWarnings("unused")
@@ -1220,6 +1283,14 @@ final class NrSignalAnalyzer {
 					sssCorrelation, secondSssCorrelation, sssTimingDelta, sssRepeats,
 					dmrsConfirmed, iBarSsb, dmrsCorrelation, secondDmrsCorrelation, dmrsBursts,
 					pbchCrcOk, pbchEvm, mib, pdcch,
+					ssbSubcarrierSpacingKhz, surveySampleRateHz, surveyCpSamples);
+		}
+		PssSurveyCandidate withSampleOffset(int offset) {
+			return new PssSurveyCandidate(nid2, pssCorrelation, cpCorrelation, sample + offset,
+					freqOffsetHz, iqOrientation, cfoHz, periodicRepeats, periodicCorrelation,
+					centerBin, pci, rawNid1, sssCorrelation, secondSssCorrelation,
+					sssTimingDelta, sssRepeats, dmrsConfirmed, iBarSsb, dmrsCorrelation,
+					secondDmrsCorrelation, dmrsBursts, pbchCrcOk, pbchEvm, mib, pdcch,
 					ssbSubcarrierSpacingKhz, surveySampleRateHz, surveyCpSamples);
 		}
 		PssSurveyCandidate withSss(int decodedPci, int nid1, double score, double second,

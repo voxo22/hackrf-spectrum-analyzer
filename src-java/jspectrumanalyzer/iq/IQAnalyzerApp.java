@@ -45,6 +45,7 @@ import javax.swing.border.TitledBorder;
 
 import jspectrumanalyzer.capture.ScreenCapture;
 import jspectrumanalyzer.capture.ScreenCaptureH264;
+import jspectrumanalyzer.ui.ContextHelpSupport;
 
 public class IQAnalyzerApp {
 	public static final class VideoRecordingSettings {
@@ -216,8 +217,10 @@ public class IQAnalyzerApp {
 		timeDomainPanel = new IQTimeDomainPanel(ringBuffer, DEFAULT_VISIBLE_SAMPLES);
 		timeDomainPanel.setLineThickness(lineThickness);
 		timeDomainPanel.addVisibleSamplesListener(e -> SwingUtilities.invokeLater(this::syncTimeViewFromPanel));
+		ContextHelpSupport.setContextHelp(timeDomainPanel, "iq.timePlot");
 		spectrumPanel = new IQSpectrumPanel(ringBuffer);
 		spectrumPanel.setOffsetDragListener(offsetHz -> SwingUtilities.invokeLater(() -> adjustOffsetFromSpectrum(offsetHz)));
+		ContextHelpSupport.setContextHelp(spectrumPanel, "iq.spectrumPlot");
 
 		frame = new JFrame("HackRF Time-Domain Analyzer");
 		frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
@@ -639,15 +642,15 @@ public class IQAnalyzerApp {
 		outputRateCombo.setSelectedIndex(3);
 		outputRateCombo.addActionListener(e -> applyDspSettingsLive());
 		signalTestCombo = new JComboBox<>(new SignalTestOption[] {
+				new SignalTestOption("Generic QAM"),
+				new SignalTestOption("FM RDS"),
 				new SignalTestOption("DAB"),
-				new SignalTestOption("DVB-T 8 MHz"),
-				new SignalTestOption("DVB-T2 8 MHz"),
+				new SignalTestOption("DVB-T"),
+				new SignalTestOption("DVB-T2"),
 				new SignalTestOption("GSM 2G"),
 				new SignalTestOption("UMTS 3G"),
 				new SignalTestOption("LTE 4G"),
-				new SignalTestOption("NR 5G"),
-				new SignalTestOption("FM RDS"),
-				new SignalTestOption("Generic QAM")
+				new SignalTestOption("NR 5G")
 		});
 		signalTestCombo.addActionListener(e -> applySignalTestPreset());
 		signalTestButton = new JButton("SIGNAL TEST");
@@ -729,6 +732,7 @@ public class IQAnalyzerApp {
 		});
 
 		JPanel rfSection = createSection("RF");
+		addSectionHelpButton(rfSection, "iq.help");
 		addLabeledPair(rfSection, "Center", centerField, "Rate", sampleRateCombo);
 		addGainSliderPair(rfSection);
 		JPanel runRow = new JPanel(new BorderLayout(6, 0));
@@ -773,6 +777,7 @@ public class IQAnalyzerApp {
 		controls.add(viewSection);
 		controls.add(audioSection);
 		controls.add(triggerSection);
+		installContextHelpTexts();
 		styleComponentTree(controls);
 		styleRunStopButton();
 		styleRecordButtons();
@@ -784,6 +789,51 @@ public class IQAnalyzerApp {
 		updateButtons();
 		syncTimeViewFromPanel();
 		return controls;
+	}
+
+	private void installContextHelpTexts() {
+		ContextHelpSupport.setContextHelp("iq.center", centerField);
+		ContextHelpSupport.setContextHelp("iq.sampleRate", sampleRateCombo);
+		ContextHelpSupport.setContextHelp("iq.lna", lnaSlider, lnaValueLabel);
+		ContextHelpSupport.setContextHelp("iq.vga", vgaSlider, vgaValueLabel);
+		ContextHelpSupport.setContextHelp("iq.rfAmp", rfAmpCheck);
+		ContextHelpSupport.setContextHelp("iq.run", runStopButton, statusLabel);
+		ContextHelpSupport.setContextHelp("iq.zoomPreset", presetCombo);
+		ContextHelpSupport.setContextHelp("iq.viewMode", viewModeCombo);
+		ContextHelpSupport.setContextHelp("iq.channelOffset", channelOffsetField);
+		ContextHelpSupport.setContextHelp("iq.dcOffset", dcOffsetEnableCheck);
+		ContextHelpSupport.setContextHelp("iq.dcShift", dcOffsetCombo);
+		ContextHelpSupport.setContextHelp("iq.bandwidth", channelBandwidthCombo);
+		ContextHelpSupport.setContextHelp("iq.outputRate", outputRateCombo);
+		ContextHelpSupport.setContextHelp("iq.signalMode", signalTestCombo);
+		ContextHelpSupport.setContextHelp("iq.signalTest", signalTestButton);
+		ContextHelpSupport.setContextHelp("iq.timeView", sampleViewCombo, timeViewInfoLabel);
+		ContextHelpSupport.setContextHelp("iq.envelope", envelopeCheck);
+		ContextHelpSupport.setContextHelp("iq.deviation", deviationCheck);
+		ContextHelpSupport.setContextHelp("iq.burst", burstDetectCheck);
+		ContextHelpSupport.setContextHelp("iq.autoLevel", autoLevelCheck);
+		ContextHelpSupport.setContextHelp("iq.audio", audioEnableCheck);
+		ContextHelpSupport.setContextHelp("iq.audioMode", audioModeCombo);
+		ContextHelpSupport.setContextHelp("iq.audioVolume", audioVolumeSlider);
+		ContextHelpSupport.setContextHelp("iq.audioRecord", audioRecordButton);
+		ContextHelpSupport.setContextHelp("iq.videoRecord", videoRecordButton);
+		ContextHelpSupport.setContextHelp("iq.iqRecord", iqRecordButton);
+		ContextHelpSupport.setContextHelp("iq.triggerEnable", triggerCheck);
+		ContextHelpSupport.setContextHelp("iq.singleTrigger", singleTriggerButton);
+		ContextHelpSupport.setContextHelp("iq.triggerPre", triggerPreCombo);
+		ContextHelpSupport.setContextHelp("iq.triggerLevel", triggerLevelSlider);
+	}
+
+	private void addSectionHelpButton(JPanel section, String key) {
+		JButton help = ContextHelpSupport.createHelpButton(section);
+		ContextHelpSupport.setContextHelp(help, key);
+		GridBagConstraints constraints = new GridBagConstraints();
+		constraints.gridx = 0;
+		constraints.gridy = 0;
+		constraints.gridwidth = GridBagConstraints.REMAINDER;
+		constraints.anchor = GridBagConstraints.NORTHEAST;
+		constraints.insets = new java.awt.Insets(-22, 0, 0, 4);
+		section.add(help, constraints);
 	}
 
 	private JPanel createSection(String title) {

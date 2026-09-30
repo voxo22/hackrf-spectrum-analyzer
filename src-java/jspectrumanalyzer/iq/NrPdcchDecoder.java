@@ -13,52 +13,92 @@ final class NrPdcchDecoder {
 	private static final int LEGACY_CORESET_RB = 48;
 	private static final int LEGACY_CORESET_OFFSET_RB = 16;
 	private static final int SYMBOL_STEP = 1_096;
-	private static final int HALF_FRAME_SAMPLES = 153_600;
+	private static final boolean AGGRESSIVE_DCI_REPAIR = Boolean.getBoolean("nr.pdcch.aggressiveRepair");
+	private static final int[][] CORESET_15_15 = {
+		{ 24, 2, 0 }, { 24, 2, 2 }, { 24, 2, 4 }, { 24, 3, 0 },
+		{ 24, 3, 2 }, { 24, 3, 4 }, { 48, 1, 12 }, { 48, 1, 16 },
+		{ 48, 2, 12 }, { 48, 2, 16 }, { 48, 3, 12 }, { 48, 3, 16 },
+		{ 96, 1, 38 }, { 96, 2, 38 }, { 96, 3, 38 }, { 0, 0, 0 }
+	};
+	private static final int[][] CORESET_15_30 = {
+		{ 24, 2, 5 }, { 24, 2, 6 }, { 24, 2, 7 }, { 24, 2, 8 },
+		{ 24, 3, 5 }, { 24, 3, 6 }, { 24, 3, 7 }, { 24, 3, 8 },
+		{ 48, 1, 18 }, { 48, 1, 20 }, { 48, 2, 18 }, { 48, 2, 20 },
+		{ 48, 3, 18 }, { 48, 3, 20 }, { 0, 0, 0 }, { 0, 0, 0 }
+	};
+	private static final int[][] CORESET_30_15 = {
+		{ 48, 1, 2 }, { 48, 1, 6 }, { 48, 2, 2 }, { 48, 2, 6 },
+		{ 48, 3, 2 }, { 48, 3, 6 }, { 96, 1, 28 }, { 96, 2, 28 },
+		{ 96, 3, 28 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 },
+		{ 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }
+	};
+	private static final int[][] CORESET_30_30 = {
+		{ 24, 2, 0 }, { 24, 2, 1 }, { 24, 2, 2 }, { 24, 2, 3 },
+		{ 24, 2, 4 }, { 24, 3, 0 }, { 24, 3, 1 }, { 24, 3, 2 },
+		{ 24, 3, 3 }, { 24, 3, 4 }, { 48, 1, 12 }, { 48, 1, 14 },
+		{ 48, 1, 16 }, { 48, 2, 12 }, { 48, 2, 14 }, { 48, 2, 16 }
+	};
+	private static final int[][] SEARCH_SPACE_FR1 = {
+		{ 0, 2, 0 }, { 0, 1, -1 }, { 2, 2, 0 }, { 2, 1, -1 },
+		{ 5, 2, 0 }, { 5, 1, -1 }, { 7, 2, 0 }, { 7, 1, -1 },
+		{ 0, 4, 0 }, { 5, 4, 0 }, { 0, 2, 1 }, { 0, 2, 2 },
+		{ 2, 2, 1 }, { 2, 2, 2 }, { 5, 2, 1 }, { 5, 2, 2 }
+	};
 
 	private NrPdcchDecoder() {}
 
 	static Survey survey(double[] inI, double[] inQ, NrSignalAnalyzer.PssSurveyCandidate candidate,
 			NrSignalAnalyzer.MibData mib) {
-		if (candidate.ssbSubcarrierSpacingKhz == 15) return survey15Khz(inI, inQ, candidate, mib);
+		if (candidate.ssbSubcarrierSpacingKhz == 15 && mib != null && mib.valid
+				&& mib.subcarrierSpacingCommonKhz == 15
+				&& mib.pdcchConfigSib1 == 0x72)
+			return survey15Khz(inI, inQ, candidate, mib);
 		CoreSetConfig config = coreSetConfig(candidate, mib);
 		if (config == null) return Survey.EMPTY;
 		int period = candidate.surveySampleRateHz / 50;
 		double omega = candidate.cfoHz * 2d * Math.PI / candidate.surveySampleRateHz;
 		Survey best = Survey.EMPTY;
-		double[] combined = null;
-		int combinedCount = 0;
+		NrLdpcDecoder.SoftBuffer combined = null;
 		Map<String, double[]> combinedPdcch = new HashMap<String, double[]>();
-		for (int repeat = -3; repeat <= 3; repeat++) {
+		int repeatRadius = config.fast30 ? 1 : repeatRadius(inI.length, period);
+		for (int repeat = -repeatRadius; repeat <= repeatRadius; repeat++) {
 			int pssUseful = candidate.sample + candidate.sssTimingDelta + repeat * period;
 			for (int pssOffset : pssUsefulOffsets(candidate)) {
 			int frameStart = pssUseful - pssOffset;
-			for (int slot : config.monitoringSlots) {
-			int timingRadius = candidate.ssbSubcarrierSpacingKhz == 30 ? 24 : 0;
+			for (MonitoringOccasion occasion : config.monitoring) {
+			int timingRadius = config.fast30 ? 6
+					: candidate.ssbSubcarrierSpacingKhz == 30 ? 24 : 0;
 			for (int timing = -timingRadius; timing <= timingRadius; timing++) {
-				int useful = frameStart + slot * SAMPLES_PER_SLOT + FIRST_SYMBOL_CP + timing;
-				if (useful < 0 || useful + (config.duration - 1) * SYMBOL_STEP + FFT > inI.length) continue;
+				int slotStart = frameStart + occasion.absoluteSlot * SAMPLES_PER_SLOT
+						+ FIRST_SYMBOL_CP + timing;
+				int useful = slotStart + symbolOffset(occasion.firstSymbol);
+				int lastUseful = slotStart + symbolOffset(occasion.firstSymbol + config.duration - 1);
+				if (useful < 0 || lastUseful + FFT > inI.length) continue;
 				double[][][] symbols = new double[config.duration][][];
 				for (int l = 0; l < config.duration; l++)
-					symbols[l] = NrSignalAnalyzer.surveySymbol(inI, inQ, useful + l * SYMBOL_STEP,
-							candidate.sample, omega, candidate.iqOrientation);
-				int binRadius = candidate.ssbSubcarrierSpacingKhz == 30 ? 12 : 0;
+					symbols[l] = NrSignalAnalyzer.surveySymbol(inI, inQ,
+							slotStart + symbolOffset(occasion.firstSymbol + l), candidate.sample,
+							omega, candidate.iqOrientation);
+				int binRadius = config.fast30 ? 3
+						: candidate.ssbSubcarrierSpacingKhz == 30 ? 12 : 0;
 				for (int binShift = -binRadius; binShift <= binRadius; binShift++) {
-				Survey measured = measureDmrs(symbols, candidate, slot, useful, config, binShift);
-				if (config.duration == 1
-						&& measured.correlation >= (config.duration == 1 ? 0.35 : 0.25)) {
-					String combineKey = pssOffset + ":" + slot + ":" + timing + ":" + binShift;
+				Survey measured = measureDmrs(symbols, candidate, occasion.slot, slotStart,
+						occasion.firstSymbol, config, binShift);
+				if (measured.correlation >= (config.duration == 1 ? 0.35 : 0.25)) {
+					String combineKey = pssOffset + ":" + occasion.absoluteSlot + ":"
+							+ occasion.firstSymbol + ":" + timing + ":" + binShift;
 					measured = measured.withDci(decodeDci(symbols, candidate, measured, config,
 							combinedPdcch, combineKey, 0, null));
 				}
 				if (measured.dci.valid)
 					measured = measured.withPdsch(NrPdschDecoder.decode(inI, inQ, candidate, mib, measured));
 				if (measured.pdsch.rateMatchedLlrs.length > 0) {
-					if (combined == null) combined = new double[measured.pdsch.rateMatchedLlrs.length];
-					if (combined.length == measured.pdsch.rateMatchedLlrs.length) {
-						for (int i = 0; i < combined.length; i++) combined[i] += measured.pdsch.rateMatchedLlrs[i];
-						combinedCount++;
-						NrLdpcDecoder.Result decoded = NrLdpcDecoder.decode(combined,
-								measured.pdsch.transportBlockBits, measured.dci.rv);
+					if (combined == null || combined.transportBlockBits
+							!= measured.pdsch.transportBlockBits)
+						combined = NrLdpcDecoder.softBuffer(measured.pdsch.transportBlockBits);
+					if (combined != null
+							&& combined.add(measured.pdsch.rateMatchedLlrs, measured.dci.rv)) {
+						NrLdpcDecoder.Result decoded = combined.decode();
 						if (decoded.crcOk) measured = measured.withPdsch(measured.pdsch.withTransportBlock(decoded));
 					}
 				}
@@ -72,8 +112,8 @@ final class NrPdcchDecoder {
 			double[][][] symbols = new double[config.duration][][];
 			for (int l = 0; l < config.duration; l++)
 				symbols[l] = NrSignalAnalyzer.surveySymbol(inI, inQ,
-						best.usefulSample + l * SYMBOL_STEP, candidate.sample, omega,
-						candidate.iqOrientation);
+						best.usefulSample + symbolOffset(best.firstSymbol + l), candidate.sample,
+						omega, candidate.iqOrientation);
 			DecodeDebug debug = new DecodeDebug();
 			Dci dci = decodeDci(symbols, candidate, best, config,
 					new HashMap<String, double[]>(), "best", -1, debug);
@@ -87,21 +127,19 @@ final class NrPdcchDecoder {
 			best = best.withDebug(debug.summary());
 			if (dci.valid) best = best.withPdsch(NrPdschDecoder.decode(inI, inQ, candidate, mib, best));
 		}
-		return combinedCount > 1 && !best.pdsch.transportBlock.crcOk
-				? best.withPdsch(best.pdsch.withTransportBlock(NrLdpcDecoder.decode(combined,
-						best.pdsch.transportBlockBits, best.dci.rv))) : best;
+		return withCombinedCrc(best, combined);
 	}
 
 	private static Survey survey15Khz(double[] inI, double[] inQ,
 			NrSignalAnalyzer.PssSurveyCandidate candidate, NrSignalAnalyzer.MibData mib) {
 		if (mib == null || !mib.valid || mib.subcarrierSpacingCommonKhz != 15
-				|| ((mib.pdcchConfigSib1 >>> 4) & 15) != 7) return Survey.EMPTY;
+				|| mib.pdcchConfigSib1 != 0x72) return Survey.EMPTY;
 		int period = 15_360_000 / 50;
 		double omega = candidate.cfoHz * 2d * Math.PI / 15_360_000d;
 		Survey best = Survey.EMPTY;
-		double[] combined = null;
-		int combinedCount = 0;
-		for (int repeat = -3; repeat <= 3; repeat++) {
+		NrLdpcDecoder.SoftBuffer combined = null;
+		int repeatRadius = repeatRadius(inI.length, period);
+		for (int repeat = -repeatRadius; repeat <= repeatRadius; repeat++) {
 			int pssUseful = candidate.sample + candidate.sssTimingDelta + repeat * period;
 			int frameStart = pssUseful - PSS_USEFUL_FROM_FRAME_START;
 			for (int slot = 2; slot <= 3; slot++) {
@@ -115,21 +153,28 @@ final class NrPdcchDecoder {
 				if (measured.dci.valid)
 					measured = measured.withPdsch(NrPdschDecoder.decode(inI, inQ, candidate, mib, measured));
 				if (measured.pdsch.rateMatchedLlrs.length > 0) {
-					if (combined == null) combined = new double[measured.pdsch.rateMatchedLlrs.length];
-					if (combined.length == measured.pdsch.rateMatchedLlrs.length) {
-						for (int i = 0; i < combined.length; i++) combined[i] += measured.pdsch.rateMatchedLlrs[i];
-						combinedCount++;
-						NrLdpcDecoder.Result decoded = NrLdpcDecoder.decode(combined,
-								measured.pdsch.transportBlockBits, measured.dci.rv);
+					if (combined == null || combined.transportBlockBits
+							!= measured.pdsch.transportBlockBits)
+						combined = NrLdpcDecoder.softBuffer(measured.pdsch.transportBlockBits);
+					if (combined != null
+							&& combined.add(measured.pdsch.rateMatchedLlrs, measured.dci.rv)) {
+						NrLdpcDecoder.Result decoded = combined.decode();
 						if (decoded.crcOk) measured = measured.withPdsch(measured.pdsch.withTransportBlock(decoded));
 					}
 				}
 				if (better(measured, best)) best = measured;
 			}
 		}
-		return combinedCount > 1 && !best.pdsch.transportBlock.crcOk
-				? best.withPdsch(best.pdsch.withTransportBlock(NrLdpcDecoder.decode(combined,
-						best.pdsch.transportBlockBits, best.dci.rv))) : best;
+		return withCombinedCrc(best, combined);
+	}
+
+	private static Survey withCombinedCrc(Survey best, NrLdpcDecoder.SoftBuffer combined) {
+		if (combined == null || combined.count() < 2 || !best.pdsch.demodulated
+				|| combined.transportBlockBits != best.pdsch.transportBlockBits
+				|| best.pdsch.transportBlock.crcOk) return best;
+		NrLdpcDecoder.Result decoded = combined.decode();
+		return decoded.crcOk
+				? best.withPdsch(best.pdsch.withTransportBlock(decoded)) : best;
 	}
 
 	private static Survey measureDmrs15Khz(double[][] symbol, NrSignalAnalyzer.PssSurveyCandidate candidate,
@@ -164,7 +209,7 @@ final class NrPdcchDecoder {
 		}
 		double score = previousPower <= 1e-18 || currentPower <= 1e-18 ? 0
 				: Math.hypot(cr, ci) / Math.sqrt(previousPower * currentPower);
-		return new Survey(score, slot, usefulSample, coresetBin0, LEGACY_CORESET_RB, 1,
+		return new Survey(score, slot, usefulSample, 0, coresetBin0, LEGACY_CORESET_RB, 1,
 				pilots, pairs, Dci.EMPTY, NrPdschDecoder.Decoded.EMPTY, "");
 	}
 
@@ -252,7 +297,7 @@ final class NrPdcchDecoder {
 		int reserved = read(unmasked, at, 15);
 		int[] allocation = decodeRiv15Khz(riv);
 		return new Dci(true, aggregation, ncce, riv, allocation[0], allocation[1], time, vrb,
-				mcs, rv, sii, reserved, qpskSwap, qpskSign);
+				mcs, rv, sii, reserved, qpskSwap, qpskSign, -1);
 	}
 
 	private static int[] decodeRiv15Khz(int riv) {
@@ -272,34 +317,69 @@ final class NrPdcchDecoder {
 		if (mib == null || !mib.valid) return null;
 		int coreSetIndex = (mib.pdcchConfigSib1 >>> 4) & 15;
 		int searchSpaceIndex = mib.pdcchConfigSib1 & 15;
-		if (candidate.ssbSubcarrierSpacingKhz == 15 && mib.subcarrierSpacingCommonKhz == 15
-				&& coreSetIndex == 7) {
-			return new CoreSetConfig(48, 1, 16, new int[] { 2, 3 });
-		}
-		if (candidate.ssbSubcarrierSpacingKhz == 30 && mib.subcarrierSpacingCommonKhz == 30
-				&& coreSetIndex == 0 && searchSpaceIndex == 4) {
-			int iSsb = Math.max(0, Math.min(7, candidate.iBarSsb & 7));
-			return new CoreSetConfig(24, 2, 0, new int[] { 10 + iSsb });
-		}
+		int[][] table = coreSetTable(candidate.ssbSubcarrierSpacingKhz, mib.subcarrierSpacingCommonKhz);
+		if (table == null) return null;
+		int[] row = table[coreSetIndex];
+		if (row[0] <= 0) return null;
+		return new CoreSetConfig(row[0], row[1], row[2],
+				candidate.ssbSubcarrierSpacingKhz == 30 && mib.subcarrierSpacingCommonKhz == 30
+						&& coreSetIndex == 0 && searchSpaceIndex == 4,
+				monitoringOccasions(searchSpaceIndex, mib.subcarrierSpacingCommonKhz,
+						candidate.iBarSsb, row[1]));
+	}
+
+	private static int[][] coreSetTable(int ssbScsKhz, int pdcchScsKhz) {
+		if (ssbScsKhz == 15 && pdcchScsKhz == 15) return CORESET_15_15;
+		if (ssbScsKhz == 15 && pdcchScsKhz == 30) return CORESET_15_30;
+		if (ssbScsKhz == 30 && pdcchScsKhz == 15) return CORESET_30_15;
+		if (ssbScsKhz == 30 && pdcchScsKhz == 30) return CORESET_30_30;
 		return null;
 	}
 
+	private static MonitoringOccasion[] monitoringOccasions(int searchSpaceIndex, int pdcchScsKhz,
+			int iBarSsb, int coresetSymbols) {
+		int[] row = SEARCH_SPACE_FR1[searchSpaceIndex & 15];
+		int mu = pdcchScsKhz == 30 ? 1 : 0;
+		int slotsPerFrame = 10 << mu;
+		int iSsb = Math.max(0, Math.min(7, iBarSsb & 7));
+		int n0 = Math.floorMod(row[0] * (1 << mu) + iSsb * row[1] / 2, slotsPerFrame);
+		if (row[2] < 0) return new MonitoringOccasion[] {
+				new MonitoringOccasion(n0, n0, 0),
+				new MonitoringOccasion(n0, n0, coresetSymbols)
+		};
+		return new MonitoringOccasion[] { new MonitoringOccasion(n0, n0, row[2]) };
+	}
+
 	private static int[] pssUsefulOffsets(NrSignalAnalyzer.PssSurveyCandidate candidate) {
-		if (candidate.ssbSubcarrierSpacingKhz == 15) return new int[] { 2_272 };
 		int iSsb = Math.max(0, Math.min(7, candidate.iBarSsb & 7));
 		int firstSymbol = 14 * (iSsb / 2) + ((iSsb & 1) == 0 ? 2 : 8);
 		int slot = firstSymbol / SYMBOLS_PER_SLOT;
 		int symbol = firstSymbol % SYMBOLS_PER_SLOT;
-		int firstHalf = slot * SAMPLES_PER_SLOT + FIRST_SYMBOL_CP + symbol * SYMBOL_STEP;
+		int firstHalf = slot * SAMPLES_PER_SLOT + FIRST_SYMBOL_CP + symbolOffset(symbol);
 		/* For Lmax=8 the PBCH DM-RS hypothesis identifies all three iSSB bits;
 		 * the half-frame position is not encoded in iBarSSB. Try both 5 ms halves. */
-		return new int[] { firstHalf, firstHalf + HALF_FRAME_SAMPLES };
+		return new int[] { firstHalf, firstHalf + candidate.surveySampleRateHz / 200 };
+	}
+
+	private static int symbolOffset(int symbol) {
+		return symbol * SYMBOL_STEP + (symbol >= 7 ? 8 : 0);
+	}
+
+	private static int repeatRadius(int samples, int period) {
+		return Math.max(3, samples / Math.max(1, period) + 1);
 	}
 
 	private static boolean better(Survey candidate, Survey current) {
 		if (candidate.pdsch.transportBlock.crcOk != current.pdsch.transportBlock.crcOk)
 			return candidate.pdsch.transportBlock.crcOk;
 		if (candidate.dci.valid != current.dci.valid) return candidate.dci.valid;
+		if (candidate.dci.valid && candidate.pdsch.demodulated && current.pdsch.demodulated
+				&& candidate.pdsch.transportBlock.syndromeErrors != Integer.MAX_VALUE
+				&& current.pdsch.transportBlock.syndromeErrors != Integer.MAX_VALUE
+				&& candidate.pdsch.transportBlock.syndromeErrors
+						!= current.pdsch.transportBlock.syndromeErrors)
+			return candidate.pdsch.transportBlock.syndromeErrors
+					< current.pdsch.transportBlock.syndromeErrors;
 		if (candidate.dci.valid && candidate.pdsch.transportBlock.repetitionAgreement
 				!= current.pdsch.transportBlock.repetitionAgreement)
 			return candidate.pdsch.transportBlock.repetitionAgreement
@@ -308,7 +388,7 @@ final class NrPdcchDecoder {
 	}
 
 	private static Survey measureDmrs(double[][][] symbols, NrSignalAnalyzer.PssSurveyCandidate candidate,
-			int slot, int usefulSample, CoreSetConfig config, int binShift) {
+			int slot, int slotStartSample, int firstSymbol, CoreSetConfig config, int binShift) {
 		int kSsbBins = candidate.mib.ssbSubcarrierOffset * 15
 				/ candidate.mib.subcarrierSpacingCommonKhz;
 		int commonRb0 = candidate.centerBin - 119 - kSsbBins;
@@ -318,7 +398,7 @@ final class NrPdcchDecoder {
 		for (int l = 0; l < config.duration; l++) {
 			double cr = 0, ci = 0, previousPower = 0, currentPower = 0;
 			int symbolPairs = 0;
-			long cinitLong = ((1L << 17) * (SYMBOLS_PER_SLOT * slot + l + 1L)
+			long cinitLong = ((1L << 17) * (SYMBOLS_PER_SLOT * slot + firstSymbol + l + 1L)
 					* (2L * candidate.pci + 1L) + 2L * candidate.pci) & 0x7fffffffL;
 			int[] sequence = gold((int)cinitLong, config.rb * 6);
 			for (int rb = 0; rb < config.rb; rb++) {
@@ -349,8 +429,8 @@ final class NrPdcchDecoder {
 			}
 		}
 		double score = scoreSymbols == 0 ? 0 : scoreSum / scoreSymbols;
-		return new Survey(score, slot, usefulSample, coresetBin0, config.rb, config.duration,
-				pilots, pairs, Dci.EMPTY,
+		return new Survey(score, slot, slotStartSample, firstSymbol, coresetBin0, config.rb,
+				config.duration, pilots, pairs, Dci.EMPTY,
 				NrPdschDecoder.Decoded.EMPTY, "");
 	}
 
@@ -361,8 +441,8 @@ final class NrPdcchDecoder {
 		int mappingVariants = listSize != 0 ? 4 : 1;
 		for (int[] location : candidateLocations(config)) {
 			for (int mapping = 0; mapping < mappingVariants; mapping++) {
-			double[] llr = candidateLlrs(symbols, candidate.pci, survey.slot, survey.coresetBin0,
-					location[0], location[1], config, mapping);
+			double[] llr = candidateLlrs(symbols, candidate.pci, survey.slot, survey.firstSymbol,
+					survey.coresetBin0, location[0], location[1], config, mapping);
 			Dci dci = decodeDciLlrs(llr, candidate.pci, location, config.rb, listSize,
 					mapping, debug);
 			if (dci.valid) return dci;
@@ -397,10 +477,11 @@ final class NrPdcchDecoder {
 					double[][][] symbols = new double[config.duration][][];
 					for (int l = 0; l < config.duration; l++)
 						symbols[l] = NrSignalAnalyzer.surveySymbol(inI, inQ,
-								useful + l * SYMBOL_STEP, candidate.sample, omega,
-								candidate.iqOrientation);
+								useful + symbolOffset(survey.firstSymbol + l), candidate.sample,
+								omega, candidate.iqOrientation);
 					double[] llr = candidateLlrs(symbols, candidate.pci, survey.slot,
-							survey.coresetBin0, location[0], location[1], config, mapping);
+							survey.firstSymbol, survey.coresetBin0, location[0], location[1],
+							config, mapping);
 					if (sum == null) sum = new double[llr.length];
 					if (sum.length != llr.length) continue;
 					for (int i = 0; i < sum.length; i++) sum[i] += llr[i];
@@ -417,7 +498,8 @@ final class NrPdcchDecoder {
 
 	private static int[][] candidateLocations(CoreSetConfig config) {
 		int cces = config.rb * config.duration / 6;
-		int[] aggregations = { 1, 2, 4, 8 };
+		// Type-0 common search space monitors aggregation levels 4 and 8.
+		int[] aggregations = { 4, 8 };
 		int count = 0;
 		for (int aggregation : aggregations)
 			for (int ncce = 0; ncce + aggregation <= cces; ncce += aggregation) count++;
@@ -445,6 +527,9 @@ final class NrPdcchDecoder {
 				ordered = baseOrdered.clone();
 				int[] scramble = gold(scrambleInit, ordered.length);
 				for (int i = 0; i < ordered.length; i++) ordered[i] *= 1 - 2 * scramble[i];
+				if (debug != null && ordered.length > 512)
+					debug.recordRepetition(repetitionAgreement(ordered, 512), location[0],
+							location[1], mapping, swap, scrambleInit);
 				for (int candidateBwpRb : dciBwpCandidates(bwpRb, listSize)) {
 					for (int reservedBits : reservedBitsCandidates(listSize)) {
 					int dciBits = frequencyAllocationBits(candidateBwpRb) + 13 + reservedBits + 24;
@@ -455,8 +540,9 @@ final class NrPdcchDecoder {
 						Dci dci = parseDci(decoded, location[0], location[1], swap, sign,
 								candidateBwpRb, reservedBits, mapping, scrambleInit, debug);
 						if (dci.valid) return dci;
-						if (listSize < 0 && dciCrcWeight(decoded, candidateBwpRb, reservedBits) <= 4) {
-							dci = parseDciWithBitCorrections(decoded, location[0], location[1],
+						if (AGGRESSIVE_DCI_REPAIR && listSize < 0
+								&& dciCrcWeight(decoded, candidateBwpRb, reservedBits) <= 4) {
+								dci = parseDciWithBitCorrections(decoded, location[0], location[1],
 									swap, sign, candidateBwpRb, reservedBits, mapping, scrambleInit);
 							if (dci.valid) return dci;
 						}
@@ -466,6 +552,16 @@ final class NrPdcchDecoder {
 				}
 			}
 		return Dci.EMPTY;
+	}
+
+	private static double repetitionAgreement(double[] llr, int period) {
+		double agree = 0, total = 0;
+		for (int i = period; i < llr.length; i++) {
+			double weight = Math.min(Math.abs(llr[i]), Math.abs(llr[i - period]));
+			total += weight;
+			if (llr[i] * llr[i - period] >= 0) agree += weight;
+		}
+		return total <= 1e-18 ? 0 : agree / total;
 	}
 
 	private static int[] pdcchScramblingInits(int pci, int listSize) {
@@ -483,16 +579,15 @@ final class NrPdcchDecoder {
 		return listSize < 0 ? new int[] { 15, 17 } : new int[] { 15 };
 	}
 
-	private static double[] candidateLlrs(double[][][] symbols, int pci, int slot, int coresetBin0,
-			int aggregation, int ncce, CoreSetConfig config, int mapping) {
+	private static double[] candidateLlrs(double[][][] symbols, int pci, int slot, int firstSymbol,
+			int coresetBin0, int aggregation, int ncce, CoreSetConfig config, int mapping) {
 		int bundles = config.rb * config.duration / 6;
 		double[] output = new double[aggregation * 108];
-		int at = 0;
 		int[][] sequences = new int[config.duration][];
 		double[][] channelR = new double[config.duration][config.rb * 3];
 		double[][] channelI = new double[config.duration][config.rb * 3];
 		for (int l = 0; l < config.duration; l++) {
-			long cinitLong = ((1L << 17) * (SYMBOLS_PER_SLOT * slot + l + 1L)
+			long cinitLong = ((1L << 17) * (SYMBOLS_PER_SLOT * slot + firstSymbol + l + 1L)
 					* (2L * pci + 1L) + 2L * pci) & 0x7fffffffL;
 			sequences[l] = gold((int)cinitLong, config.rb * 6);
 			for (int rb = 0; rb < config.rb; rb++) for (int pilot = 0; pilot < 3; pilot++) {
@@ -507,28 +602,33 @@ final class NrPdcchDecoder {
 			channelR[l] = smooth(channelR[l]);
 			channelI[l] = smooth(channelI[l]);
 		}
+		boolean interleaved = mapping < 2;
+		boolean symbolMajor = (mapping & 1) == 0;
+		boolean[] rbMask = new boolean[config.rb];
 		for (int cce = ncce; cce < ncce + aggregation; cce++) {
-			int bundle = regBundleForCce(cce, bundles, pci, mapping);
+			int bundle = regBundleForCce(cce, bundles, pci, interleaved);
 			for (int regOffset = 0; regOffset < 6; regOffset++) {
-				int[] lr = regLocation(6 * bundle + regOffset, config, mapping);
+				int[] lr = regLocation(6 * bundle + regOffset, config);
 				int l = lr[0], rb = lr[1];
-				if (l < 0 || l >= config.duration || rb < 0 || rb >= config.rb) continue;
-			for (int k = 0; k < 12; k++) {
-				if ((k & 3) == 1) continue;
-				double position = 3 * rb + (k - 1) / 4d;
-				int last = config.rb * 3 - 1;
-				int left = Math.max(0, Math.min(last, (int)Math.floor(position)));
-				int right = Math.max(0, Math.min(last, left + 1));
-				double fraction = Math.max(0, Math.min(1, position - left));
-				double hr = channelR[l][left] * (1 - fraction) + channelR[l][right] * fraction;
-				double hi = channelI[l][left] * (1 - fraction) + channelI[l][right] * fraction;
-				double power = hr * hr + hi * hi;
-				int bin = Math.floorMod(coresetBin0 + rb * 12 + k, FFT);
-				double yr = symbols[l][0][bin], yi = symbols[l][1][bin];
-				output[at++] = power < 1e-18 ? 0 : (yr * hr + yi * hi) / power;
-				output[at++] = power < 1e-18 ? 0 : (yi * hr - yr * hi) / power;
+				if (l >= 0 && l < config.duration && rb >= 0 && rb < config.rb) rbMask[rb] = true;
 			}
 		}
+		int at = 0;
+		if (symbolMajor) {
+			for (int l = 0; l < config.duration; l++) for (int rb = 0; rb < config.rb; rb++)
+				if (rbMask[rb]) at = appendRegLlrs(output, at, symbols, channelR, channelI,
+						l, rb, coresetBin0, config.rb);
+		} else {
+			// Retain the old bundle-major order as a diagnostic hypothesis.
+			for (int cce = ncce; cce < ncce + aggregation; cce++) {
+				int bundle = regBundleForCce(cce, bundles, pci, interleaved);
+				for (int regOffset = 0; regOffset < 6; regOffset++) {
+					int[] lr = regLocation(6 * bundle + regOffset, config);
+					if (lr[0] >= 0 && lr[0] < config.duration && lr[1] >= 0 && lr[1] < config.rb)
+						at = appendRegLlrs(output, at, symbols, channelR, channelI,
+								lr[0], lr[1], coresetBin0, config.rb);
+				}
+			}
 		}
 		if (at != output.length) {
 			double[] trimmed = new double[output.length];
@@ -538,15 +638,35 @@ final class NrPdcchDecoder {
 		return output;
 	}
 
-	private static int regBundleForCce(int cce, int bundles, int pci, int mapping) {
-		if (mapping >= 2) return cce % bundles;
+	private static int appendRegLlrs(double[] output, int at, double[][][] symbols,
+			double[][] channelR, double[][] channelI, int l, int rb, int coresetBin0,
+			int coresetRb) {
+		for (int k = 0; k < 12; k++) {
+			if ((k & 3) == 1) continue;
+			double position = 3 * rb + (k - 1) / 4d;
+			int last = coresetRb * 3 - 1;
+			int left = Math.max(0, Math.min(last, (int)Math.floor(position)));
+			int right = Math.max(0, Math.min(last, left + 1));
+			double fraction = Math.max(0, Math.min(1, position - left));
+			double hr = channelR[l][left] * (1 - fraction) + channelR[l][right] * fraction;
+			double hi = channelI[l][left] * (1 - fraction) + channelI[l][right] * fraction;
+			double power = hr * hr + hi * hi;
+			int bin = Math.floorMod(coresetBin0 + rb * 12 + k, FFT);
+			double yr = symbols[l][0][bin], yi = symbols[l][1][bin];
+			output[at++] = power < 1e-18 ? 0 : (yr * hr + yi * hi) / power;
+			output[at++] = power < 1e-18 ? 0 : (yi * hr - yr * hi) / power;
+		}
+		return at;
+	}
+
+	private static int regBundleForCce(int cce, int bundles, int pci, boolean interleaved) {
+		if (!interleaved) return cce % bundles;
 		int columns = bundles / 2;
 		return ((cce & 1) * columns + cce / 2 + pci) % bundles;
 	}
 
-	private static int[] regLocation(int reg, CoreSetConfig config, int mapping) {
-		if ((mapping & 1) == 0) return new int[] { reg % config.duration, reg / config.duration };
-		return new int[] { reg / config.rb, reg % config.rb };
+	private static int[] regLocation(int reg, CoreSetConfig config) {
+		return new int[] { reg % config.duration, reg / config.duration };
 	}
 
 	private static double[] smooth(double[] input) {
@@ -586,7 +706,7 @@ final class NrPdcchDecoder {
 				allocation[1], time, vrb, mcs, rv, sii, reserved);
 		if (crc != 0 || allocation[0] < 0 || sii != 0 || reserved != 0) return Dci.EMPTY;
 		return new Dci(true, aggregation, ncce, riv, allocation[0], allocation[1], time, vrb,
-				mcs, rv, sii, reserved, qpskSwap, qpskSign);
+				mcs, rv, sii, reserved, qpskSwap, qpskSign, mapping);
 	}
 
 	private static Dci parseDciWithBitCorrections(int[] decoded, int aggregation, int ncce,
@@ -673,19 +793,20 @@ final class NrPdcchDecoder {
 	}
 
 	static final class Survey {
-		static final Survey EMPTY = new Survey(0, -1, -1, 0, 0, 0, 0, 0, Dci.EMPTY,
+		static final Survey EMPTY = new Survey(0, -1, -1, 0, 0, 0, 0, 0, 0, Dci.EMPTY,
 				NrPdschDecoder.Decoded.EMPTY, "");
 		final double correlation;
-		final int slot, usefulSample, coresetBin0, coresetRb, coresetDuration, pilots, pairs;
+		final int slot, usefulSample, firstSymbol, coresetBin0, coresetRb, coresetDuration, pilots, pairs;
 		final Dci dci;
 		final NrPdschDecoder.Decoded pdsch;
 		final String debug;
-		Survey(double correlation, int slot, int usefulSample, int coresetBin0, int coresetRb,
-				int coresetDuration, int pilots, int pairs,
+		Survey(double correlation, int slot, int usefulSample, int firstSymbol, int coresetBin0,
+				int coresetRb, int coresetDuration, int pilots, int pairs,
 				Dci dci, NrPdschDecoder.Decoded pdsch, String debug) {
 			this.correlation = correlation;
 			this.slot = slot;
 			this.usefulSample = usefulSample;
+			this.firstSymbol = firstSymbol;
 			this.coresetBin0 = coresetBin0;
 			this.coresetRb = coresetRb;
 			this.coresetDuration = coresetDuration;
@@ -696,21 +817,23 @@ final class NrPdcchDecoder {
 			this.debug = debug;
 		}
 		Survey withDci(Dci value) {
-			return new Survey(correlation, slot, usefulSample, coresetBin0, coresetRb, coresetDuration,
-					pilots, pairs, value, pdsch, debug);
+			return new Survey(correlation, slot, usefulSample, firstSymbol, coresetBin0,
+					coresetRb, coresetDuration, pilots, pairs, value, pdsch, debug);
 		}
 		Survey withPdsch(NrPdschDecoder.Decoded value) {
-			return new Survey(correlation, slot, usefulSample, coresetBin0, coresetRb, coresetDuration,
-					pilots, pairs, dci, value, debug);
+			return new Survey(correlation, slot, usefulSample, firstSymbol, coresetBin0,
+					coresetRb, coresetDuration, pilots, pairs, dci, value, debug);
 		}
 		Survey withDebug(String value) {
-			return new Survey(correlation, slot, usefulSample, coresetBin0, coresetRb, coresetDuration,
-					pilots, pairs, dci, pdsch, value == null ? "" : value);
+			return new Survey(correlation, slot, usefulSample, firstSymbol, coresetBin0,
+					coresetRb, coresetDuration, pilots, pairs, dci, pdsch,
+					value == null ? "" : value);
 		}
 	}
 
 	private static final class DecodeDebug {
 		private final Entry[] entries = new Entry[8];
+		private final RepetitionEntry[] repetitionEntries = new RepetitionEntry[4];
 		void record(int crcWeight, int aggregation, int ncce, int mapping, int bwpRb, int bits,
 				int swap, int sign, int scrambleInit, int riv, int rbStart, int rbLength, int time,
 				int vrb, int mcs, int rv, int sii, int reserved) {
@@ -724,6 +847,19 @@ final class NrPdcchDecoder {
 				}
 			}
 		}
+		void recordRepetition(double agreement, int aggregation, int ncce, int mapping,
+				int swap, int scrambleInit) {
+			RepetitionEntry entry = new RepetitionEntry(agreement, aggregation, ncce, mapping,
+					swap, scrambleInit);
+			for (int i = 0; i < repetitionEntries.length; i++) {
+				if (repetitionEntries[i] == null || agreement > repetitionEntries[i].agreement) {
+					for (int j = repetitionEntries.length - 1; j > i; j--)
+						repetitionEntries[j] = repetitionEntries[j - 1];
+					repetitionEntries[i] = entry;
+					return;
+				}
+			}
+		}
 		String summary() {
 			StringBuilder text = new StringBuilder();
 			for (Entry entry : entries) {
@@ -731,7 +867,32 @@ final class NrPdcchDecoder {
 				if (text.length() > 0) text.append('\n');
 				text.append(entry);
 			}
+			for (RepetitionEntry entry : repetitionEntries) {
+				if (entry == null) continue;
+				if (text.length() > 0) text.append('\n');
+				text.append(entry);
+			}
 			return text.toString();
+		}
+	}
+
+	private static final class RepetitionEntry {
+		final double agreement;
+		final int aggregation, ncce, mapping, swap, scrambleInit;
+		RepetitionEntry(double agreement, int aggregation, int ncce, int mapping, int swap,
+				int scrambleInit) {
+			this.agreement = agreement;
+			this.aggregation = aggregation;
+			this.ncce = ncce;
+			this.mapping = mapping;
+			this.swap = swap;
+			this.scrambleInit = scrambleInit;
+		}
+		@Override
+		public String toString() {
+			return String.format(java.util.Locale.US,
+					"polar repeats %.1f%% AL%d nCCE%d map%d swap%d scr0x%x",
+					agreement * 100d, aggregation, ncce, mapping, swap, scrambleInit);
 		}
 	}
 
@@ -782,24 +943,36 @@ final class NrPdcchDecoder {
 
 	private static final class CoreSetConfig {
 		final int rb, duration, offsetRb;
-		final int[] monitoringSlots;
-		CoreSetConfig(int rb, int duration, int offsetRb, int[] monitoringSlots) {
+		final boolean fast30;
+		final MonitoringOccasion[] monitoring;
+		CoreSetConfig(int rb, int duration, int offsetRb, boolean fast30,
+				MonitoringOccasion[] monitoring) {
 			this.rb = rb;
 			this.duration = duration;
 			this.offsetRb = offsetRb;
-			this.monitoringSlots = monitoringSlots;
+			this.fast30 = fast30;
+			this.monitoring = monitoring;
+		}
+	}
+
+	private static final class MonitoringOccasion {
+		final int slot, absoluteSlot, firstSymbol;
+		MonitoringOccasion(int slot, int absoluteSlot, int firstSymbol) {
+			this.slot = slot;
+			this.absoluteSlot = absoluteSlot;
+			this.firstSymbol = firstSymbol;
 		}
 	}
 
 	static final class Dci {
-		static final Dci EMPTY = new Dci(false, 0, 0, 0, -1, -1, 0, 0, 0, 0, 0, 0, 0, 1);
+		static final Dci EMPTY = new Dci(false, 0, 0, 0, -1, -1, 0, 0, 0, 0, 0, 0, 0, 1, -1);
 		final boolean valid;
 		final int aggregation, ncce, riv, rbStart, rbLength, timeAllocation;
 		final int vrbMapping, mcs, rv, systemInformationIndicator, reserved;
-		final int qpskSwap, qpskSign;
+		final int qpskSwap, qpskSign, mapping;
 		Dci(boolean valid, int aggregation, int ncce, int riv, int rbStart, int rbLength,
 				int timeAllocation, int vrbMapping, int mcs, int rv, int systemInformationIndicator,
-				int reserved, int qpskSwap, int qpskSign) {
+				int reserved, int qpskSwap, int qpskSign, int mapping) {
 			this.valid = valid;
 			this.aggregation = aggregation;
 			this.ncce = ncce;
@@ -814,6 +987,7 @@ final class NrPdcchDecoder {
 			this.reserved = reserved;
 			this.qpskSwap = qpskSwap;
 			this.qpskSign = qpskSign;
+			this.mapping = mapping;
 		}
 	}
 }

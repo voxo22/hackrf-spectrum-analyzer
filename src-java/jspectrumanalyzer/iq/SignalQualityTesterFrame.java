@@ -37,6 +37,8 @@ final class SignalQualityTesterFrame extends JFrame {
 	private static final int DAB_CONSTELLATION_CARRIER_STEP = 8;
 	/* 100 ms even at 20 MS/s: LTE PBCH has a 40 ms scrambling cycle. */
 	private static final int DAB_HISTORY_BYTES = 4_000_000;
+	/* 200 ms at 20 MS/s covers a complete NR SIB1 scheduling period. */
+	private static final int NR_HISTORY_BYTES = 8_000_000;
 	private static final long MIN_ANALYSIS_INTERVAL_NANOS = 50_000_000L;
 	private static final long DAB_MIN_ANALYSIS_INTERVAL_NANOS = 100_000_000L;
 	private static final long GSM_MIN_ANALYSIS_INTERVAL_NANOS = 500_000_000L;
@@ -143,6 +145,10 @@ final class SignalQualityTesterFrame extends JFrame {
 			new double[DAB_MODE_I_ACTIVE_CARRIERS / DAB_CONSTELLATION_CARRIER_STEP];
 	private final byte[] dabHistory = new byte[DAB_HISTORY_BYTES];
 	private int dabHistoryLength = 0;
+	private byte[] nrHistory;
+	private int nrHistoryLength;
+	private int nrHistoryWritePosition;
+	private int nrHistorySampleRateHz;
 
 	SignalQualityTesterFrame(String mode, Runnable closedCallback) {
 		super("Signal Quality Tester");
@@ -200,38 +206,32 @@ final class SignalQualityTesterFrame extends JFrame {
 		header.setBorder(new EmptyBorder(8, 10, 6, 10));
 		header.add(titleLabel, BorderLayout.WEST);
 		header.add(statsLabel, BorderLayout.CENTER);
+		JPanel headerRight = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+		headerRight.setOpaque(false);
 		if (gsmMode) {
-			JPanel gsmButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
-			gsmButtons.setOpaque(false);
 			JButton bcchButton = new JButton("BCCH / CELL DETAILS");
 			bcchButton.addActionListener(e -> openGsmBcchDetails());
 			JButton pagingButton = new JButton("PAGING / STATS");
 			pagingButton.addActionListener(e -> openGsmPagingStats());
-			gsmButtons.add(bcchButton); gsmButtons.add(pagingButton);
-			header.add(gsmButtons, BorderLayout.EAST);
+			headerRight.add(bcchButton); headerRight.add(pagingButton);
 		} else if (lteMode) {
-			JPanel lteButtons=new JPanel(new FlowLayout(FlowLayout.RIGHT,5,0));
-			lteButtons.setOpaque(false);
 			JButton detailsButton=new JButton("CELL DETAILS");
 			detailsButton.addActionListener(e -> openLteCellDetails());
-			lteButtons.add(detailsButton);header.add(lteButtons,BorderLayout.EAST);
+			headerRight.add(detailsButton);
 		} else if (nrMode) {
-			JPanel nrButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
-			nrButtons.setOpaque(false);
 			JButton detailsButton = new JButton("CELL INFO");
 			detailsButton.addActionListener(e -> openNrCellDetails());
-			nrButtons.add(detailsButton);
-			header.add(nrButtons, BorderLayout.EAST);
+			headerRight.add(detailsButton);
 		} else if (umtsMode) {
-			JPanel umtsButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
-			umtsButtons.setOpaque(false);
 			JButton detailsButton = new JButton("CELL DETAILS");
 			detailsButton.addActionListener(e -> openUmtsCellDetails());
 			JButton pagingButton = new JButton("PAGING / STATS");
 			pagingButton.addActionListener(e -> openUmtsPagingStats());
-			umtsButtons.add(detailsButton);
-			umtsButtons.add(pagingButton);
-			header.add(umtsButtons, BorderLayout.EAST);
+			headerRight.add(detailsButton);
+			headerRight.add(pagingButton);
+		}
+		if (headerRight.getComponentCount() > 0) {
+			header.add(headerRight, BorderLayout.EAST);
 		}
 
 		JPanel footer = new JPanel(new BorderLayout(8, 4));
@@ -415,9 +415,10 @@ final class SignalQualityTesterFrame extends JFrame {
 		}
 		if (dvbtMode) offerDvbtTpsCapture(sampleRateHz, iqData, evenLength);
 		if (dvbt2Mode) offerDvbt2SignallingCapture(sampleRateHz, iqData, evenLength);
+		if (nrMode) appendNrHistory(iqData, evenLength, sampleRateHz);
 		byte[] dabAnalysisData = iqData;
 		int dabAnalysisLength = evenLength;
-		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode || umtsMode) {
+		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || umtsMode) {
 			dabAnalysisLength = appendDabHistory(iqData, evenLength);
 			dabAnalysisData = dabHistory;
 		}
@@ -481,7 +482,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		RdsSignalAnalyzer.Result rdsResult = rdsMode ? latestRdsResult : null;
 		if (lteMode) scheduleLteAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
 		LteSignalAnalyzer.Result lteResult = lteMode ? latestLteResult : null;
-		if (nrMode) scheduleNrAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
+		if (nrMode) scheduleNrAnalysis(sampleRateHz);
 		NrSignalAnalyzer.Result nrResult = nrMode ? latestNrResult : null;
 		if (umtsMode) scheduleUmtsAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
 		UmtsSignalAnalyzer.Result umtsResult = umtsMode ? latestUmtsResult : null;
@@ -504,18 +505,104 @@ final class SignalQualityTesterFrame extends JFrame {
 		worker.setDaemon(true); worker.setPriority(Thread.MIN_PRIORITY); worker.start();
 	}
 
-	private synchronized void scheduleNrAnalysis(byte[] iqData, int length, int sampleRateHz) {
-		int minimumBytes = Math.max(2, sampleRateHz / 50);
-		if (nrAnalysisRunning || length < minimumBytes) return;
-		int wanted = Math.min(length & ~1, Math.max(131_072, sampleRateHz * 16 / 100));
-		final byte[] capture = new byte[wanted];
-		System.arraycopy(iqData, (length - wanted) & ~1, capture, 0, wanted);
+	private synchronized void scheduleNrAnalysis(int sampleRateHz) {
+		// Stereo 8-bit IQ uses two bytes per sample; 40 ms matches the proven probe window.
+		int windowBytes = Math.max(131_072, sampleRateHz * 8 / 100) & ~1;
+		final NrSignalAnalyzer.Result previous = latestNrResult;
+		final boolean needsSib1 = previous == null || !previous.sib1.valid;
+		int contextBytes = Math.max(windowBytes, sampleRateHz * 4 / 10) & ~1;
+		int minimumBytes = needsSib1 ? contextBytes : windowBytes;
+		if (nrAnalysisRunning || nrHistoryLength < minimumBytes) return;
+		final byte[] capture = new byte[windowBytes];
+		final byte[] context;
+		if (needsSib1) {
+			context = new byte[contextBytes];
+			copyNrHistoryWindow(context, 0);
+			System.arraycopy(context, context.length - windowBytes, capture, 0, windowBytes);
+		} else {
+			context = capture;
+			copyNrHistoryWindow(capture, 0);
+		}
 		nrAnalysisRunning = true;
 		Thread worker = new Thread(() -> {
-			try { latestNrResult = nrAnalyzer.analyzeFast(capture, capture.length, sampleRateHz); }
+			try {
+				NrSignalAnalyzer.Result current = needsSib1
+						? nrAnalyzer.analyzeFastWithContext(capture, capture.length,
+								context, context.length, context.length - capture.length,
+								sampleRateHz)
+						: nrAnalyzer.analyzeFast(capture, capture.length, sampleRateHz);
+				current = mergeNrMeasurements(current, previous);
+				latestNrResult = betterNrResult(current, previous) ? current : previous;
+			}
 			finally { nrAnalysisRunning = false; }
 		}, "5G NR SSB cell search");
-		worker.setDaemon(true); worker.setPriority(Thread.MIN_PRIORITY); worker.start();
+		worker.setDaemon(true);
+		worker.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
+		worker.start();
+	}
+
+	private synchronized void appendNrHistory(byte[] iqData, int length, int sampleRateHz) {
+		if (nrHistory == null) nrHistory = new byte[NR_HISTORY_BYTES];
+		if (sampleRateHz != nrHistorySampleRateHz) {
+			nrHistoryLength = 0;
+			nrHistoryWritePosition = 0;
+			nrHistorySampleRateHz = sampleRateHz;
+		}
+		int copyLength = Math.min(length, nrHistory.length) & ~1;
+		if (copyLength <= 0) return;
+		int inputOffset = length - copyLength;
+		if (copyLength == nrHistory.length) {
+			System.arraycopy(iqData, inputOffset, nrHistory, 0, copyLength);
+			nrHistoryLength = copyLength;
+			nrHistoryWritePosition = 0;
+			return;
+		}
+		int first = Math.min(copyLength, nrHistory.length - nrHistoryWritePosition);
+		System.arraycopy(iqData, inputOffset, nrHistory, nrHistoryWritePosition, first);
+		if (first < copyLength)
+			System.arraycopy(iqData, inputOffset + first, nrHistory, 0, copyLength - first);
+		nrHistoryWritePosition = (nrHistoryWritePosition + copyLength) % nrHistory.length;
+		nrHistoryLength = Math.min(nrHistory.length, nrHistoryLength + copyLength);
+	}
+
+	private void copyNrHistoryWindow(byte[] destination, int offsetFromEnd) {
+		int oldest = nrHistoryWritePosition - nrHistoryLength;
+		if (oldest < 0) oldest += nrHistory.length;
+		int logicalStart = nrHistoryLength - offsetFromEnd - destination.length;
+		int source = (oldest + logicalStart) % nrHistory.length;
+		int first = Math.min(destination.length, nrHistory.length - source);
+		System.arraycopy(nrHistory, source, destination, 0, first);
+		if (first < destination.length)
+			System.arraycopy(nrHistory, 0, destination, first, destination.length - first);
+	}
+
+	private static NrSignalAnalyzer.Result mergeNrMeasurements(NrSignalAnalyzer.Result current,
+			NrSignalAnalyzer.Result previous) {
+		if (current == null || previous == null || current.pci < 0 || current.pci != previous.pci)
+			return current;
+		NrSignalAnalyzer.MibData mib = current.mib.valid ? current.mib : previous.mib;
+		NrSignalAnalyzer.Sib1Data sib1 = current.sib1.valid ? current.sib1 : previous.sib1;
+		NrSignalAnalyzer.LoadData load = current.load.valid ? current.load : previous.load;
+		return mib == current.mib && sib1 == current.sib1 && load == current.load
+				? current : current.withMeasurements(mib, sib1, load);
+	}
+
+	private static boolean betterNrResult(NrSignalAnalyzer.Result candidate,
+			NrSignalAnalyzer.Result current) {
+		if (candidate == null) return false;
+		if (current == null) return true;
+		int candidateRank = nrResultRank(candidate);
+		int currentRank = nrResultRank(current);
+		return candidateRank > currentRank
+				|| candidateRank == currentRank && candidate.quality > current.quality;
+	}
+
+	private static int nrResultRank(NrSignalAnalyzer.Result result) {
+		if (result.sib1.valid) return 5;
+		if (result.pdcch.pdsch.transportBlock.crcOk) return 4;
+		if (result.pdcch.dci.valid) return 3;
+		if (result.mib.valid) return 2;
+		return result.detected ? 1 : 0;
 	}
 
 	private synchronized void scheduleLteAnalysis(byte[] iqData, int length, int sampleRateHz) {
@@ -1651,9 +1738,7 @@ final class SignalQualityTesterFrame extends JFrame {
 				? String.format(Locale.US,"OK, EVM %.1f %%, RE %d",pdsch.evm*100d,pdsch.dataResourceElements)
 				: pdcch.dci.valid ? "waiting" : "waiting for DCI");
 		out.append("\nSIB1 LDPC / CRC|").append(pdsch.demodulated
-				? String.format(Locale.US,"%s, TBS %d b, %d it",
-						pdsch.transportBlock.crcOk?"CRC OK":"CRC fail",pdsch.transportBlockBits,
-						pdsch.transportBlock.iterations)
+				? nrLdpcSummary(pdsch)
 				: "waiting");
 		out.append("\nSIB1 ASN.1|").append(nr.sib1.valid
 				? "OK, PLMN "+String.join(", ",nr.sib1.plmns)
@@ -1666,6 +1751,15 @@ final class SignalQualityTesterFrame extends JFrame {
 		return "CRC OK, AL"+dci.aggregation+"/nCCE"+dci.ncce
 				+", RB "+dci.rbStart+"+"+dci.rbLength
 				+", MCS "+dci.mcs+", RV "+dci.rv;
+	}
+
+	private static String nrLdpcSummary(NrPdschDecoder.Decoded pdsch) {
+		if(!NrLdpcDecoder.supportsTransportBlock(pdsch.transportBlockBits))
+			return String.format(Locale.US,"unsupported TBS %d b, LDPC skipped",
+					pdsch.transportBlockBits);
+		return String.format(Locale.US,"%s, TBS %d b, %d it, syndrome %d",
+				pdsch.transportBlock.crcOk?"CRC OK":"CRC fail",pdsch.transportBlockBits,
+				pdsch.transportBlock.iterations,pdsch.transportBlock.syndromeErrors);
 	}
 
 	private static String firstLine(String value) {

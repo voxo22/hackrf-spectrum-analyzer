@@ -4,7 +4,10 @@ package jspectrumanalyzer.iq;
 final class NrPdschDecoder {
 	private static final int FFT = 1024;
 	private static final int SYMBOL_STEP = 1096;
-	private static final int[] DMRS_SYMBOLS = { 2, 7, 11 };
+	private static final int PHASE_STEPS = 16;
+	private static final int[] TIMING_OFFSETS = {
+		0, -4, 4, -8, 8, -12, 12, -16, 16, -20, 20, -24, 24
+	};
 	private static final int[] MODULATION_ORDER = {
 		2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
 		6, 6, 6, 6, 6, 6, 6, 6, 2
@@ -22,32 +25,75 @@ final class NrPdschDecoder {
 		2024, 2088, 2152, 2216, 2280, 2408, 2472, 2536, 2600, 2664, 2728, 2792,
 		2856, 2976, 3104, 3240, 3368, 3496, 3624, 3752, 3824
 	};
+	private static final int[] DEFAULT_A_START_POS2 = {
+		2, 2, 2, 2, 2, 9, 4, 5, 5, 9, 12, 1, 1, 2, 4, 8
+	};
+	private static final int[] DEFAULT_A_LENGTH_POS2 = {
+		12, 10, 9, 7, 5, 4, 4, 7, 2, 2, 2, 13, 6, 4, 7, 4
+	};
+	private static final int[] DEFAULT_A_START_POS3 = {
+		3, 3, 3, 3, 3, 10, 6, 5, 5, 9, 12, 1, 1, 2, 4, 8
+	};
+	private static final int[] DEFAULT_A_LENGTH_POS3 = {
+		11, 9, 8, 6, 4, 4, 4, 7, 2, 2, 2, 13, 6, 4, 7, 4
+	};
 
 	private NrPdschDecoder() {}
 
 	static Decoded decode(double[] inI, double[] inQ, NrSignalAnalyzer.PssSurveyCandidate candidate,
 			NrSignalAnalyzer.MibData mib, NrPdcchDecoder.Survey pdcch) {
+		Decoded best = Decoded.EMPTY;
+		for (int timing : TIMING_OFFSETS) {
+			Decoded trial = decodeAtTiming(inI, inQ, candidate, mib, pdcch, timing);
+			if (trial.transportBlock.crcOk) return trial;
+			if (betterDecoded(trial, best)) best = trial;
+		}
+		return best;
+	}
+
+	private static boolean betterDecoded(Decoded candidate, Decoded current) {
+		if (candidate.demodulated != current.demodulated) return candidate.demodulated;
+		if (!candidate.demodulated) return false;
+		int candidateSyndrome = candidate.transportBlock.syndromeErrors;
+		int currentSyndrome = current.transportBlock.syndromeErrors;
+		if (candidateSyndrome != Integer.MAX_VALUE && currentSyndrome != Integer.MAX_VALUE
+				&& candidateSyndrome != currentSyndrome)
+			return candidateSyndrome < currentSyndrome;
+		if (candidate.transportBlock.repetitionAgreement
+				!= current.transportBlock.repetitionAgreement)
+			return candidate.transportBlock.repetitionAgreement
+					> current.transportBlock.repetitionAgreement;
+		return candidate.qpskCoherence > current.qpskCoherence;
+	}
+
+	private static Decoded decodeAtTiming(double[] inI, double[] inQ,
+			NrSignalAnalyzer.PssSurveyCandidate candidate, NrSignalAnalyzer.MibData mib,
+			NrPdcchDecoder.Survey pdcch, int timing) {
 		NrPdcchDecoder.Dci dci = pdcch.dci;
-		if (!dci.valid || dci.timeAllocation != 11 || mib.dmrsTypeAPosition != 2
+		int[] allocation = timeAllocation(dci.timeAllocation, mib.dmrsTypeAPosition);
+		if (!dci.valid || allocation.length == 0
 				|| dci.mcs < 0 || dci.mcs >= MODULATION_ORDER.length) return Decoded.EMPTY;
+		int startSymbol = allocation[0], symbolLength = allocation[1];
+		int[] dmrsSymbols = dmrsSymbols(mib.dmrsTypeAPosition, startSymbol + symbolLength);
+		if (dmrsSymbols.length == 0) return Decoded.EMPTY;
 		int qm = MODULATION_ORDER[dci.mcs];
 		int rate = CODE_RATE_X1024[dci.mcs];
 		if (qm != 2 || rate == 0 || dci.rbStart < 0 || dci.rbLength <= 0) return Decoded.EMPTY;
 
 		double omega = candidate.cfoHz * 2d * Math.PI / 15_360_000d;
 		double[][][] symbols = new double[14][][];
-		for (int l = 1; l < 14; l++) {
-			int useful = pdcch.usefulSample + symbolUsefulOffset(l);
+		for (int l = startSymbol; l < startSymbol + symbolLength; l++) {
+			int useful = pdcch.usefulSample + symbolUsefulOffset(l) + timing;
 			if (useful < 0 || useful + FFT > inI.length) return Decoded.EMPTY;
 			symbols[l] = NrSignalAnalyzer.surveySymbol(inI, inQ, useful, candidate.sample, omega,
 					candidate.iqOrientation);
 		}
 
-		double[][][][] channel = new double[DMRS_SYMBOLS.length][dci.rbLength][2][12];
+		double[][][][] channel = new double[dmrsSymbols.length][dci.rbLength][2][12];
 		double coherenceSum = 0;
 		int coherenceCount = 0;
-		for (int ds = 0; ds < DMRS_SYMBOLS.length; ds++) {
-			int l = DMRS_SYMBOLS[ds];
+		for (int ds = 0; ds < dmrsSymbols.length; ds++) {
+			int l = dmrsSymbols[ds];
 			double[][] reference = dmrs(candidate.pci, pdcch.slot, l, dci.rbStart + dci.rbLength);
 			for (int rb = 0; rb < dci.rbLength; rb++) {
 				double[] pilotR = new double[6], pilotI = new double[6];
@@ -77,22 +123,32 @@ final class NrPdschDecoder {
 				}
 			}
 		}
+		smoothChannel(channel, dci.rbLength);
 
-		int dataRe = dci.rbLength * (13 * 12 - DMRS_SYMBOLS.length * 12);
+		int dataRe = dci.rbLength * (symbolLength * 12 - dmrsSymbols.length * 12);
 		double[] llr = new double[dataRe * qm];
+		double[] rawLlrs = new double[dataRe * qm];
 		double[] equalizedR = new double[dataRe], equalizedI = new double[dataRe];
 		int[] equalizedSymbol = new int[dataRe];
 		double error = 0, signal = 0;
 		int at = 0;
-		for (int l = 1; l < 14; l++) for (int rb = 0; rb < dci.rbLength; rb++) {
-			int[] time = timeInterpolation(l);
+		for (int l = startSymbol; l < startSymbol + symbolLength; l++)
+				for (int rb = 0; rb < dci.rbLength; rb++) {
+			int[] time = timeInterpolation(l, dmrsSymbols);
 			for (int k = 0; k < 12; k++) {
-				if (isDmrsSymbol(l)) continue;
+				if (isDmrsSymbol(l, dmrsSymbols)) continue;
 				double fraction = time[2] / 1000d;
-				double hr = (channel[time[0]][rb][0][k] * (1 - fraction)
-						+ channel[time[1]][rb][0][k] * fraction) / Math.sqrt(2d);
-				double hi = (channel[time[0]][rb][1][k] * (1 - fraction)
-						+ channel[time[1]][rb][1][k] * fraction) / Math.sqrt(2d);
+				double h0r = channel[time[0]][rb][0][k], h0i = channel[time[0]][rb][1][k];
+				double h1r = channel[time[1]][rb][0][k], h1i = channel[time[1]][rb][1][k];
+				double magnitude0 = Math.hypot(h0r, h0i), magnitude1 = Math.hypot(h1r, h1i);
+				double phase0 = Math.atan2(h0i, h0r);
+				double phaseDelta = Math.atan2(h1i, h1r) - phase0;
+				while (phaseDelta > Math.PI) phaseDelta -= 2d * Math.PI;
+				while (phaseDelta < -Math.PI) phaseDelta += 2d * Math.PI;
+				double phase = phase0 + fraction * phaseDelta;
+				double magnitude = magnitude0 * (1 - fraction) + magnitude1 * fraction;
+				double hr = magnitude * Math.cos(phase) / Math.sqrt(2d);
+				double hi = magnitude * Math.sin(phase) / Math.sqrt(2d);
 				double power = hr * hr + hi * hi;
 				int bin = Math.floorMod(pdcch.coresetBin0 + (dci.rbStart + rb) * 12 + k, FFT);
 				double yr = symbols[l][0][bin], yi = symbols[l][1][bin];
@@ -105,22 +161,43 @@ final class NrPdschDecoder {
 				signal++;
 				equalizedR[at] = matchedR;
 				equalizedI[at] = matchedI;
+				rawLlrs[2 * at] = matchedR;
+				rawLlrs[2 * at + 1] = matchedI;
 				equalizedSymbol[at++] = l;
 			}
 		}
 		if (2 * at != llr.length) return Decoded.EMPTY;
 		double fourthCoherent = 0, fourthPower = 0;
-		for (int l = 1; l < 14; l++) {
-			double fourthR = 0, fourthI = 0;
+		double[] symbolQpskCoherence = new double[14];
+		double previousPhase = 0;
+		boolean havePreviousPhase = false;
+		for (int l = startSymbol; l < startSymbol + symbolLength; l++) {
+			double fourthR = 0, fourthI = 0, symbolFourthPower = 0;
 			for (int i = 0; i < at; i++) if (equalizedSymbol[i] == l) {
 				double r = equalizedR[i], q = equalizedI[i];
 				double squareR = r * r - q * q, squareI = 2 * r * q;
 				fourthR += squareR * squareR - squareI * squareI;
 				fourthI += 2 * squareR * squareI;
-				fourthPower += squareR * squareR + squareI * squareI;
+				double power = squareR * squareR + squareI * squareI;
+				fourthPower += power;
+				symbolFourthPower += power;
 			}
-			fourthCoherent += Math.hypot(fourthR, fourthI);
-			double phase = 0;
+			double symbolFourthCoherent = Math.hypot(fourthR, fourthI);
+			fourthCoherent += symbolFourthCoherent;
+			symbolQpskCoherence[l] = symbolFourthPower == 0 ? 0
+					: symbolFourthCoherent / symbolFourthPower;
+			if (symbolFourthPower == 0) continue;
+			double phase = Math.atan2(fourthI, fourthR) / 4d - Math.PI / 4d;
+			// Unwrap the pi/2 QPSK ambiguity using the channel's phase continuity in time.
+			if (!havePreviousPhase) {
+				while (phase > Math.PI / 4d) phase -= Math.PI / 2d;
+				while (phase < -Math.PI / 4d) phase += Math.PI / 2d;
+				havePreviousPhase = true;
+			} else {
+				while (phase - previousPhase > Math.PI / 4d) phase -= Math.PI / 2d;
+				while (phase - previousPhase < -Math.PI / 4d) phase += Math.PI / 2d;
+			}
+			previousPhase = phase;
 			double cosine = Math.cos(phase), sine = Math.sin(phase);
 			for (int i = 0; i < at; i++) if (equalizedSymbol[i] == l) {
 				double xr = equalizedR[i] * cosine + equalizedI[i] * sine;
@@ -129,32 +206,47 @@ final class NrPdschDecoder {
 				llr[2 * i + 1] = xi;
 			}
 		}
-		int tbs = transportBlockSize(dci.rbLength, 13, DMRS_SYMBOLS.length, qm, rate);
+		int tbs = transportBlockSize(dci.rbLength, symbolLength, dmrsSymbols.length, qm, rate);
 		DecodeAttempt best = decodeRateMatched(llr, candidate.pci, tbs, dci.rv, dci.qpskSwap, dci.qpskSign);
-		DecodeAttempt phaseAligned = decodeSymbolRotations(llr, equalizedSymbol, candidate.pci, tbs, dci.rv);
-		if (phaseAligned.result.crcOk || phaseAligned.result.repetitionAgreement
-				> best.result.repetitionAgreement) best = phaseAligned;
+		if (!best.result.crcOk && NrLdpcDecoder.supportsTransportBlock(tbs)) {
+			DecodeAttempt raw = decodeRateMatched(rawLlrs, candidate.pci, tbs, dci.rv,
+					dci.qpskSwap, dci.qpskSign);
+			if (raw.result.crcOk) best = raw;
+		}
+		if (!best.result.crcOk && NrLdpcDecoder.supportsTransportBlock(tbs)) {
+			DecodeAttempt phaseAligned = decodeSymbolRotations(llr, equalizedSymbol, candidate.pci,
+					tbs, dci.rv, dmrsSymbols);
+			if (phaseAligned.result.crcOk || phaseAligned.result.repetitionAgreement
+					> best.result.repetitionAgreement) best = phaseAligned;
+		}
+		if (!best.result.crcOk && NrLdpcDecoder.supportsTransportBlock(tbs)) {
+			DecodeAttempt rawPhaseAligned = decodeSymbolRotations(rawLlrs, equalizedSymbol,
+					candidate.pci, tbs, dci.rv, dmrsSymbols);
+			if (rawPhaseAligned.result.crcOk) best = rawPhaseAligned;
+		}
 		double coherence = coherenceCount == 0 ? 0 : coherenceSum / coherenceCount;
 		double evm = signal == 0 ? 0 : Math.sqrt(error / signal);
 		double qpskCoherence = fourthPower == 0 ? 0 : fourthCoherent / fourthPower;
 		return new Decoded(true, coherence, evm, qpskCoherence, best.llrs.length / qm, best.llrs.length,
-				tbs, best.result, best.llrs);
+				tbs, best.result, best.llrs, symbolQpskCoherence, startSymbol, symbolLength,
+				dmrsSymbols);
 	}
 
-	private static DecodeAttempt decodeSymbolRotations(double[] llr, int[] symbols, int pci, int tbs, int rv) {
+	private static DecodeAttempt decodeSymbolRotations(double[] llr, int[] symbols, int pci, int tbs,
+			int rv, int[] dmrsSymbols) {
 		int[] rotations = new int[14];
-		DecodeAttempt best = rotatedAttempt(llr, symbols, rotations, pci, tbs, rv);
-		for (int pass = 0; pass < 3 && !best.result.crcOk; pass++) {
+		DecodeAttempt best = evaluatedRotation(llr, symbols, rotations, pci, tbs, rv);
+		int rotationStep = PHASE_STEPS / 4;
+		for (int pass = 0; pass < 3; pass++) {
 			boolean changed = false;
-			for (int symbol = 1; symbol < 14 && !best.result.crcOk; symbol++) {
-				if (isDmrsSymbol(symbol)) continue;
+			for (int symbol = 1; symbol < 14; symbol++) {
+				if (isDmrsSymbol(symbol, dmrsSymbols)) continue;
 				int previous = rotations[symbol], selected = previous;
 				DecodeAttempt symbolBest = best;
-				for (int rotation = 0; rotation < 4; rotation++) {
+				for (int rotation = 0; rotation < PHASE_STEPS; rotation += rotationStep) {
 					rotations[symbol] = rotation;
-					DecodeAttempt trial = rotatedAttempt(llr, symbols, rotations, pci, tbs, rv);
-					if (trial.result.crcOk || trial.result.repetitionAgreement
-							> symbolBest.result.repetitionAgreement) {
+					DecodeAttempt trial = evaluatedRotation(llr, symbols, rotations, pci, tbs, rv);
+					if (betterRotation(trial, symbolBest)) {
 						symbolBest = trial;
 						selected = rotation;
 					}
@@ -162,10 +254,38 @@ final class NrPdschDecoder {
 				rotations[symbol] = selected;
 				changed |= selected != previous;
 				best = symbolBest;
+				if (best.result.crcOk) return best;
 			}
 			if (!changed) break;
 		}
-		return best;
+		DecodeAttempt fallback = best;
+		for (int quadrant = 0; quadrant < 4; quadrant++) {
+			int[] global = rotations.clone();
+			for (int symbol = 1; symbol < global.length; symbol++)
+				global[symbol] = (global[symbol] + quadrant * PHASE_STEPS / 4) % PHASE_STEPS;
+			DecodeAttempt trial = rotatedAttempt(llr, symbols, global, pci, tbs, rv);
+			trial = new DecodeAttempt(NrLdpcDecoder.decode(trial.llrs, tbs, rv), trial.llrs);
+			if (trial.result.crcOk) return trial;
+			if (betterRotation(trial, fallback)) fallback = trial;
+		}
+		return fallback;
+	}
+
+	private static DecodeAttempt evaluatedRotation(double[] llr, int[] symbols, int[] rotations,
+			int pci, int tbs, int rv) {
+		DecodeAttempt trial = rotatedAttempt(llr, symbols, rotations, pci, tbs, rv);
+		return new DecodeAttempt(NrLdpcDecoder.decodeForScore(trial.llrs, tbs, rv), trial.llrs);
+	}
+
+	private static boolean betterRotation(DecodeAttempt candidate, DecodeAttempt current) {
+		if (candidate.result.crcOk != current.result.crcOk) return candidate.result.crcOk;
+		if (candidate.result.syndromeErrors != Integer.MAX_VALUE
+				&& current.result.syndromeErrors != Integer.MAX_VALUE)
+			return candidate.result.syndromeErrors < current.result.syndromeErrors;
+		if (candidate.result.repetitionAgreement > 0
+				|| current.result.repetitionAgreement > 0)
+			return candidate.result.repetitionAgreement > current.result.repetitionAgreement;
+		return candidate.result.syndromeErrors < current.result.syndromeErrors;
 	}
 
 	private static DecodeAttempt rotatedAttempt(double[] llr, int[] symbols, int[] rotations,
@@ -173,16 +293,15 @@ final class NrPdschDecoder {
 		double[] ordered = new double[llr.length];
 		for (int i = 0; i < symbols.length; i++) {
 			double real = llr[2 * i], imag = llr[2 * i + 1];
-			switch (rotations[symbols[i]]) {
-			case 1: ordered[2 * i] = imag; ordered[2 * i + 1] = -real; break;
-			case 2: ordered[2 * i] = -real; ordered[2 * i + 1] = -imag; break;
-			case 3: ordered[2 * i] = -imag; ordered[2 * i + 1] = real; break;
-			default: ordered[2 * i] = real; ordered[2 * i + 1] = imag;
-			}
+			double angle = 2d * Math.PI * rotations[symbols[i]] / PHASE_STEPS;
+			double cosine = Math.cos(angle), sine = Math.sin(angle);
+			ordered[2 * i] = real * cosine + imag * sine;
+			ordered[2 * i + 1] = imag * cosine - real * sine;
 		}
 		int[] scramble = gold((0xffff << 15) + pci, ordered.length);
 		for (int i = 0; i < ordered.length; i++) ordered[i] *= 1 - 2 * scramble[i];
-		return new DecodeAttempt(NrLdpcDecoder.decode(ordered, tbs, rv), ordered);
+		double agreement = NrLdpcDecoder.repetitionAgreement(ordered, tbs, rv);
+		return new DecodeAttempt(new NrLdpcDecoder.Result(false, 0, new byte[0], agreement), ordered);
 	}
 
 	private static DecodeAttempt decodeRateMatched(double[] llr, int pci, int tbs, int rv, int swap, int sign) {
@@ -210,18 +329,65 @@ final class NrPdschDecoder {
 		return symbol * SYMBOL_STEP + (symbol >= 7 ? 8 : 0);
 	}
 
-	private static int[] timeInterpolation(int symbol) {
-		if (symbol <= DMRS_SYMBOLS[0]) return new int[] { 0, 0, 0 };
-		if (symbol >= DMRS_SYMBOLS[2]) return new int[] { 2, 2, 0 };
-		int left = symbol < DMRS_SYMBOLS[1] ? 0 : 1;
+	private static void smoothChannel(double[][][][] channel, int rbLength) {
+		int carriers = rbLength * 12;
+		for (int ds = 0; ds < channel.length; ds++) {
+			double[] real = new double[carriers], imaginary = new double[carriers];
+			for (int rb = 0; rb < rbLength; rb++) for (int k = 0; k < 12; k++) {
+				real[rb * 12 + k] = channel[ds][rb][0][k];
+				imaginary[rb * 12 + k] = channel[ds][rb][1][k];
+			}
+			for (int carrier = 0; carrier < carriers; carrier++) {
+				double sumR = 0, sumI = 0, weight = 0;
+				for (int delta = -4; delta <= 4; delta++) {
+					int neighbor = carrier + delta;
+					if (neighbor < 0 || neighbor >= carriers) continue;
+					double w = 5 - Math.abs(delta);
+					sumR += w * real[neighbor];
+					sumI += w * imaginary[neighbor];
+					weight += w;
+				}
+				channel[ds][carrier / 12][0][carrier % 12] = sumR / weight;
+				channel[ds][carrier / 12][1][carrier % 12] = sumI / weight;
+			}
+		}
+	}
+
+	private static int[] timeAllocation(int index, int typeAPosition) {
+		if (index < 0 || index >= 16 || (index >= 5 && index <= 10) || index >= 14)
+			return new int[0];
+		if (typeAPosition == 2)
+			return new int[] { DEFAULT_A_START_POS2[index], DEFAULT_A_LENGTH_POS2[index] };
+		if (typeAPosition == 3)
+			return new int[] { DEFAULT_A_START_POS3[index], DEFAULT_A_LENGTH_POS3[index] };
+		return new int[0];
+	}
+
+	private static int[] dmrsSymbols(int typeAPosition, int endSymbol) {
+		int first = typeAPosition;
+		if (first != 2 && first != 3) return new int[0];
+		if (endSymbol <= first) return new int[0];
+		if (endSymbol <= 7) return new int[] { first };
+		if (endSymbol <= 9) return new int[] { first, 6 };
+		if (endSymbol <= 12) return new int[] { first, 6, 9 };
+		if (endSymbol <= 14) return new int[] { first, 7, 11 };
+		return new int[0];
+	}
+
+	private static int[] timeInterpolation(int symbol, int[] dmrsSymbols) {
+		if (symbol <= dmrsSymbols[0]) return new int[] { 0, 0, 0 };
+		int last = dmrsSymbols.length - 1;
+		if (symbol >= dmrsSymbols[last]) return new int[] { last, last, 0 };
+		int left = 0;
+		while (left + 1 < dmrsSymbols.length && symbol >= dmrsSymbols[left + 1]) left++;
 		int right = left + 1;
-		int fraction = 1000 * (symbol - DMRS_SYMBOLS[left])
-				/ (DMRS_SYMBOLS[right] - DMRS_SYMBOLS[left]);
+		int fraction = 1000 * (symbol - dmrsSymbols[left])
+				/ (dmrsSymbols[right] - dmrsSymbols[left]);
 		return new int[] { left, right, fraction };
 	}
 
-	private static boolean isDmrsSymbol(int symbol) {
-		for (int value : DMRS_SYMBOLS) if (value == symbol) return true;
+	private static boolean isDmrsSymbol(int symbol, int[] dmrsSymbols) {
+		for (int value : dmrsSymbols) if (value == symbol) return true;
 		return false;
 	}
 
@@ -281,16 +447,19 @@ final class NrPdschDecoder {
 
 	static final class Decoded {
 		static final Decoded EMPTY = new Decoded(false, 0, 0, 0, 0, 0, 0,
-				NrLdpcDecoder.Result.EMPTY, new double[0]);
+				NrLdpcDecoder.Result.EMPTY, new double[0], new double[0], 0, 0, new int[0]);
 		final boolean demodulated;
 		final double dmrsCoherence, evm, qpskCoherence;
-		final int dataResourceElements, codedBits, transportBlockBits;
+		final int dataResourceElements, codedBits, transportBlockBits, startSymbol, symbolLength;
 		final NrLdpcDecoder.Result transportBlock;
 		final double[] rateMatchedLlrs;
+		final double[] symbolQpskCoherence;
+		final int[] dmrsSymbols;
 		Decoded(boolean demodulated, double dmrsCoherence, double evm, double qpskCoherence,
 				int dataResourceElements,
 				int codedBits, int transportBlockBits, NrLdpcDecoder.Result transportBlock,
-				double[] rateMatchedLlrs) {
+				double[] rateMatchedLlrs, double[] symbolQpskCoherence, int startSymbol,
+				int symbolLength, int[] dmrsSymbols) {
 			this.demodulated = demodulated;
 			this.dmrsCoherence = dmrsCoherence;
 			this.evm = evm;
@@ -300,10 +469,15 @@ final class NrPdschDecoder {
 			this.transportBlockBits = transportBlockBits;
 			this.transportBlock = transportBlock;
 			this.rateMatchedLlrs = rateMatchedLlrs;
+			this.symbolQpskCoherence = symbolQpskCoherence;
+			this.startSymbol = startSymbol;
+			this.symbolLength = symbolLength;
+			this.dmrsSymbols = dmrsSymbols.clone();
 		}
 		Decoded withTransportBlock(NrLdpcDecoder.Result value) {
 			return new Decoded(demodulated, dmrsCoherence, evm, qpskCoherence, dataResourceElements, codedBits,
-					transportBlockBits, value, rateMatchedLlrs);
+					transportBlockBits, value, rateMatchedLlrs, symbolQpskCoherence,
+					startSymbol, symbolLength, dmrsSymbols);
 		}
 	}
 }
