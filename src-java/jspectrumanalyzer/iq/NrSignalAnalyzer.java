@@ -318,7 +318,8 @@ final class NrSignalAnalyzer {
 		if (candidate.ssbSubcarrierSpacingKhz == 15 && mib.subcarrierSpacingCommonKhz == 15)
 			return coreSetIndex == 7 || coreSetIndex == 6
 					&& (searchSpaceIndex == 2 || searchSpaceIndex == 4)
-					|| coreSetIndex == 3 && searchSpaceIndex == 0;
+					|| coreSetIndex == 3 && searchSpaceIndex == 0
+					|| coreSetIndex == 0 && searchSpaceIndex == 10;
 		return candidate.ssbSubcarrierSpacingKhz == 30 && mib.subcarrierSpacingCommonKhz == 30
 				&& coreSetIndex == 0 && searchSpaceIndex == 4;
 	}
@@ -603,6 +604,13 @@ final class NrSignalAnalyzer {
 
 	Result analyzeFast(byte[] iq, int length, int sampleRateHz) {
 		PssSurvey survey = surveyPss(iq, length, sampleRateHz, true, true, true);
+		return resultFromSurvey(survey);
+	}
+
+	/* MIB-only fallback for FR1 high-band / Case C acquisition.  Keep this
+	 * separate from analyzeFast() so the established 15 kHz path is unchanged. */
+	Result analyzeFast30Mib(byte[] iq, int length, int sampleRateHz) {
+		PssSurvey survey = surveyPss(iq, length, sampleRateHz, SURVEY_CONFIGS[1], false, true);
 		return resultFromSurvey(survey);
 	}
 

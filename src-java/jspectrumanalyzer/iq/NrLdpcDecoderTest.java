@@ -10,6 +10,7 @@ final class NrLdpcDecoderTest {
 
 	public static void main(String[] args) throws Exception {
 		checkProfile(120, 24, 192, 0, "BG2_96", false);
+		checkProfile(176, 32, 1536, 0, "BG2_32", false);
 		checkProfile(640, 72, 5280, 0, "BG2_72", false);
 		checkProfile(768, 80, 6480, 0, "BG2_80", false);
 		checkProfile(928, 96, 3024, 3, "BG2_96", false);

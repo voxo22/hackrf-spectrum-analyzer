@@ -45,7 +45,7 @@ final class UmtsPagingStatsFrame extends JFrame {
 		JTabbedPane tabs = new JTabbedPane();
 		tabs.addTab("OBSERVATIONS", tablePanel(eventModel));
 		tabs.addTab("COUNTRY / OPERATOR SUMMARY", tablePanel(summaryModel));
-		add(status, BorderLayout.NORTH);
+		add(SignalTesterClipboard.createDetailsHeader(getContentPane(), status), BorderLayout.NORTH);
 		add(tabs, BorderLayout.CENTER);
 		setSize(1080, 480);
 		setMinimumSize(new Dimension(780, 350));

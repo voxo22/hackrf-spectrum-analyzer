@@ -4,6 +4,51 @@ package jspectrumanalyzer.iq;
 final class NrLdpcDecoder {
 	private static final int MAX_ITERATIONS = Integer.getInteger("nr.ldpc.iterations", 50);
 	private static final double MIN_SUM_SCALE = Double.parseDouble(System.getProperty("nr.ldpc.alpha", "0.8"));
+	// TS 38.212 BG2, lifting-size set iLS=0 (Zc=32).
+	private static final int[][] BG2_32 = {
+		{0,9, 1,117, 2,204, 3,26, 6,189, 9,205, 10,0, 11,0},
+		{0,167, 3,166, 4,253, 5,125, 6,226, 7,156, 8,224, 9,252, 11,0, 12,0},
+		{0,81, 1,114, 3,44, 4,52, 8,240, 10,1, 12,0, 13,0},
+		{1,8, 2,58, 4,158, 5,104, 6,209, 7,54, 8,18, 9,128, 10,0, 13,0},
+		{0,179, 1,214, 11,71, 14,0},
+		{0,231, 1,41, 5,194, 7,159, 11,103, 15,0},
+		{0,155, 5,228, 7,45, 9,28, 11,158, 16,0},
+		{1,129, 5,147, 7,140, 11,3, 13,116, 17,0},
+		{0,142, 1,94, 12,230, 18,0},
+		{1,203, 8,205, 10,61, 11,247, 19,0},
+		{0,11, 1,185, 6,0, 7,117, 20,0},
+		{0,11, 7,236, 9,210, 13,56, 21,0},
+		{1,63, 3,111, 11,14, 22,0},
+		{0,83, 1,2, 8,38, 13,222, 23,0},
+		{1,115, 6,145, 11,3, 13,232, 24,0},
+		{0,51, 10,175, 11,213, 25,0},
+		{1,203, 9,142, 11,8, 12,242, 26,0},
+		{1,254, 5,124, 11,114, 12,64, 27,0},
+		{0,220, 6,194, 7,50, 28,0},
+		{0,87, 1,20, 10,185, 29,0},
+		{1,26, 4,105, 11,29, 30,0},
+		{0,76, 8,42, 13,210, 31,0},
+		{1,222, 2,63, 32,0},
+		{0,23, 3,235, 5,238, 33,0},
+		{1,46, 2,139, 9,8, 34,0},
+		{0,228, 5,156, 35,0},
+		{2,29, 7,143, 12,160, 13,122, 36,0},
+		{0,8, 6,151, 37,0},
+		{1,98, 2,101, 5,135, 38,0},
+		{0,18, 4,28, 39,0},
+		{2,71, 5,240, 7,9, 9,84, 40,0},
+		{1,106, 13,1, 41,0},
+		{0,242, 5,44, 12,166, 42,0},
+		{2,132, 7,164, 10,235, 43,0},
+		{0,147, 12,85, 13,36, 44,0},
+		{1,57, 5,40, 11,63, 45,0},
+		{0,140, 2,38, 7,154, 46,0},
+		{10,219, 13,151, 47,0},
+		{1,31, 5,66, 11,38, 48,0},
+		{0,239, 7,172, 12,34, 49,0},
+		{2,0, 10,75, 13,120, 50,0},
+		{1,129, 5,229, 11,118, 51,0}
+	};
 	// TS 38.212 BG2, lifting-size set iLS=4 (Zc=72).
 	private static final int[][] BG2_72 = {
 		{0,3, 1,26, 2,53, 3,35, 6,115, 9,127, 10,0, 11,0},
@@ -187,7 +232,8 @@ final class NrLdpcDecoder {
 	private NrLdpcDecoder() {}
 
 	static boolean supportsTransportBlock(int transportBlockBits) {
-		return transportBlockBits == 120 || transportBlockBits == 640
+		return transportBlockBits == 120 || transportBlockBits == 176
+				|| transportBlockBits == 640
 				|| transportBlockBits == 736 || transportBlockBits == 768
 				|| transportBlockBits == 928 || transportBlockBits == 1032;
 	}
@@ -344,6 +390,7 @@ final class NrLdpcDecoder {
 
 	private static int liftingSize(int transportBlockBits) {
 		if (transportBlockBits == 120) return 24;
+		if (transportBlockBits == 176) return 32;
 		if (transportBlockBits == 640) return 72;
 		if (transportBlockBits == 736 || transportBlockBits == 768) return 80;
 		if (transportBlockBits == 928) return 96;
@@ -352,6 +399,7 @@ final class NrLdpcDecoder {
 
 	private static int[][] baseGraph(int transportBlockBits) {
 		if (transportBlockBits == 120) return BG2_96;
+		if (transportBlockBits == 176) return BG2_32;
 		if (transportBlockBits == 640) return BG2_72;
 		if (transportBlockBits == 736 || transportBlockBits == 768) return BG2_80;
 		if (transportBlockBits == 928) return BG2_96;

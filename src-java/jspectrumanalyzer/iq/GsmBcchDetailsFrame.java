@@ -48,7 +48,8 @@ final class GsmBcchDetailsFrame extends JFrame {
 		tabs.addTab("NEIGHBOUR CELLS", panel(neighbours));
 		tabs.addTab("TIMESLOT LOAD", panel(timeslots, timeslotTotal));
 		tabs.addTab("SYSTEM INFORMATION", panel(messages));
-		add(status, BorderLayout.NORTH); add(tabs, BorderLayout.CENTER);
+		add(SignalTesterClipboard.createDetailsHeader(getContentPane(), status), BorderLayout.NORTH);
+		add(tabs, BorderLayout.CENTER);
 		setSize(820, 480); setMinimumSize(new Dimension(680, 350));
 		timer = new Timer(500, e -> refresh()); timer.start();
 	}

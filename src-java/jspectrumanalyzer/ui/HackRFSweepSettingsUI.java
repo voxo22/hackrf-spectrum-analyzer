@@ -2016,7 +2016,6 @@ public class HackRFSweepSettingsUI extends JPanel
 				chckbxAntennaLNA,
 				chckbxAntennaPower,
 				slider_AmplitudeOffset,
-				slider_PowerFluxCal,
 				spinnerAvgIterations,
 				spinnerSpectrumRecordFrameRate,
 				btnRecSpectrum

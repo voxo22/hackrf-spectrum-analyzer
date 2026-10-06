@@ -52,11 +52,17 @@ public class IQAnalyzerApp {
 		public final String format;
 		public final int resolution;
 		public final int frameRate;
+		public final String area;
 
 		public VideoRecordingSettings(String format, int resolution, int frameRate) {
+			this(format, resolution, frameRate, "SPECTR");
+		}
+
+		public VideoRecordingSettings(String format, int resolution, int frameRate, String area) {
 			this.format = format == null ? "GIF" : format;
 			this.resolution = resolution <= 0 ? 540 : resolution;
 			this.frameRate = frameRate <= 0 ? 15 : frameRate;
+			this.area = "FULLSCR".equals(area) ? "FULLSCR" : "SPECTR";
 		}
 	}
 
@@ -650,7 +656,8 @@ public class IQAnalyzerApp {
 				new SignalTestOption("GSM 2G"),
 				new SignalTestOption("UMTS 3G"),
 				new SignalTestOption("LTE 4G"),
-				new SignalTestOption("NR 5G")
+				new SignalTestOption("NR 5G"),
+				new SignalTestOption("Wi-Fi")
 		});
 		signalTestCombo.addActionListener(e -> applySignalTestPreset());
 		signalTestButton = new JButton("SIGNAL TEST");
@@ -1176,7 +1183,7 @@ public class IQAnalyzerApp {
 		}
 		SignalTestOption option = signalTestCombo == null ? null : (SignalTestOption) signalTestCombo.getSelectedItem();
 		String mode = option == null ? "Signal" : option.label;
-		SignalQualityTesterFrame tester = new SignalQualityTesterFrame(mode, () -> {
+		SignalQualityTesterFrame tester = new SignalQualityTesterFrame(mode, recordingTimeMillisSupplier, () -> {
 			signalTestFrame = null;
 			styleSignalTestButton();
 		});
@@ -1190,6 +1197,11 @@ public class IQAnalyzerApp {
 		SignalTestOption option = signalTestCombo == null ? null
 				: (SignalTestOption) signalTestCombo.getSelectedItem();
 		if (option == null) return;
+		if (option.label.startsWith("Wi-Fi")) {
+			if (dcOffsetEnableCheck != null) dcOffsetEnableCheck.setSelected(false);
+			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
+			return;
+		}
 		if (option.label.startsWith("LTE") || option.label.startsWith("NR") || option.label.startsWith("UMTS")) {
 			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
 			return;
@@ -1245,15 +1257,18 @@ public class IQAnalyzerApp {
 		try {
 			VideoRecordingSettings settings = videoRecordingSettings;
 			int[] size = getVideoRecordingSize(settings.resolution);
+			Component captureArea = "FULLSCR".equals(settings.area) && frame != null
+					? frame.getContentPane()
+					: timeDomainPanel;
 			boolean mp4 = "MP4".equalsIgnoreCase(settings.format);
 			if (mp4) {
-				ScreenCaptureH264 recorder = new ScreenCaptureH264(timeDomainPanel, 0, 0, settings.frameRate,
+				ScreenCaptureH264 recorder = new ScreenCaptureH264(captureArea, 0, 0, settings.frameRate,
 						size[0], size[1], createVideoRecordingFile("mp4").getPath(),
 						audioEnableCheck != null && audioEnableCheck.isSelected());
 				videoH264Recorder = recorder;
 				updateAudioRecorderSink();
 			} else {
-				videoGifRecorder = new ScreenCapture(timeDomainPanel, 0, 0, settings.frameRate,
+				videoGifRecorder = new ScreenCapture(captureArea, 0, 0, settings.frameRate,
 						size[0], size[1], createVideoRecordingFile("gif"));
 			}
 			styleRecordButtons();

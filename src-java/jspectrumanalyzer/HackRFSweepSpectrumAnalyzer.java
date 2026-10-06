@@ -4772,12 +4772,17 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		currentMHz = Math.max(minMHz, Math.min(maxMHz, currentMHz));
 		boolean centeredSelection = event.isShiftDown();
 		if (centeredSelection) {
-			double radiusMHz = Math.min(selection.anchorMHz - minMHz, maxMHz - selection.anchorMHz);
+			double maxRadiusMHz = IQ_SELECTION_MAX_BW_MHZ * 0.5d;
+			double centeredMinMHz = Math.max(minMHz, selection.anchorMHz - maxRadiusMHz);
+			double centeredMaxMHz = Math.min(maxMHz, selection.anchorMHz + maxRadiusMHz);
+			double radiusMHz = Math.min(selection.anchorMHz - centeredMinMHz,
+					centeredMaxMHz - selection.anchorMHz);
 			double mirroredMHz = selection.anchorMHz - (currentMHz - selection.anchorMHz);
 			currentMHz = Math.max(selection.anchorMHz - radiusMHz, Math.min(selection.anchorMHz + radiusMHz, currentMHz));
 			mirroredMHz = Math.max(selection.anchorMHz - radiusMHz, Math.min(selection.anchorMHz + radiusMHz, mirroredMHz));
 			if (selection.snapEnabled) {
-				double[] snappedRange = snapSelectionRangeMHz(mirroredMHz, currentMHz, minMHz, maxMHz);
+				double[] snappedRange = snapSelectionRangeMHz(mirroredMHz, currentMHz,
+						centeredMinMHz, centeredMaxMHz);
 				selection.startMHz = snappedRange[0];
 				selection.stopMHz = snappedRange[1];
 			} else {
@@ -4880,19 +4885,18 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			long sourceCenterHz = iqReplay.getCenterFrequencyHz();
 			int sourceSampleRateHz = iqReplay.getSampleRateHz();
 			long channelOffsetHz = centerHz - sourceCenterHz;
-			/* Preserve replay fidelity in the IQ analyzer. We still crop the
-			 * selected channel, but keep the original replay sample rate so the
-			 * analyzer path does not introduce fractional-rate replay artifacts. */
-			int outputRateHz = sourceSampleRateHz;
+			/* Feed the original replay IQ to the analyzer.  Channelizing here and
+			 * again inside IQAnalyzerApp distorted wide signals and prevented the
+			 * Wi-Fi tester from seeing the same samples as the replay source. */
 			playbackIqAnalyzerWindows.incrementAndGet();
 			stopIqReplayAudio();
 			SwingUtilities.invokeLater(() -> {
 				IQAnalyzerApp analyzer = createIQAnalyzerApp();
-				IQReplayAnalyzerFeed feed = new IQReplayAnalyzerFeed(analyzer, sourceSampleRateHz, channelOffsetHz,
-						bandwidthHz, outputRateHz);
+				IQReplayAnalyzerFeed feed = new IQReplayAnalyzerFeed(analyzer, sourceSampleRateHz, 0,
+						sourceSampleRateHz, sourceSampleRateHz);
 				playbackIqAnalyzers.add(feed);
 				registerOpenIqAnalyzer(analyzer);
-				analyzer.showExternal(centerHz, feed.outputSampleRateHz, 0, bandwidthHz,
+				analyzer.showExternal(sourceCenterHz, sourceSampleRateHz, channelOffsetHz, bandwidthHz,
 						() -> playbackCurrentEpochMillis,
 						() -> {
 							unregisterOpenIqAnalyzer(analyzer);
@@ -4947,7 +4951,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 	private IQAnalyzerApp.VideoRecordingSettings createIqAnalyzerVideoSettings() {
 		return new IQAnalyzerApp.VideoRecordingSettings(parameterVideoFormat.getValue(),
-				parameterVideoResolution.getValue(), parameterVideoFrameRate.getValue());
+				parameterVideoResolution.getValue(), parameterVideoFrameRate.getValue(),
+				parameterVideoArea.getValue());
 	}
 
 	private int chooseIQSampleRateHz(int bandwidthHz) {

@@ -50,7 +50,7 @@ final class NrCellDetailsFrame extends JFrame {
 		tabs.addTab("RADIO", panel(radio));
 		tabs.addTab("SIB1", panel(sib1));
 		tabs.addTab("AIR LOAD", panel(load));
-		add(status, BorderLayout.NORTH);
+		add(SignalTesterClipboard.createDetailsHeader(getContentPane(), status), BorderLayout.NORTH);
 		add(tabs, BorderLayout.CENTER);
 		setSize(850, 520);
 		setMinimumSize(new Dimension(700, 400));

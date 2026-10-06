@@ -11,9 +11,11 @@ import java.awt.GridLayout;
 import java.awt.RenderingHints;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.util.ArrayDeque;
 import java.util.Locale;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.LongSupplier;
 
 import javax.swing.BorderFactory;
 import javax.swing.JFrame;
@@ -64,9 +66,11 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final JLabel lteParameterLabel = new JLabel();
 	private final JLabel nrParameterLabel = new JLabel();
 	private final JLabel umtsParameterLabel = new JLabel();
+	private final JLabel wifiParameterLabel = new JLabel();
 	private final LteCellTablePanel lteCellTablePanel = new LteCellTablePanel();
 	private final NrCellTablePanel nrCellTablePanel = new NrCellTablePanel();
 	private final UmtsCellTablePanel umtsCellTablePanel = new UmtsCellTablePanel();
+	private final WifiNetworkTablePanel wifiNetworkTablePanel = new WifiNetworkTablePanel();
 	private final LteConstellationPanel lteConstellationPanel = new LteConstellationPanel();
 	private final JLabel titleLabel;
 	private final JLabel statsLabel = new JLabel("Waiting for IQ samples...");
@@ -80,6 +84,8 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final boolean lteMode;
 	private final boolean nrMode;
 	private final boolean umtsMode;
+	private final boolean wifiMode;
+	private final LongSupplier captureTimeMillisSupplier;
 	private final DvbtSignalAnalyzer dvbtAnalyzer = new DvbtSignalAnalyzer();
 	private final Dvbt2SignalAnalyzer dvbt2Analyzer = new Dvbt2SignalAnalyzer();
 	private final GsmSignalAnalyzer gsmAnalyzer = new GsmSignalAnalyzer();
@@ -87,6 +93,19 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final LteSignalAnalyzer lteAnalyzer = new LteSignalAnalyzer();
 	private final NrSignalAnalyzer nrAnalyzer = new NrSignalAnalyzer();
 	private final UmtsSignalAnalyzer umtsAnalyzer = new UmtsSignalAnalyzer();
+	private final WifiSignalAnalyzer wifiAnalyzer = new WifiSignalAnalyzer();
+	private final WifiDsssAnalyzer wifiDsssAnalyzer = new WifiDsssAnalyzer();
+	private volatile WifiSignalAnalyzer.Result latestWifiResult;
+	private volatile WifiDsssAnalyzer.Result latestWifiDsssResult;
+	private static final int WIFI_MAX_QUEUED_BYTES = 8_000_000;
+	private final ArrayDeque<WifiChunk> wifiQueue = new ArrayDeque<WifiChunk>();
+	private final ArrayDeque<WifiChunk> wifiDsssQueue = new ArrayDeque<WifiChunk>();
+	private int wifiQueuedBytes;
+	private int wifiDsssQueuedBytes;
+	private volatile boolean wifiDsssBandActive;
+	private volatile boolean wifiWorkerClosed;
+	private Thread wifiWorker;
+	private Thread wifiDsssWorker;
 	private volatile boolean gsmAnalysisRunning;
 	private volatile GsmSignalAnalyzer.Result latestGsmResult;
 	private volatile boolean rdsAnalysisRunning;
@@ -114,6 +133,7 @@ final class SignalQualityTesterFrame extends JFrame {
 	private NrCellDetailsFrame nrCellDetailsFrame;
 	private UmtsCellDetailsFrame umtsCellDetailsFrame;
 	private UmtsPagingStatsFrame umtsPagingFrame;
+	private WifiNetworkDetailsFrame wifiNetworkDetailsFrame;
 	private volatile boolean dvbt2AnalysisRunning;
 	private volatile Dvbt2SignalAnalyzer.Result latestDvbt2Result;
 	private static final int DVBT2_SIGNALLING_CAPTURE_BYTES = 6_000_000;
@@ -149,18 +169,25 @@ final class SignalQualityTesterFrame extends JFrame {
 	private int nrHistoryLength;
 	private int nrHistoryWritePosition;
 	private int nrHistorySampleRateHz;
+	private int nr30MibWindowCursor;
 
 	SignalQualityTesterFrame(String mode, Runnable closedCallback) {
+		this(mode, null, closedCallback);
+	}
+
+	SignalQualityTesterFrame(String mode, LongSupplier captureTimeMillisSupplier, Runnable closedCallback) {
 		super("Signal Quality Tester");
+		this.captureTimeMillisSupplier = captureTimeMillisSupplier;
 		setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 		dabMode = "DAB".equals(mode);
-		dvbtMode = mode.startsWith("DVB-T ") && !mode.startsWith("DVB-T2");
+		dvbtMode = "DVB-T".equals(mode);
 		dvbt2Mode = mode.startsWith("DVB-T2");
 		gsmMode = mode.startsWith("GSM");
 		rdsMode = mode.startsWith("FM RDS");
 		lteMode = mode.startsWith("LTE");
 		nrMode = mode.startsWith("5G NR") || mode.startsWith("NR");
 		umtsMode = mode.startsWith("UMTS") || mode.startsWith("WCDMA");
+		wifiMode = mode.startsWith("Wi-Fi");
 		if (gsmMode) {
 			latestGsmResult = GsmSignalAnalyzer.Result.empty("collecting GSM channel IQ");
 			prepareParameterLabel(gsmParameterLabel);
@@ -186,6 +213,12 @@ final class SignalQualityTesterFrame extends JFrame {
 			prepareParameterLabel(umtsParameterLabel);
 			umtsParameterLabel.setFont(umtsParameterLabel.getFont().deriveFont(12f));
 		}
+		if (wifiMode) {
+			latestWifiResult = WifiSignalAnalyzer.Result.empty("Searching for Wi-Fi legacy preamble");
+			latestWifiDsssResult = WifiDsssAnalyzer.Result.empty("Searching for Wi-Fi DSSS preamble");
+			prepareParameterLabel(wifiParameterLabel);
+			wifiParameterLabel.setFont(wifiParameterLabel.getFont().deriveFont(12f));
+		}
 		if (dvbtMode) dvbtTpsCapture = new byte[DVBT_TPS_CAPTURE_BYTES];
 		if (dvbt2Mode) {
 			latestDvbt2Result = Dvbt2SignalAnalyzer.Result.empty("collecting DVB-T2 IQ");
@@ -195,7 +228,8 @@ final class SignalQualityTesterFrame extends JFrame {
 			prepareParameterLabel(dvbt2PostLabel);
 		}
 
-		titleLabel = new JLabel(mode + (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode || umtsMode ? " signal quality" : " raw IQ monitor"));
+		titleLabel = new JLabel(mode + (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode
+				|| nrMode || umtsMode || wifiMode ? " signal quality" : " raw IQ monitor"));
 		titleLabel.setForeground(TEXT_FG);
 		titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 14f));
 		statsLabel.setForeground(MUTED_FG);
@@ -229,18 +263,22 @@ final class SignalQualityTesterFrame extends JFrame {
 			pagingButton.addActionListener(e -> openUmtsPagingStats());
 			headerRight.add(detailsButton);
 			headerRight.add(pagingButton);
+		} else if (wifiMode) {
+			JButton detailsButton = new JButton("AP / CLIENT DETAILS");
+			detailsButton.addActionListener(e -> openWifiNetworkDetails());
+			headerRight.add(detailsButton);
 		}
-		if (headerRight.getComponentCount() > 0) {
-			header.add(headerRight, BorderLayout.EAST);
-		}
+		headerRight.add(SignalTesterClipboard.createButton(getContentPane(), false));
+		header.add(headerRight, BorderLayout.EAST);
 
 		JPanel footer = new JPanel(new BorderLayout(8, 4));
 		footer.setBackground(PANEL_BG);
 		footer.setBorder(new EmptyBorder(6, 10, 8, 10));
-		JPanel qualityRows = new JPanel(new GridLayout(dvbt2Mode ? 3 : dabMode || dvbtMode || gsmMode || rdsMode || lteMode || nrMode || umtsMode ? 2 : 1, 1, 0, 2));
+		JPanel qualityRows = new JPanel(new GridLayout(dvbt2Mode ? 3 : dabMode || dvbtMode || gsmMode
+				|| rdsMode || lteMode || nrMode || umtsMode || wifiMode ? 2 : 1, 1, 0, 2));
 		qualityRows.setBackground(PANEL_BG);
 		qualityRows.add(qualityPanel);
-		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode || umtsMode) {
+		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode || umtsMode || wifiMode) {
 			qualityRows.add(dabLockPanel);
 		}
 		if (dvbt2Mode) qualityRows.add(dvbt2CrcPanel);
@@ -293,6 +331,15 @@ final class SignalQualityTesterFrame extends JFrame {
 			umtsColumn.add(umtsParameterLabel);
 			umtsColumn.add(umtsCellTablePanel);
 			plots.add(umtsColumn);
+		} else if (wifiMode) {
+			wifiParameterLabel.setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createLineBorder(Color.DARK_GRAY), new EmptyBorder(8, 14, 8, 14)));
+			wifiParameterLabel.setPreferredSize(new Dimension(100, 150));
+			JPanel wifiColumn = new JPanel(new BorderLayout(0, 6));
+			wifiColumn.setBackground(PANEL_BG);
+			wifiColumn.add(wifiParameterLabel, BorderLayout.NORTH);
+			wifiColumn.add(wifiNetworkTablePanel, BorderLayout.CENTER);
+			plots.add(wifiColumn);
 		} else {
 			plots.add(scatterPanel);
 			plots.add(dabMode || dvbtMode ? dabConstellationPanel : spectrumPanel);
@@ -301,7 +348,9 @@ final class SignalQualityTesterFrame extends JFrame {
 		add(header, BorderLayout.NORTH);
 		add(plots, BorderLayout.CENTER);
 		add(footer, BorderLayout.SOUTH);
-		setSize(dvbt2Mode ? 1100 : 760, dvbt2Mode ? 650 : lteMode ? 570 : nrMode || umtsMode ? 500 : gsmMode || rdsMode ? 445 : 420);
+		setSize(dvbt2Mode ? 1100 : 760,
+				dvbt2Mode ? 650 : wifiMode || lteMode ? 570 : nrMode || umtsMode ? 500
+						: gsmMode || rdsMode ? 445 : 420);
 
 		repaintTimer = new Timer(100, e -> updateView());
 		repaintTimer.start();
@@ -309,17 +358,29 @@ final class SignalQualityTesterFrame extends JFrame {
 			@Override
 			public void windowClosed(WindowEvent e) {
 				repaintTimer.stop();
+				stopWifiWorker();
 				if (gsmPagingFrame != null) gsmPagingFrame.dispose();
 				if (gsmBcchFrame != null) gsmBcchFrame.dispose();
 				if (lteCellDetailsFrame != null) lteCellDetailsFrame.dispose();
 				if (nrCellDetailsFrame != null) nrCellDetailsFrame.dispose();
 				if (umtsCellDetailsFrame != null) umtsCellDetailsFrame.dispose();
 				if (umtsPagingFrame != null) umtsPagingFrame.dispose();
+				if (wifiNetworkDetailsFrame != null) wifiNetworkDetailsFrame.dispose();
 				if (closedCallback != null) {
 					closedCallback.run();
 				}
 			}
 		});
+		if (wifiMode) startWifiWorker();
+	}
+
+	private void openWifiNetworkDetails() {
+		if (wifiNetworkDetailsFrame == null || !wifiNetworkDetailsFrame.isDisplayable())
+			wifiNetworkDetailsFrame = new WifiNetworkDetailsFrame(
+					() -> wifiNetworkTablePanel.selectedNetwork());
+		wifiNetworkDetailsFrame.setLocationRelativeTo(this);
+		wifiNetworkDetailsFrame.setVisible(true);
+		wifiNetworkDetailsFrame.toFront();
 	}
 
 	private void openLteCellDetails() {
@@ -404,6 +465,128 @@ final class SignalQualityTesterFrame extends JFrame {
 		return column;
 	}
 
+	private void startWifiWorker() {
+		wifiWorker = new Thread(() -> {
+			while (!wifiWorkerClosed) {
+				WifiChunk chunk;
+				synchronized (wifiQueue) {
+					while (wifiQueue.isEmpty() && !wifiWorkerClosed) {
+						try { wifiQueue.wait(); }
+						catch (InterruptedException e) { if (wifiWorkerClosed) return; }
+					}
+					if (wifiWorkerClosed) return;
+					chunk = wifiQueue.removeFirst();
+					wifiQueuedBytes -= chunk.iq.length;
+				}
+				/* A busy GUI may drop queued replay blocks.  Only discard the timing
+				 * overlap; keep the last decoded packet visible in the tester. */
+				if (chunk.reset) {
+					wifiAnalyzer.discardOverlap();
+				}
+				latestWifiResult = wifiAnalyzer.analyze(chunk.centerFreqHz,
+						chunk.iq, chunk.iq.length, chunk.sampleRateHz);
+				for (WifiSignalAnalyzer.Observation observation : wifiAnalyzer.takeObservations())
+					wifiNetworkTablePanel.observe(observation, chunk.captureMillis);
+			}
+		}, "Wi-Fi legacy OFDM analyzer");
+		wifiWorker.setDaemon(true);
+		wifiWorker.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
+		wifiWorker.start();
+		wifiDsssWorker = new Thread(() -> {
+			while (!wifiWorkerClosed) {
+				WifiChunk chunk;
+				synchronized (wifiDsssQueue) {
+					while (wifiDsssQueue.isEmpty() && !wifiWorkerClosed) {
+						try { wifiDsssQueue.wait(); }
+						catch (InterruptedException e) { if (wifiWorkerClosed) return; }
+					}
+					if (wifiWorkerClosed) return;
+					chunk = wifiDsssQueue.removeFirst();
+					wifiDsssQueuedBytes -= chunk.iq.length;
+				}
+				if (chunk.reset) wifiDsssAnalyzer.discardOverlap();
+				WifiDsssAnalyzer.Result dsssResult = wifiDsssAnalyzer.analyze(chunk.centerFreqHz,
+						chunk.iq, chunk.iq.length, chunk.sampleRateHz);
+				if (wifiDsssBandActive) {
+					latestWifiDsssResult = dsssResult;
+					for (WifiDsssAnalyzer.Result observation : wifiDsssAnalyzer.takeObservations())
+						wifiNetworkTablePanel.observe(observation, chunk.captureMillis);
+				} else wifiDsssAnalyzer.takeObservations();
+			}
+		}, "Wi-Fi DSSS analyzer");
+		wifiDsssWorker.setDaemon(true);
+		wifiDsssWorker.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
+		wifiDsssWorker.start();
+	}
+
+	private void stopWifiWorker() {
+		wifiWorkerClosed = true;
+		synchronized (wifiQueue) {
+			wifiQueue.clear();
+			wifiQueuedBytes = 0;
+			wifiQueue.notifyAll();
+		}
+		synchronized (wifiDsssQueue) {
+			wifiDsssQueue.clear();
+			wifiDsssQueuedBytes = 0;
+			wifiDsssQueue.notifyAll();
+		}
+		Thread worker = wifiWorker;
+		if (worker != null) worker.interrupt();
+		worker = wifiDsssWorker;
+		if (worker != null) worker.interrupt();
+	}
+
+	private void offerWifiAnalysis(long centerFreqHz, int sampleRateHz, byte[] iqData, int length) {
+		boolean dsssBand = centerFreqHz >= 2_400_000_000L && centerFreqHz < 2_500_000_000L;
+		long captureMillis = System.currentTimeMillis();
+		LongSupplier timeSupplier = captureTimeMillisSupplier;
+		if (timeSupplier != null) {
+			long supplied = timeSupplier.getAsLong();
+			if (supplied > 0L) captureMillis = supplied;
+		}
+		int copyLength = Math.min(length, iqData.length) & ~1;
+		boolean oversized = false;
+		if (copyLength > WIFI_MAX_QUEUED_BYTES) {
+			copyLength = WIFI_MAX_QUEUED_BYTES & ~1;
+			oversized = true;
+		}
+		byte[] copy = new byte[copyLength];
+		System.arraycopy(iqData, length - copyLength, copy, 0, copyLength);
+		synchronized (wifiQueue) {
+			if (wifiWorkerClosed) return;
+			boolean reset = oversized;
+			if (wifiQueuedBytes + copyLength > WIFI_MAX_QUEUED_BYTES) {
+				wifiQueue.clear();
+				wifiQueuedBytes = 0;
+				reset = true;
+			}
+			wifiQueue.addLast(new WifiChunk(copy, centerFreqHz, sampleRateHz, captureMillis, reset));
+			wifiQueuedBytes += copyLength;
+			wifiQueue.notifyAll();
+		}
+		synchronized (wifiDsssQueue) {
+			if (wifiWorkerClosed) return;
+			if (!dsssBand) {
+				wifiDsssBandActive = false;
+				wifiDsssQueue.clear();
+				wifiDsssQueuedBytes = 0;
+				latestWifiDsssResult = null;
+				return;
+			}
+			boolean reset = oversized || !wifiDsssBandActive;
+			wifiDsssBandActive = true;
+			if (wifiDsssQueuedBytes + copyLength > WIFI_MAX_QUEUED_BYTES) {
+				wifiDsssQueue.clear();
+				wifiDsssQueuedBytes = 0;
+				reset = true;
+			}
+			wifiDsssQueue.addLast(new WifiChunk(copy, centerFreqHz, sampleRateHz, captureMillis, reset));
+			wifiDsssQueuedBytes += copyLength;
+			wifiDsssQueue.notifyAll();
+		}
+	}
+
 	void offerIQBlock(long centerFreqHz, int sampleRateHz, byte[] iqData, int length) {
 		if (iqData == null || length < 2) {
 			return;
@@ -413,6 +596,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (totalSamples <= 0) {
 			return;
 		}
+		if (wifiMode) offerWifiAnalysis(centerFreqHz, sampleRateHz, iqData, evenLength);
 		if (dvbtMode) offerDvbtTpsCapture(sampleRateHz, iqData, evenLength);
 		if (dvbt2Mode) offerDvbt2SignallingCapture(sampleRateHz, iqData, evenLength);
 		if (nrMode) appendNrHistory(iqData, evenLength, sampleRateHz);
@@ -465,7 +649,8 @@ final class SignalQualityTesterFrame extends JFrame {
 		double dcPercent = Math.sqrt(meanI * meanI + meanQ * meanQ) / 128d * 100d;
 		double clippingPercent = sampleCount <= 0 ? 0 : clipped * 100d / sampleCount;
 		double quality = calculateRawQuality(dbfs, clippingPercent, dcPercent);
-		float[] spectrum = gsmMode || lteMode || nrMode || umtsMode ? new float[0] : computeSpectrum(iqData, totalSamples);
+		float[] spectrum = gsmMode || lteMode || nrMode || umtsMode
+				? new float[0] : computeSpectrum(iqData, totalSamples);
 		DabMetrics dabMetrics = dabMode ? computeDabMetrics(spectrum, sampleRateHz) : null;
 		if (dabMetrics != null) {
 			dabMetrics.constellation = computeDabConstellation(dabAnalysisData, dabAnalysisLength, sampleRateHz,
@@ -482,12 +667,15 @@ final class SignalQualityTesterFrame extends JFrame {
 		RdsSignalAnalyzer.Result rdsResult = rdsMode ? latestRdsResult : null;
 		if (lteMode) scheduleLteAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
 		LteSignalAnalyzer.Result lteResult = lteMode ? latestLteResult : null;
-		if (nrMode) scheduleNrAnalysis(sampleRateHz);
+		if (nrMode) scheduleNrAnalysis(sampleRateHz, centerFreqHz);
 		NrSignalAnalyzer.Result nrResult = nrMode ? latestNrResult : null;
 		if (umtsMode) scheduleUmtsAnalysis(dabAnalysisData, dabAnalysisLength, sampleRateHz);
 		UmtsSignalAnalyzer.Result umtsResult = umtsMode ? latestUmtsResult : null;
+		WifiSignalAnalyzer.Result wifiResult = wifiMode ? latestWifiResult : null;
+		WifiDsssAnalyzer.Result wifiDsssResult = wifiMode ? latestWifiDsssResult : null;
 		snapshot = new Snapshot(centerFreqHz, sampleRateHz, samples, sampleCount, dbfs, peak, dcPercent,
-				clippingPercent, stabilityDb, quality, spectrum, dabMetrics, dvbtResult, dvbt2Result, gsmResult, rdsResult, lteResult, nrResult, umtsResult,
+				clippingPercent, stabilityDb, quality, spectrum, dabMetrics, dvbtResult, dvbt2Result,
+				gsmResult, rdsResult, lteResult, nrResult, umtsResult, wifiResult, wifiDsssResult,
 				System.currentTimeMillis());
 	}
 
@@ -505,17 +693,28 @@ final class SignalQualityTesterFrame extends JFrame {
 		worker.setDaemon(true); worker.setPriority(Thread.MIN_PRIORITY); worker.start();
 	}
 
-	private synchronized void scheduleNrAnalysis(int sampleRateHz) {
+	private synchronized void scheduleNrAnalysis(int sampleRateHz, long centerFreqHz) {
 		// Stereo 8-bit IQ uses two bytes per sample; 40 ms matches the proven probe window.
 		int windowBytes = Math.max(131_072, sampleRateHz * 8 / 100) & ~1;
 		final NrSignalAnalyzer.Result previous = latestNrResult;
+		final boolean needsMib = previous == null || !previous.mib.valid;
 		final boolean needsSib1 = previous == null || !previous.sib1.valid;
+		final boolean highBand30MibSearch = needsMib && centerFreqHz >= 3_000_000_000L;
 		int contextBytes = Math.max(windowBytes, sampleRateHz * 4 / 10) & ~1;
-		int minimumBytes = needsSib1 ? contextBytes : windowBytes;
+		int minimumBytes = highBand30MibSearch ? windowBytes
+				: needsSib1 ? contextBytes : windowBytes;
 		if (nrAnalysisRunning || nrHistoryLength < minimumBytes) return;
 		final byte[] capture = new byte[windowBytes];
 		final byte[] context;
-		if (needsSib1) {
+		if (highBand30MibSearch) {
+			/* Search only Case-C 30 kHz here.  Rotate through the available
+			 * 40 ms history slices instead of paying for two full decoders on
+			 * the same weak slice. */
+			int availableWindows = Math.max(1, Math.min(5, nrHistoryLength / windowBytes));
+			int offsetFromEnd = (nr30MibWindowCursor++ % availableWindows) * windowBytes;
+			copyNrHistoryWindow(capture, offsetFromEnd);
+			context = capture;
+		} else if (needsSib1) {
 			context = new byte[contextBytes];
 			copyNrHistoryWindow(context, 0);
 			System.arraycopy(context, context.length - windowBytes, capture, 0, windowBytes);
@@ -526,7 +725,9 @@ final class SignalQualityTesterFrame extends JFrame {
 		nrAnalysisRunning = true;
 		Thread worker = new Thread(() -> {
 			try {
-				NrSignalAnalyzer.Result current = needsSib1
+				NrSignalAnalyzer.Result current = highBand30MibSearch
+						? nrAnalyzer.analyzeFast30Mib(capture, capture.length, sampleRateHz)
+						: needsSib1
 						? nrAnalyzer.analyzeFastWithContext(capture, capture.length,
 								context, context.length, context.length - capture.length,
 								sampleRateHz)
@@ -1377,6 +1578,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		spectrumPanel.setSnapshot(active);
 		dabConstellationPanel.setSnapshot(active);
 		dvbt2P2Panel.setSnapshot(active);
+		if (wifiMode) wifiNetworkTablePanel.refresh();
 		qualityPanel.setSnapshot(active);
 		dabLockPanel.setSnapshot(active);
 		refreshDvbt2CrcPanel();
@@ -1394,6 +1596,8 @@ final class SignalQualityTesterFrame extends JFrame {
 					"Waiting for NR IQ samples..."));
 			if (umtsMode) umtsParameterLabel.setText(parameterTable("UMTS CPICH ACQUISITION", "",
 					"Waiting for UMTS IQ samples..."));
+			if (wifiMode) wifiParameterLabel.setText(parameterTable("WI-FI CHANNEL", "",
+					"Waiting for Wi-Fi IQ samples..."));
 			return;
 		}
 		statsLabel.setText(String.format(Locale.US, "%.3f MHz   %.3f MS/s   RMS %.1f dBFS   peak %d",
@@ -1584,6 +1788,41 @@ final class SignalQualityTesterFrame extends JFrame {
 					active.centerFreqHz / 1e6, active.sampleRateHz / 1e6, umts.cfoHz,
 					umts.iqOrientation > 0 ? "normal" : "conjugated");
 			umtsParameterLabel.setText(parameterTable("UMTS/WCDMA DOWNLINK ACQUISITION", details, umts.state));
+		} else if (wifiMode && active.wifiResult != null) {
+			WifiSignalAnalyzer.Result wifi = active.wifiResult;
+			WifiDsssAnalyzer.Result dsss = active.wifiDsssResult;
+			long lastPacketMillis = Math.max(wifi.decodedMillis,
+					dsss == null ? 0L : dsss.decodedMillis);
+			long ageMillis = lastPacketMillis <= 0L ? -1L
+					: Math.max(0L, System.currentTimeMillis() - lastPacketMillis);
+			String acquisition = dsss != null && dsss.detected ? dsss.state : wifi.state;
+			String[] frameTypes = wifiNetworkTablePanel.channelTypeSummaryRows();
+			String details = String.format(Locale.US,
+					"Acquisition|%s\nTuned channel|%s\nChannel center|%.6f MHz\n"
+					+ "IQ sample rate|%.3f MS/s\nAP / clients|%d / %d (purple rows)\nDSSS decoded / detected|%d / %d\n"
+					+ "OFDM decoded / detected|%d / %d\nLatest decoded frame|%s\n"
+					+ "Frame classes|%s\nFrame types|%s\n|%s\n|%s\nLast channel activity|%s",
+					acquisition, wifiChannelDescription(active.centerFreqHz), active.centerFreqHz / 1e6,
+					active.sampleRateHz / 1e6, wifiNetworkTablePanel.networkCount(), wifiNetworkTablePanel.clientCount(),
+					dsss == null ? 0L : dsss.decodedPackets,
+					dsss == null ? 0L : dsss.detectedPackets,
+					wifi.decodedPackets, wifi.detectedPreambles,
+					wifiNetworkTablePanel.latestChannelFrame(), wifiNetworkTablePanel.channelClassSummary(),
+					frameTypes[0], frameTypes[1], frameTypes[2],
+					ageMillis < 0L ? "waiting" : ageMillis + " ms ago");
+			wifiParameterLabel.setText(parameterTable("WI-FI CHANNEL", details, acquisition));
+			if (dsss != null && dsss.detected) {
+				detailLabel.setText(String.format(Locale.US,
+						"%s   %d APs + %d clients   DSSS packets %d/%d   OFDM packets %d/%d",
+						dsss.state, wifiNetworkTablePanel.networkCount(), wifiNetworkTablePanel.clientCount(),
+						dsss.decodedPackets, dsss.detectedPackets,
+						wifi.decodedPackets, wifi.detectedPreambles));
+			} else {
+				detailLabel.setText(String.format(Locale.US,
+						"%s   L-LTF %.1f%%   SNR %.1f dB   EVM %.1f%%   CFO %+.0f Hz   packets %d/%d",
+						wifi.state, wifi.ltfCorrelation * 100d, wifi.snrDb, wifi.evmPercent,
+						wifi.cfoHz, wifi.decodedPackets, wifi.detectedPreambles));
+			}
 		} else {
 			detailLabel.setText(String.format(Locale.US, "DC %.1f%%   clipping %.2f%%   stability %.2f dB",
 					active.dcPercent, active.clippingPercent, active.stabilityDb));
@@ -1591,6 +1830,20 @@ final class SignalQualityTesterFrame extends JFrame {
 	}
 	private static String lteBandwidthMhz(int rb){switch(rb){case 6:return"1.4";case 15:return"3";case 25:return"5";case 50:return"10";case 75:return"15";case 100:return"20";default:return"?";}}
 	private static String phichResource(int value){return new String[]{"1/6","1/2","1","2"}[Math.max(0,Math.min(3,value))];}
+
+	private static String wifiChannelDescription(long frequencyHz) {
+		long mhz = Math.round(frequencyHz / 1_000_000d);
+		if (Math.abs(frequencyHz - mhz * 1_000_000L) > 1_000_000L) return "--";
+		if (mhz == 2484L) return "14 (2.4 GHz)";
+		if (mhz >= 2412L && mhz <= 2472L && (mhz - 2412L) % 5L == 0L)
+			return (1L + (mhz - 2412L) / 5L) + " (2.4 GHz)";
+		if (mhz == 5935L) return "2 (6 GHz)";
+		if (mhz >= 5955L && mhz <= 7115L && (mhz - 5950L) % 5L == 0L)
+			return ((mhz - 5950L) / 5L) + " (6 GHz)";
+		if (mhz >= 5000L && mhz <= 5895L && (mhz - 5000L) % 5L == 0L)
+			return ((mhz - 5000L) / 5L) + " (5 GHz)";
+		return "--";
+	}
 
 	private synchronized void refreshDvbt2CrcPanel() {
 		dvbt2CrcPanel.setStats(dvbt2CrcCount, dvbt2PreCrcSuccess, dvbt2PostCrcSuccess);
@@ -1933,6 +2186,18 @@ final class SignalQualityTesterFrame extends JFrame {
 		}
 	}
 
+	private static final class WifiChunk {
+		final byte[] iq;
+		final long centerFreqHz;
+		final int sampleRateHz;
+		final long captureMillis;
+		final boolean reset;
+		WifiChunk(byte[] iq, long centerFreqHz, int sampleRateHz, long captureMillis, boolean reset) {
+			this.iq = iq; this.centerFreqHz = centerFreqHz;
+			this.sampleRateHz = sampleRateHz; this.captureMillis = captureMillis; this.reset = reset;
+		}
+	}
+
 	private static final class Snapshot {
 		final long centerFreqHz;
 		final int sampleRateHz;
@@ -1953,6 +2218,8 @@ final class SignalQualityTesterFrame extends JFrame {
 		final LteSignalAnalyzer.Result lteResult;
 		final NrSignalAnalyzer.Result nrResult;
 		final UmtsSignalAnalyzer.Result umtsResult;
+		final WifiSignalAnalyzer.Result wifiResult;
+		final WifiDsssAnalyzer.Result wifiDsssResult;
 		final long createdMillis;
 
 		Snapshot(long centerFreqHz, int sampleRateHz, byte[] samples, int sampleCount, double dbfs, int peak,
@@ -1960,7 +2227,9 @@ final class SignalQualityTesterFrame extends JFrame {
 				DabMetrics dabMetrics, DvbtSignalAnalyzer.Result dvbtResult,
 				Dvbt2SignalAnalyzer.Result dvbt2Result, GsmSignalAnalyzer.Result gsmResult,
 				RdsSignalAnalyzer.Result rdsResult, LteSignalAnalyzer.Result lteResult,
-				NrSignalAnalyzer.Result nrResult, UmtsSignalAnalyzer.Result umtsResult, long createdMillis) {
+				NrSignalAnalyzer.Result nrResult, UmtsSignalAnalyzer.Result umtsResult,
+				WifiSignalAnalyzer.Result wifiResult, WifiDsssAnalyzer.Result wifiDsssResult,
+				long createdMillis) {
 			this.centerFreqHz = centerFreqHz;
 			this.sampleRateHz = sampleRateHz;
 			this.samples = samples;
@@ -1980,6 +2249,8 @@ final class SignalQualityTesterFrame extends JFrame {
 			this.lteResult = lteResult;
 			this.nrResult = nrResult;
 			this.umtsResult = umtsResult;
+			this.wifiResult = wifiResult;
+			this.wifiDsssResult = wifiDsssResult;
 			this.createdMillis = createdMillis;
 		}
 	}
@@ -2069,7 +2340,8 @@ final class SignalQualityTesterFrame extends JFrame {
 				g.setColor(TEXT_FG);
 				String label = active != null && (active.dabMetrics != null || active.dvbtResult != null
 						|| active.dvbt2Result != null || active.gsmResult != null || active.rdsResult != null
-						|| active.lteResult != null || active.nrResult != null || active.umtsResult != null) ? "INPUT" : "RAW";
+						|| active.lteResult != null || active.nrResult != null || active.umtsResult != null
+						|| active.wifiResult != null || active.wifiDsssResult != null) ? "INPUT" : "RAW";
 				g.drawString(active == null ? label + " --%" : String.format(Locale.US, "%s %.0f%%", label, quality), 4, 17);
 				g.setColor(GRID);
 				g.fillRect(barX, barY, barW, barH);
@@ -2117,7 +2389,10 @@ final class SignalQualityTesterFrame extends JFrame {
 												? rdsLockQuality(active.rdsResult) : active != null && active.lteResult != null
 												? lteQpskQuality(active.lteResult) : active != null && active.nrResult != null
 												? active.nrResult.quality : active != null && active.umtsResult != null
-												? active.umtsResult.quality : constellation == null ? 0 : constellation.lockScore;
+											? active.umtsResult.quality : active != null && active.wifiDsssResult != null
+													&& active.wifiDsssResult.detected
+											? active.wifiDsssResult.quality : active != null && active.wifiResult != null
+											? active.wifiResult.quality : constellation == null ? 0 : constellation.lockScore;
 				Color color = lock >= 55 ? QUALITY_GOOD : lock >= 35 ? QUALITY_WARN : QUALITY_BAD;
 				g.setColor(TEXT_FG);
 				String label = active != null && active.dvbt2Result != null ? "DEMOD"
@@ -2126,9 +2401,13 @@ final class SignalQualityTesterFrame extends JFrame {
 						: active != null && active.lteResult != null ? "QPSK"
 						: active != null && active.nrResult != null ? "SSB"
 						: active != null && active.umtsResult != null ? "CPICH" : "QUALITY";
+				if (active != null && active.wifiDsssResult != null && active.wifiDsssResult.detected)
+					label = "DSSS";
+				else if (active != null && active.wifiResult != null) label = "L-SIG";
 				g.drawString(active == null || (constellation == null && active.dvbtResult == null
 						&& active.dvbt2Result == null && active.gsmResult == null && active.rdsResult == null
-						&& active.lteResult == null && active.nrResult == null && active.umtsResult == null) ? label + " --%"
+						&& active.lteResult == null && active.nrResult == null && active.umtsResult == null
+						&& active.wifiResult == null && active.wifiDsssResult == null) ? label + " --%"
 						: String.format(Locale.US, "%s %.0f%%", label, lock), 4, 16);
 				g.setColor(GRID);
 				g.fillRect(barX, barY, barW, barH);

@@ -9,7 +9,7 @@
     <target name="compile">
         <mkdir dir="../bin"/>
     	<copy todir="../bin">
-    	    <fileset dir="../src-java" includes="**/*.csv" />
+	    <fileset dir="../src-java" includes="**/*.csv,**/*.gz" />
     	</copy>
         <javac srcdir="../src-java" destdir="../bin" source="1.8" target="1.8" includeantruntime="false">
         	<classpath>

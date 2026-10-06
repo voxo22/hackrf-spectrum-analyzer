@@ -52,7 +52,7 @@ final class UmtsCellDetailsFrame extends JFrame {
 		tabs.addTab("MIB / SIB", panel(information));
 		tabs.addTab("PAGING", panel(paging));
 		tabs.addTab("AIR LOAD", panel(load));
-		add(status, BorderLayout.NORTH);
+		add(SignalTesterClipboard.createDetailsHeader(getContentPane(), status), BorderLayout.NORTH);
 		add(tabs, BorderLayout.CENTER);
 		setSize(850, 500);
 		setMinimumSize(new Dimension(700, 390));

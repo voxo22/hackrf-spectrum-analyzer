@@ -66,7 +66,7 @@ final class NrPdcchDecoder {
 			for (int pssOffset : pssUsefulOffsets(candidate)) {
 			int frameStart = pssUseful - pssOffset;
 			for (MonitoringOccasion occasion : config.monitoring) {
-			int timingRadius = config.fast30 ? 6
+			int timingRadius = config.fast30 ? 12
 					: candidate.ssbSubcarrierSpacingKhz == 30 ? 24 : 0;
 			for (int timing = -timingRadius; timing <= timingRadius; timing++) {
 				int slotStart = frameStart + occasion.absoluteSlot * SAMPLES_PER_SLOT
@@ -80,11 +80,14 @@ final class NrPdcchDecoder {
 							slotStart + symbolOffset(occasion.firstSymbol + l), candidate.sample,
 							omega, candidate.iqOrientation);
 				int binRadius = config.fast30 ? 3
-						: candidate.ssbSubcarrierSpacingKhz == 30 ? 12 : 0;
+						: candidate.ssbSubcarrierSpacingKhz == 30
+								|| candidate.mib.pdcchConfigSib1 == 0x0A ? 3 : 0;
 				for (int binShift = -binRadius; binShift <= binRadius; binShift++) {
 				Survey measured = measureDmrs(symbols, candidate, occasion.slot, slotStart,
 						occasion.firstSymbol, config, binShift);
-				if (measured.correlation >= (config.duration == 1 ? 0.35 : 0.25)) {
+				double dciThreshold = config.duration == 1 ? 0.35
+						: candidate.mib.pdcchConfigSib1 == 0x0A ? 0.65 : 0.25;
+				if (measured.correlation >= dciThreshold) {
 					String combineKey = pssOffset + ":" + occasion.absoluteSlot + ":"
 							+ occasion.firstSymbol + ":" + timing + ":" + binShift;
 					measured = measured.withDci(decodeDci(symbols, candidate, measured, config,
@@ -102,13 +105,15 @@ final class NrPdcchDecoder {
 						if (decoded.crcOk) measured = measured.withPdsch(measured.pdsch.withTransportBlock(decoded));
 					}
 				}
+				if (measured.pdsch.transportBlock.crcOk) return measured;
 				if (better(measured, best)) best = measured;
 			}
 			}
 			}
 			}
 		}
-		if (!best.dci.valid && best.slot >= 0 && best.correlation >= 0.40) {
+		double fallbackThreshold = config.fast30 ? 0.20 : 0.40;
+		if (!best.dci.valid && best.slot >= 0 && best.correlation >= fallbackThreshold) {
 			double[][][] symbols = new double[config.duration][][];
 			for (int l = 0; l < config.duration; l++)
 				symbols[l] = NrSignalAnalyzer.surveySymbol(inI, inQ,
@@ -162,6 +167,7 @@ final class NrPdcchDecoder {
 						if (decoded.crcOk) measured = measured.withPdsch(measured.pdsch.withTransportBlock(decoded));
 					}
 				}
+				if (measured.pdsch.transportBlock.crcOk) return measured;
 				if (better(measured, best)) best = measured;
 			}
 		}
@@ -321,11 +327,21 @@ final class NrPdcchDecoder {
 		if (table == null) return null;
 		int[] row = table[coreSetIndex];
 		if (row[0] <= 0) return null;
-		return new CoreSetConfig(row[0], row[1], row[2],
-				candidate.ssbSubcarrierSpacingKhz == 30 && mib.subcarrierSpacingCommonKhz == 30
-						&& coreSetIndex == 0 && searchSpaceIndex == 4,
-				monitoringOccasions(searchSpaceIndex, mib.subcarrierSpacingCommonKhz,
-						candidate.iBarSsb, row[1]));
+		boolean fast30 = candidate.ssbSubcarrierSpacingKhz == 30
+				&& mib.subcarrierSpacingCommonKhz == 30
+				&& coreSetIndex == 0 && searchSpaceIndex == 4;
+		MonitoringOccasion[] monitoring = monitoringOccasions(searchSpaceIndex,
+				mib.subcarrierSpacingCommonKhz, candidate.iBarSsb, row[1]);
+		if (fast30 && monitoring.length == 1) {
+			/* TS 38.213 clause 13: for FR1/multiplexing pattern 1 the
+			 * associated Type0-PDCCH occasions are in slots n0 and n0+1. */
+			int slotsPerFrame = 20;
+			MonitoringOccasion first = monitoring[0];
+			monitoring = new MonitoringOccasion[] { first,
+					new MonitoringOccasion(Math.floorMod(first.slot + 1, slotsPerFrame),
+							first.absoluteSlot + 1, first.firstSymbol) };
+		}
+		return new CoreSetConfig(row[0], row[1], row[2], fast30, monitoring);
 	}
 
 	private static int[][] coreSetTable(int ssbScsKhz, int pdcchScsKhz) {
@@ -358,6 +374,12 @@ final class NrPdcchDecoder {
 		int firstHalf = slot * SAMPLES_PER_SLOT + FIRST_SYMBOL_CP + symbolOffset(symbol);
 		/* For Lmax=8 the PBCH DM-RS hypothesis identifies all three iSSB bits;
 		 * the half-frame position is not encoded in iBarSSB. Try both 5 ms halves. */
+		if (candidate.mib.pdcchConfigSib1 == 0x0A) {
+			int frame = candidate.surveySampleRateHz / 100;
+			return new int[] { firstHalf + frame,
+					firstHalf + frame + candidate.surveySampleRateHz / 200,
+					firstHalf, firstHalf + candidate.surveySampleRateHz / 200 };
+		}
 		return new int[] { firstHalf, firstHalf + candidate.surveySampleRateHz / 200 };
 	}
 

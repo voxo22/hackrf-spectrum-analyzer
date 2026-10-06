@@ -47,7 +47,8 @@ final class LteCellDetailsFrame extends JFrame {
 		tabs.addTab("RADIO",panel(radio));
 		tabs.addTab("RESELECTION",panel(reselection));
 		tabs.addTab("PAGING",panel(paging));
-		add(status,BorderLayout.NORTH);add(tabs,BorderLayout.CENTER);
+		add(SignalTesterClipboard.createDetailsHeader(getContentPane(), status),BorderLayout.NORTH);
+		add(tabs,BorderLayout.CENTER);
 		setSize(820,500);setMinimumSize(new Dimension(680,380));
 		timer=new Timer(500,e->refresh());timer.start();refresh();
 	}
