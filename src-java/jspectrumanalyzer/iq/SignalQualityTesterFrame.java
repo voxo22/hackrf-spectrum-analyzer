@@ -62,6 +62,8 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final Dvbt2CrcPanel dvbt2CrcPanel = new Dvbt2CrcPanel();
 	private final JLabel dvbt2PreLabel = new JLabel();
 	private final JLabel dvbt2PostLabel = new JLabel();
+	private final DabEnsemblePanel dabEnsemblePanel = new DabEnsemblePanel();
+	private final DabServiceTablePanel dabServiceTablePanel = new DabServiceTablePanel();
 	private final JLabel gsmParameterLabel = new JLabel();
 	private final JLabel lteParameterLabel = new JLabel();
 	private final JLabel nrParameterLabel = new JLabel();
@@ -87,6 +89,7 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final boolean wifiMode;
 	private final LongSupplier captureTimeMillisSupplier;
 	private final DvbtSignalAnalyzer dvbtAnalyzer = new DvbtSignalAnalyzer();
+	private DabFicDecoder dabFicDecoder = new DabFicDecoder();
 	private final Dvbt2SignalAnalyzer dvbt2Analyzer = new Dvbt2SignalAnalyzer();
 	private final GsmSignalAnalyzer gsmAnalyzer = new GsmSignalAnalyzer();
 	private final RdsSignalAnalyzer rdsAnalyzer = new RdsSignalAnalyzer();
@@ -107,6 +110,11 @@ final class SignalQualityTesterFrame extends JFrame {
 	private Thread wifiWorker;
 	private Thread wifiDsssWorker;
 	private volatile boolean gsmAnalysisRunning;
+	private volatile boolean dabFicAnalysisRunning;
+	private volatile DabFicDecoder.Result latestDabFicResult = DabFicDecoder.Result.empty("Collecting DAB frame IQ");
+	private long dabFicCenterHz = Long.MIN_VALUE;
+	private int dabFicSampleRateHz;
+	private long lastDabFicAnalysisNanos;
 	private volatile GsmSignalAnalyzer.Result latestGsmResult;
 	private volatile boolean rdsAnalysisRunning;
 	private volatile RdsSignalAnalyzer.Result latestRdsResult;
@@ -289,7 +297,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		spectrumPanel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
 		dabConstellationPanel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
 		dvbt2P2Panel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
-		JPanel plots = new JPanel(new GridLayout(1, 2, 6, 0));
+		JPanel plots = new JPanel(dabMode ? new BorderLayout(0, 7) : new GridLayout(1, 2, 6, 0));
 		plots.setBackground(PANEL_BG);
 		plots.setBorder(new EmptyBorder(0, 8, 0, 8));
 		if (dvbt2Mode) {
@@ -340,16 +348,24 @@ final class SignalQualityTesterFrame extends JFrame {
 			wifiColumn.add(wifiParameterLabel, BorderLayout.NORTH);
 			wifiColumn.add(wifiNetworkTablePanel, BorderLayout.CENTER);
 			plots.add(wifiColumn);
+		} else if (dabMode) {
+			JPanel upper = new JPanel(new GridLayout(1, 2, 8, 0));
+			upper.setBackground(PANEL_BG);
+			upper.setPreferredSize(new Dimension(100, 205));
+			upper.add(dabEnsemblePanel);
+			upper.add(dabConstellationPanel);
+			plots.add(upper, BorderLayout.NORTH);
+			plots.add(dabServiceTablePanel, BorderLayout.CENTER);
 		} else {
 			plots.add(scatterPanel);
-			plots.add(dabMode || dvbtMode ? dabConstellationPanel : spectrumPanel);
+			plots.add(dvbtMode ? dabConstellationPanel : spectrumPanel);
 		}
 
 		add(header, BorderLayout.NORTH);
 		add(plots, BorderLayout.CENTER);
 		add(footer, BorderLayout.SOUTH);
 		setSize(dvbt2Mode ? 1100 : 760,
-				dvbt2Mode ? 650 : wifiMode || lteMode ? 570 : nrMode || umtsMode ? 500
+				dvbt2Mode ? 650 : dabMode || wifiMode || lteMode ? 570 : nrMode || umtsMode ? 500
 						: gsmMode || rdsMode ? 445 : 420);
 
 		repaintTimer = new Timer(100, e -> updateView());
@@ -655,6 +671,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (dabMetrics != null) {
 			dabMetrics.constellation = computeDabConstellation(dabAnalysisData, dabAnalysisLength, sampleRateHz,
 					dabMetrics);
+			scheduleDabFicAnalysis(centerFreqHz, dabAnalysisData, dabAnalysisLength, sampleRateHz);
 		}
 		DvbtSignalAnalyzer.Result dvbtResult = dvbtMode
 				? dvbtAnalyzer.analyze(dabAnalysisData, dabAnalysisLength, sampleRateHz) : null;
@@ -739,6 +756,51 @@ final class SignalQualityTesterFrame extends JFrame {
 		}, "5G NR SSB cell search");
 		worker.setDaemon(true);
 		worker.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
+		worker.start();
+	}
+
+	private synchronized void scheduleDabFicAnalysis(long centerFreqHz, byte[] iqData, int length,
+			int sampleRateHz) {
+		if (centerFreqHz != dabFicCenterHz || sampleRateHz != dabFicSampleRateHz) {
+			dabFicDecoder = new DabFicDecoder();
+			latestDabFicResult = DabFicDecoder.Result.empty("Collecting DAB frame IQ");
+			dabFicCenterHz = centerFreqHz;
+			dabFicSampleRateHz = sampleRateHz;
+			lastDabFicAnalysisNanos = 0L;
+		}
+		int minimumBytes = Math.max(32_768, sampleRateHz / 50);
+		long now = System.nanoTime();
+		if (dabFicAnalysisRunning || length < minimumBytes
+				|| now - lastDabFicAnalysisNanos < 250_000_000L) return;
+		lastDabFicAnalysisNanos = now;
+		int windowBytes = Math.min(length & ~1, Math.max(minimumBytes, sampleRateHz / 4));
+		int frameStepBytes = Math.max(2, ((int)(sampleRateHz * 192L / 1000L)) & ~1); // 96 ms, stereo 8-bit IQ
+		boolean acquiringEnsemble = latestDabFicResult.ensembleLabel.length() == 0;
+		int captureCount = acquiringEnsemble ? 3 : 1;
+		while (captureCount > 1 && windowBytes + (captureCount - 1) * frameStepBytes > length)
+			captureCount--;
+		final byte[][] captures = new byte[captureCount][windowBytes];
+		for (int captureIndex = 0; captureIndex < captureCount; captureIndex++) {
+			// Process oldest to newest so the published CRC/status belongs to the latest frame.
+			int framesFromNewest = captureCount - 1 - captureIndex;
+			int sourceOffset = length - windowBytes - framesFromNewest * frameStepBytes;
+			System.arraycopy(iqData, sourceOffset, captures[captureIndex], 0, windowBytes);
+		}
+		final DabFicDecoder decoder = dabFicDecoder;
+		dabFicAnalysisRunning = true;
+		Thread worker = new Thread(() -> {
+			try {
+				DabFicDecoder.Result decoded = null;
+				for (byte[] capture : captures)
+					decoded = decoder.analyze(capture, capture.length, sampleRateHz);
+				synchronized (SignalQualityTesterFrame.this) {
+					if (decoder == dabFicDecoder && decoded != null) latestDabFicResult = decoded;
+				}
+			}
+			finally { dabFicAnalysisRunning = false; }
+		}, "DAB FIC decoder");
+		worker.setDaemon(true);
+		worker.setPriority(Thread.MIN_PRIORITY);
 		worker.start();
 	}
 
@@ -1585,6 +1647,10 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (active == null) {
 			statsLabel.setText("Waiting for IQ samples...");
 			detailLabel.setText("RAW quality waits for signal level, clipping, DC offset and stability");
+			if (dabMode) {
+				dabEnsemblePanel.update(latestDabFicResult);
+				dabServiceTablePanel.update(latestDabFicResult);
+			}
 			if (dvbt2Mode) {
 				dvbt2PreLabel.setText(parameterTable("L1-PRE SIGNALLING", "", "Waiting for DVB-T2 P1/L1-pre lock..."));
 				dvbt2PostLabel.setText(parameterTable("L1-POST / PLP", "", "Waiting for L1-post lock..."));
@@ -1605,14 +1671,18 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (dabMode && active.dabMetrics != null) {
 			DabMetrics dab = active.dabMetrics;
 			DabConstellation constellation = dab.constellation;
+			DabFicDecoder.Result fic = latestDabFicResult;
 			String sync = constellation == null ? "sync --" : constellation.state;
 			detailLabel.setText(String.format(Locale.US,
-					"%s   %s %.0f%%   contrast %.1f dB   offset %.0f kHz   null %.1fx   CP %.2f   CFO %.0f Hz",
+					"%s   %s %.0f%%   FIC %.0f%% (%d/%d CRC)   contrast %.1f dB   offset %.0f kHz   null %.1fx   CP %.2f   CFO %.0f Hz",
 					dab.state, sync, constellation == null ? 0 : constellation.lockScore,
+					fic.rollingQuality, fic.validFibs, fic.attemptedFibs,
 					dab.contrastDb, dab.offsetHz / 1000d,
 					constellation == null ? 0 : constellation.nullRatio,
 					constellation == null ? 0 : constellation.timingCorrelation,
 					constellation == null ? 0 : constellation.frequencyCorrectionHz));
+			dabEnsemblePanel.update(fic);
+			dabServiceTablePanel.update(fic);
 		} else if (dvbtMode && active.dvbtResult != null) {
 			DvbtSignalAnalyzer.Result dvbt = active.dvbtResult;
 			detailLabel.setText(String.format(Locale.US,
