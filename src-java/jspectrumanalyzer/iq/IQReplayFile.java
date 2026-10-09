@@ -16,11 +16,9 @@ public final class IQReplayFile implements AutoCloseable {
 		WAV, RAW
 	}
 
-	private static final Pattern WAV_CENTER_PATTERN = Pattern.compile(
-			"(?i)(?:^|[^0-9.])(\\d+(?:\\.\\d+)?)\\s*(MHz|kHz|Hz)(?:[^a-z]|$)");
-	private static final Pattern RAW_CENTER_PATTERN = Pattern.compile("(?i)(\\d+(?:\\.\\d+)?)(kHz|Hz)");
-	private static final Pattern RAW_CENTER_PREFIX_PATTERN = Pattern.compile("^([0-9]+(?:\\.[0-9]+)?)_");
-	private static final Pattern RAW_BANDWIDTH_PATTERN = Pattern.compile("(?i)_([0-9]+(?:\\.[0-9]+)?)(k)?\\.pcm$");
+	private static final Pattern NUMBER_PATTERN = Pattern.compile("\\d+(?:\\.\\d+)?");
+	private static final Pattern RAW_SAMPLE_RATE_PATTERN = Pattern.compile(
+			"(?i)(?:^|[ _-])(\\d+(?:\\.\\d+)?)(k)?$");
 	private static final Pattern RECORDING_TIMESTAMP_PATTERN = Pattern.compile(
 			"(\\d{4}-\\d{2}-\\d{2} \\d{2}-\\d{2}-\\d{2})(?=\\.[^.]+$)");
 	private static final DateTimeFormatter RECORDING_TIMESTAMP_FORMAT =
@@ -61,10 +59,10 @@ public final class IQReplayFile implements AutoCloseable {
 		if (name.endsWith(".wav")) {
 			return openWav(file);
 		}
-		if (name.endsWith(".pcm")) {
+		if (name.endsWith(".pcm") || name.endsWith(".cu8")) {
 			return openRaw(file);
 		}
-		throw new IOException("Unsupported IQ file extension");
+		throw new IOException("Unsupported IQ file extension; expected .wav, .pcm, or .cu8");
 	}
 
 	public static long getRecordingStartEpochMillis(File file) {
@@ -81,6 +79,7 @@ public final class IQReplayFile implements AutoCloseable {
 	}
 
 	private static IQReplayFile openWav(File file) throws IOException {
+		long centerHz = parseCenterFrequency(file.getName());
 		RandomAccessFile input = new RandomAccessFile(file, "r");
 		try {
 			if (!"RIFF".equals(readAscii(input, 4))) {
@@ -125,7 +124,6 @@ public final class IQReplayFile implements AutoCloseable {
 					|| sampleRateHz <= 0 || dataOffset < 0) {
 				throw new IOException("WAV must be stereo 8-bit or 16-bit PCM I/Q");
 			}
-			long centerHz = parseWavCenterFrequency(file.getName());
 			boolean unsigned8Bit = bitsPerSample == 8 && looksLikeUnsigned8BitPcm(input, dataOffset, dataLength);
 			return new IQReplayFile(file, input, Type.WAV, centerHz, sampleRateHz, dataOffset, dataLength,
 					bitsPerSample, unsigned8Bit);
@@ -136,16 +134,15 @@ public final class IQReplayFile implements AutoCloseable {
 	}
 
 	private static IQReplayFile openRaw(File file) throws IOException {
-		long centerHz = parseRawCenterFrequency(file.getName());
-		long bandwidthHz = parseRawBandwidth(file.getName());
-		if (bandwidthHz <= 0 || bandwidthHz > Integer.MAX_VALUE) {
-			throw new IOException("PCM filename must end with _<MHz> or _<kHz>k");
-		}
+		FilenameFrequency center = parseCenterFrequencyToken(file.getName());
+		int sampleRateHz = parseRawSampleRate(file.getName(), center);
 		RandomAccessFile input = new RandomAccessFile(file, "r");
 		try {
-			int bitsPerComponent = file.getName().toLowerCase(Locale.ROOT).contains("16b") ? 16 : 8;
-			return new IQReplayFile(file, input, Type.RAW, centerHz, (int) bandwidthHz, 0, input.length(),
-					bitsPerComponent, false);
+			int bitsPerComponent = rawBitsPerComponent(file.getName());
+			boolean unsigned8Bit = bitsPerComponent == 8
+					&& file.getName().toLowerCase(Locale.ROOT).endsWith(".cu8");
+			return new IQReplayFile(file, input, Type.RAW, center.frequencyHz, sampleRateHz, 0,
+					input.length(), bitsPerComponent, unsigned8Bit);
 		} catch (IOException | RuntimeException e) {
 			input.close();
 			throw e;
@@ -294,41 +291,79 @@ public final class IQReplayFile implements AutoCloseable {
 		input.close();
 	}
 
-	private static long parseWavCenterFrequency(String name) throws IOException {
-		Matcher matcher = WAV_CENTER_PATTERN.matcher(name);
-		if (!matcher.find()) {
-			throw new IOException("IQ filename must contain center frequency with Hz units");
-		}
-		return parseScaledValue(matcher.group(1), matcher.group(2));
+	static long parseCenterFrequency(String name) throws IOException {
+		return parseCenterFrequencyToken(name).frequencyHz;
 	}
 
-	private static long parseRawCenterFrequency(String name) throws IOException {
-		Matcher matcher = RAW_CENTER_PATTERN.matcher(name);
-		if (matcher.find()) {
-			return parseScaledValue(matcher.group(1), matcher.group(2));
+	private static FilenameFrequency parseCenterFrequencyToken(String name) throws IOException {
+		String stem = fileStem(name);
+		Matcher number = NUMBER_PATTERN.matcher(stem);
+		int start = -1;
+		while (number.find()) {
+			/* Digits attached to a text identifier (g001, device2, ch16b...)
+			 * are not standalone numeric tokens and do not participate in the
+			 * frequency ordering rule. */
+			if (number.start() == 0 || isFilenameDelimiter(stem.charAt(number.start() - 1))) {
+				start = number.start();
+				break;
+			}
 		}
-		matcher = RAW_CENTER_PREFIX_PATTERN.matcher(name);
-		if (matcher.find()) {
-			/* Historical recordings use a decimal MHz prefix (433.92_...), while
-			 * newer HackRF captures may use an integer frequency in Hz
-			 * (1827500000_...). Keep both conventions unambiguous. */
-			double prefix = Double.parseDouble(matcher.group(1));
-			return parseScaledValue(matcher.group(1), prefix >= 100_000d ? "Hz" : "MHz");
+		if (start < 0) {
+			throw new IOException("IQ filename must contain a standalone center frequency, starting "
+					+ "the name or separated from text by a space, underscore, or hyphen "
+					+ "(for example 868.3MHz)");
 		}
-		throw new IOException("PCM filename must contain Hz/kHz center frequency or start with <MHz>_");
+		int end = number.end();
+		String unit = frequencyUnitAt(stem, end);
+		int tokenEnd = end + unit.length();
+		if (tokenEnd < stem.length() && !isFilenameDelimiter(stem.charAt(tokenEnd))) {
+			throw new IOException("Center frequency may be followed only by M, k, MHz, kHz, or Hz; "
+					+ "without a unit it is interpreted as MHz");
+		}
+		return new FilenameFrequency(parseScaledValue(number.group(), unit.length() == 0 ? "MHz" : unit),
+				start, tokenEnd);
 	}
 
-	private static long parseRawBandwidth(String name) throws IOException {
-		Matcher matcher = RAW_BANDWIDTH_PATTERN.matcher(name);
+	static int parseRawSampleRate(String name) throws IOException {
+		return parseRawSampleRate(name, parseCenterFrequencyToken(name));
+	}
+
+	private static int parseRawSampleRate(String name, FilenameFrequency center) throws IOException {
+		String stem = fileStem(name);
+		Matcher matcher = RAW_SAMPLE_RATE_PATTERN.matcher(stem);
 		if (!matcher.find()) {
-			throw new IOException("PCM filename must end with _<MHz> or _<kHz>k");
+			throw new IOException("PCM/CU8 filename must end with the sample rate before the extension "
+					+ "(for example _2.4.pcm or _1000k.cu8)");
+		}
+		if (matcher.start(1) >= center.start && matcher.start(1) < center.end) {
+			throw new IOException("PCM/CU8 filename requires a separate sample rate after the center frequency");
 		}
 		double multiplier = matcher.group(2) == null ? 1_000_000d : 1_000d;
-		double bandwidthHz = Double.parseDouble(matcher.group(1)) * multiplier;
-		if (!Double.isFinite(bandwidthHz) || bandwidthHz <= 0 || bandwidthHz > Long.MAX_VALUE) {
-			throw new IOException("Invalid PCM bandwidth in filename");
+		double scaled = Double.parseDouble(matcher.group(1)) * multiplier;
+		if (!Double.isFinite(scaled) || scaled <= 0d || scaled > Integer.MAX_VALUE) {
+			throw new IOException("Invalid PCM/CU8 sample rate; use Ms/s, or append k for ks/s");
 		}
-		return Math.round(bandwidthHz);
+		return (int)Math.round(scaled);
+	}
+
+	static int rawBitsPerComponent(String name) {
+		return name.toLowerCase(Locale.ROOT).contains("16b") ? 16 : 8;
+	}
+
+	private static String fileStem(String name) {
+		int dot = name.lastIndexOf('.');
+		return dot > 0 ? name.substring(0, dot) : name;
+	}
+
+	private static boolean isFilenameDelimiter(char value) {
+		return value == ' ' || value == '_' || value == '-';
+	}
+
+	private static String frequencyUnitAt(String value, int offset) {
+		String[] units = { "MHz", "kHz", "Hz", "M", "k" };
+		for (String unit : units)
+			if (value.regionMatches(true, offset, unit, 0, unit.length())) return unit;
+		return "";
 	}
 
 	private static long parseScaledValue(String value, String unit) throws IOException {
@@ -346,6 +381,16 @@ public final class IQReplayFile implements AutoCloseable {
 			throw new IOException("Invalid frequency value in filename");
 		}
 		return Math.round(scaled);
+	}
+
+	private static final class FilenameFrequency {
+		final long frequencyHz;
+		final int start, end;
+		FilenameFrequency(long frequencyHz, int start, int end) {
+			this.frequencyHz = frequencyHz;
+			this.start = start;
+			this.end = end;
+		}
 	}
 
 	private static String readAscii(RandomAccessFile input, int length) throws IOException {

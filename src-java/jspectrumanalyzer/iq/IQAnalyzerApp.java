@@ -653,6 +653,7 @@ public class IQAnalyzerApp {
 				new SignalTestOption("DAB"),
 				new SignalTestOption("DVB-T"),
 				new SignalTestOption("DVB-T2"),
+				new SignalTestOption("ISM 868"),
 				new SignalTestOption("GSM 2G"),
 				new SignalTestOption("UMTS 3G"),
 				new SignalTestOption("LTE 4G"),
@@ -660,7 +661,7 @@ public class IQAnalyzerApp {
 				new SignalTestOption("Wi-Fi")
 		});
 		signalTestCombo.addActionListener(e -> applySignalTestPreset());
-		signalTestButton = new JButton("SIGNAL TEST");
+		signalTestButton = new JButton("ANALYZE");
 		styleButton(signalTestButton, START_BG, Color.BLACK);
 		signalTestButton.addActionListener(e -> openSignalTestWindow());
 		envelopeCheck = new JCheckBox("Envelope");
@@ -755,7 +756,7 @@ public class IQAnalyzerApp {
 		addLabeledPair(channelSection, "DC", dcOffsetEnableCheck, "Shift", dcOffsetCombo);
 		addLabeledPair(channelSection, "BW", channelBandwidthCombo, "Out", outputRateCombo);
 
-		JPanel signalSection = createSection("Signal");
+		JPanel signalSection = createSection("Signal analyzer");
 		addInline(signalSection, signalTestCombo, signalTestButton);
 
 		JPanel viewSection = createSection("View");
@@ -1202,6 +1203,11 @@ public class IQAnalyzerApp {
 			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
 			return;
 		}
+		if (option.label.startsWith("ISM 868")) {
+			if (dcOffsetEnableCheck != null) dcOffsetEnableCheck.setSelected(false);
+			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
+			return;
+		}
 		if (option.label.startsWith("LTE") || option.label.startsWith("NR") || option.label.startsWith("UMTS")) {
 			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
 			return;
@@ -1226,7 +1232,7 @@ public class IQAnalyzerApp {
 			return;
 		}
 		styleButton(signalTestButton, signalTestFrame == null ? START_BG : STOP_BG, Color.BLACK);
-		signalTestButton.setText(signalTestFrame == null ? "SIGNAL TEST" : "SHOW TEST");
+		signalTestButton.setText(signalTestFrame == null ? "ANALYZE" : "SHOW");
 	}
 
 	private void toggleAudioRecording() {

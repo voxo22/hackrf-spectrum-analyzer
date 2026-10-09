@@ -14,7 +14,7 @@ import javax.swing.JTable;
 import javax.swing.JPanel;
 import javax.swing.Timer;
 
-/** Creates consistent, stable clipboard snapshots for signal-tester windows. */
+/** Creates consistent, stable clipboard snapshots for signal-analyzer windows. */
 final class SignalTesterClipboard {
 	private static final String BUTTON_TEXT = "COPY DATA";
 
@@ -32,7 +32,7 @@ final class SignalTesterClipboard {
 		JButton button = new JButton(BUTTON_TEXT);
 		button.setToolTipText(includeAllTabs
 				? "Copy a stable TSV snapshot of all detail tabs to the clipboard"
-				: "Copy a stable TSV snapshot of this tester to the clipboard");
+				: "Copy a stable TSV snapshot of this analyzer to the clipboard");
 		button.addActionListener(e -> copy(root, includeAllTabs, button));
 		return button;
 	}

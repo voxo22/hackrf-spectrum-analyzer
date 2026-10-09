@@ -4,7 +4,7 @@ import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Random;
 
-/** Lightweight round-trip checks for the PDCCH polar profiles used by the tester. */
+/** Lightweight round-trip checks for the PDCCH polar profiles used by the analyzer. */
 final class NrPolarDecoderTest {
 	public static void main(String[] args) throws Exception {
 		check(61, 432);

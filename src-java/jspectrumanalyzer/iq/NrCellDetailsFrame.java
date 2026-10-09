@@ -35,7 +35,7 @@ final class NrCellDetailsFrame extends JFrame {
 	NrCellDetailsFrame(java.util.function.IntSupplier pciSupplier,
 			IntFunction<NrSignalAnalyzer.Result> cellSupplier, IntFunction<Double> loadSupplier,
 			LongSupplier frequencySupplier) {
-		super("NR Cell Info");
+		super("NR Signal Analyzer - Cell Info");
 		this.pciSupplier = pciSupplier;
 		this.cellSupplier = cellSupplier;
 		this.loadSupplier = loadSupplier;

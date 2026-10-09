@@ -41,8 +41,8 @@ See Wiki
 - Auto + One shot trigger feature with adjustable level (orange/green markline on the graph)
 - Auto save of all sweep parameters into .ini file / auto restore + RESET to default button
 - Switchable Datestamp and Infobox
-- Replay option of WAV/PCM I/Q files, can be used without HackRF HW, just to analyze any I/Q records
-- Direct HackRF HW Tx option of WAV/PCM IQ files while REPLAY in spectrum mode (orig/custom center freq setting, Tx power slider)
+- Replay option of WAV/PCM/CU8 I/Q files, can be used without HackRF HW, just to analyze any I/Q records
+- Direct HackRF HW Tx option of WAV/PCM/CU8 IQ files while REPLAY in spectrum mode (orig/custom center freq setting, Tx power slider)
 - hackrf_sweep and hackrf_iq integrated as a shared library
 
 You can customize "presets.csv" file by adding or deleting requested rows. Follow the structure and column meaning.

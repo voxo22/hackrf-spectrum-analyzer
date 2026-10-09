@@ -34,7 +34,7 @@ final class GsmPagingStatsFrame extends JFrame {
 	private long lastSequence = -1;
 
 	GsmPagingStatsFrame(Supplier<GsmSignalAnalyzer.Result> resultSupplier) {
-		super("GSM Paging Statistics");
+		super("GSM Signal Analyzer - Paging Statistics");
 		this.resultSupplier = resultSupplier;
 		setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 		getContentPane().setBackground(Color.BLACK);

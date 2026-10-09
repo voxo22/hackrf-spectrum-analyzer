@@ -36,7 +36,7 @@ final class UmtsCellDetailsFrame extends JFrame {
 	UmtsCellDetailsFrame(java.util.function.IntSupplier pscSupplier,
 			IntFunction<UmtsSignalAnalyzer.Candidate> cellSupplier, LongSupplier frequencySupplier,
 			IntFunction<Double> loadSupplier) {
-		super("UMTS Cell Details");
+		super("UMTS Signal Analyzer - Cell Details");
 		this.pscSupplier = pscSupplier;
 		this.cellSupplier = cellSupplier;
 		this.frequencySupplier = frequencySupplier;

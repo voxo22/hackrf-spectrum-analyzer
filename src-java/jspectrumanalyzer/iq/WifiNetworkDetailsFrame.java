@@ -29,7 +29,7 @@ final class WifiNetworkDetailsFrame extends JFrame {
 	private final Timer timer;
 
 	WifiNetworkDetailsFrame(Supplier<WifiNetworkTablePanel.NetworkDetails> networkSupplier) {
-		super("Wi-Fi AP / Client Details");
+		super("Wi-Fi Signal Analyzer - AP / Client Details");
 		this.networkSupplier = networkSupplier;
 		setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 		status.setBorder(new EmptyBorder(8, 10, 8, 10));
@@ -137,7 +137,7 @@ final class WifiNetworkDetailsFrame extends JFrame {
 				"Supported Channels or Country information advertised by this BSSID.");
 		add("Channel utilization", Double.isNaN(network.channelUtilizationPercent) ? "--"
 				: String.format(Locale.US, "%.1f %%", network.channelUtilizationPercent),
-				"QBSS load reported by the AP, not the tester's own RF energy estimate.");
+				"QBSS load reported by the AP, not the analyzer's own RF energy estimate.");
 		add("Associated stations", network.stationCount < 0 ? "--" : Integer.toString(network.stationCount),
 				"Station count from the optional QBSS Load element.");
 		add("Latest PHY / rate", network.rate, "Physical layer and rate of the latest decoded frame.");

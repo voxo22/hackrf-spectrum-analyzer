@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Minimal TS 38.331 unaligned-PER decoder for the SIB1 fields shown by the tester. */
+/** Minimal TS 38.331 unaligned-PER decoder for the SIB1 fields shown by the analyzer. */
 final class NrSib1Decoder {
 	private NrSib1Decoder() {}
 
@@ -127,7 +127,7 @@ final class NrSib1Decoder {
 		int[] windows = { 5, 10, 20, 40, 80, 160, 320, 640, 1280 };
 		int window = windows[bits.readEnum(9)];
 		// These optional request structures precede servingCellConfigCommon and are not
-		// needed by the tester. Reject them rather than guessing their variable layout.
+		// needed by the analyzer. Reject them rather than guessing their variable layout.
 		if (request || sulRequest) throw new DecodeException();
 		if (areaId) bits.skip(24);
 		return new Scheduling(entries, window);

@@ -13,7 +13,7 @@ final class WifiDsssProbe {
 
 	public static void main(String[] args) throws Exception {
 		if (args.length == 0) {
-			System.err.println("Usage: WifiDsssProbe <iq.pcm|iq.wav> [startMillis] [durationMillis]");
+			System.err.println("Usage: WifiDsssProbe <iq.pcm|iq.cu8|iq.wav> [startMillis] [durationMillis]");
 			return;
 		}
 		long startMillis = args.length > 1 ? Long.parseLong(args[1]) : 0;

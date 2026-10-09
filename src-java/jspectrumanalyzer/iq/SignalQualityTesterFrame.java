@@ -44,6 +44,14 @@ final class SignalQualityTesterFrame extends JFrame {
 	private static final long MIN_ANALYSIS_INTERVAL_NANOS = 50_000_000L;
 	private static final long DAB_MIN_ANALYSIS_INTERVAL_NANOS = 100_000_000L;
 	private static final long GSM_MIN_ANALYSIS_INTERVAL_NANOS = 500_000_000L;
+	private static final long ISM868_MIN_ANALYSIS_INTERVAL_NANOS = 250_000_000L;
+	private static final int ISM868_MAX_HISTORY_BYTES = 16_000_000;
+	private static final int ISM868_DYNAMIC_MIN_QUEUED_BYTES = 4_000_000;
+	private static final int ISM868_DYNAMIC_MAX_QUEUED_BYTES = 32_000_000;
+	/* Narrowband input already has the desired processing gain.  Wideband input
+	 * is split continuously, before detection, by the fixed-work PFB worker. */
+	private static final boolean ISM868_POLYPHASE_ENABLED=true;
+	private static final int ISM868_POLYPHASE_MIN_RATE_HZ=1_000_000;
 	private static final Color PANEL_BG = Color.BLACK;
 	private static final Color TEXT_FG = Color.WHITE;
 	private static final Color MUTED_FG = new Color(0xdddddd);
@@ -73,10 +81,13 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final NrCellTablePanel nrCellTablePanel = new NrCellTablePanel();
 	private final UmtsCellTablePanel umtsCellTablePanel = new UmtsCellTablePanel();
 	private final WifiNetworkTablePanel wifiNetworkTablePanel = new WifiNetworkTablePanel();
+	private final Ism868SignalTablePanel ism868SignalTablePanel = new Ism868SignalTablePanel();
 	private final LteConstellationPanel lteConstellationPanel = new LteConstellationPanel();
 	private final JLabel titleLabel;
 	private final JLabel statsLabel = new JLabel("Waiting for IQ samples...");
 	private final JLabel detailLabel = new JLabel("RAW quality waits for signal level, clipping, DC offset and stability");
+	private final JLabel dvbt2NetworkHintLabel = new JLabel(
+			"* Country inferred from a reused DVB Network ID range.");
 	private final Timer repaintTimer;
 	private final boolean dabMode;
 	private final boolean dvbtMode;
@@ -87,6 +98,7 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final boolean nrMode;
 	private final boolean umtsMode;
 	private final boolean wifiMode;
+	private final boolean ism868Mode;
 	private final LongSupplier captureTimeMillisSupplier;
 	private final DvbtSignalAnalyzer dvbtAnalyzer = new DvbtSignalAnalyzer();
 	private DabFicDecoder dabFicDecoder = new DabFicDecoder();
@@ -98,6 +110,22 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final UmtsSignalAnalyzer umtsAnalyzer = new UmtsSignalAnalyzer();
 	private final WifiSignalAnalyzer wifiAnalyzer = new WifiSignalAnalyzer();
 	private final WifiDsssAnalyzer wifiDsssAnalyzer = new WifiDsssAnalyzer();
+	private final Ism868SignalAnalyzer ism868Analyzer = new Ism868SignalAnalyzer();
+	private volatile Ism868SignalAnalyzer.Result latestIsm868Result;
+	private volatile boolean ism868AnalysisRunning;
+	private byte[] ism868History = new byte[0];
+	private int ism868HistoryLength;
+	private long ism868HistoryCenterHz = Long.MIN_VALUE;
+	private int ism868HistorySampleRateHz;
+	private IQSubchannelExtractor.Stream ism868CtChannelizer,ism868SChannelizer;
+	private volatile IQPolyphaseChannelizer ism868PolyphaseChannelizer;
+	private final FloatIqHistory ism868CtHistory=new FloatIqHistory();
+	private final FloatIqHistory ism868SHistory=new FloatIqHistory();
+	private final ArrayDeque<IsmDynamicChunk> ism868DynamicQueue=new ArrayDeque<IsmDynamicChunk>();
+	private int ism868DynamicQueuedBytes;
+	private volatile boolean ism868DynamicWorkerClosed;
+	private Thread ism868DynamicWorker;
+	private volatile long ism868DynamicQueueResets;
 	private volatile WifiSignalAnalyzer.Result latestWifiResult;
 	private volatile WifiDsssAnalyzer.Result latestWifiDsssResult;
 	private static final int WIFI_MAX_QUEUED_BYTES = 8_000_000;
@@ -184,7 +212,7 @@ final class SignalQualityTesterFrame extends JFrame {
 	}
 
 	SignalQualityTesterFrame(String mode, LongSupplier captureTimeMillisSupplier, Runnable closedCallback) {
-		super("Signal Quality Tester");
+		super("Signal Analyzer");
 		this.captureTimeMillisSupplier = captureTimeMillisSupplier;
 		setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 		dabMode = "DAB".equals(mode);
@@ -196,6 +224,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		nrMode = mode.startsWith("5G NR") || mode.startsWith("NR");
 		umtsMode = mode.startsWith("UMTS") || mode.startsWith("WCDMA");
 		wifiMode = mode.startsWith("Wi-Fi");
+		ism868Mode = mode.startsWith("ISM 868");
 		if (gsmMode) {
 			latestGsmResult = GsmSignalAnalyzer.Result.empty("collecting GSM channel IQ");
 			prepareParameterLabel(gsmParameterLabel);
@@ -227,6 +256,9 @@ final class SignalQualityTesterFrame extends JFrame {
 			prepareParameterLabel(wifiParameterLabel);
 			wifiParameterLabel.setFont(wifiParameterLabel.getFont().deriveFont(12f));
 		}
+		if (ism868Mode)
+			latestIsm868Result = Ism868SignalAnalyzer.Result.empty(0L, 0,
+					"Waiting for 863-870 MHz IQ samples");
 		if (dvbtMode) dvbtTpsCapture = new byte[DVBT_TPS_CAPTURE_BYTES];
 		if (dvbt2Mode) {
 			latestDvbt2Result = Dvbt2SignalAnalyzer.Result.empty("collecting DVB-T2 IQ");
@@ -236,12 +268,14 @@ final class SignalQualityTesterFrame extends JFrame {
 			prepareParameterLabel(dvbt2PostLabel);
 		}
 
-		titleLabel = new JLabel(mode + (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode
-				|| nrMode || umtsMode || wifiMode ? " signal quality" : " raw IQ monitor"));
+		titleLabel = new JLabel(mode + " signal analyzer");
 		titleLabel.setForeground(TEXT_FG);
 		titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 14f));
 		statsLabel.setForeground(MUTED_FG);
 		detailLabel.setForeground(MUTED_FG);
+		dvbt2NetworkHintLabel.setForeground(MUTED_FG);
+		dvbt2NetworkHintLabel.setFont(dvbt2NetworkHintLabel.getFont().deriveFont(9f));
+		dvbt2NetworkHintLabel.setHorizontalAlignment(SwingConstants.RIGHT);
 
 		JPanel header = new JPanel(new BorderLayout(8, 0));
 		header.setBackground(PANEL_BG);
@@ -292,12 +326,13 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (dvbt2Mode) qualityRows.add(dvbt2CrcPanel);
 		footer.add(qualityRows, BorderLayout.NORTH);
 		footer.add(detailLabel, BorderLayout.CENTER);
+		if (dvbt2Mode) footer.add(dvbt2NetworkHintLabel, BorderLayout.EAST);
 
 		scatterPanel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
 		spectrumPanel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
 		dabConstellationPanel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
 		dvbt2P2Panel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
-		JPanel plots = new JPanel(dabMode ? new BorderLayout(0, 7) : new GridLayout(1, 2, 6, 0));
+		JPanel plots = new JPanel(dabMode || ism868Mode ? new BorderLayout(0, 7) : new GridLayout(1, 2, 6, 0));
 		plots.setBackground(PANEL_BG);
 		plots.setBorder(new EmptyBorder(0, 8, 0, 8));
 		if (dvbt2Mode) {
@@ -348,6 +383,8 @@ final class SignalQualityTesterFrame extends JFrame {
 			wifiColumn.add(wifiParameterLabel, BorderLayout.NORTH);
 			wifiColumn.add(wifiNetworkTablePanel, BorderLayout.CENTER);
 			plots.add(wifiColumn);
+		} else if (ism868Mode) {
+			plots.add(ism868SignalTablePanel, BorderLayout.CENTER);
 		} else if (dabMode) {
 			JPanel upper = new JPanel(new GridLayout(1, 2, 8, 0));
 			upper.setBackground(PANEL_BG);
@@ -364,8 +401,8 @@ final class SignalQualityTesterFrame extends JFrame {
 		add(header, BorderLayout.NORTH);
 		add(plots, BorderLayout.CENTER);
 		add(footer, BorderLayout.SOUTH);
-		setSize(dvbt2Mode ? 1100 : 760,
-				dvbt2Mode ? 650 : dabMode || wifiMode || lteMode ? 570 : nrMode || umtsMode ? 500
+		setSize(dvbt2Mode || ism868Mode ? 1100 : 760,
+				dvbt2Mode ? 650 : ism868Mode ? 560 : dabMode || wifiMode || lteMode ? 570 : nrMode || umtsMode ? 500
 						: gsmMode || rdsMode ? 445 : 420);
 
 		repaintTimer = new Timer(100, e -> updateView());
@@ -375,6 +412,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			public void windowClosed(WindowEvent e) {
 				repaintTimer.stop();
 				stopWifiWorker();
+				stopIsm868DynamicWorker();
 				if (gsmPagingFrame != null) gsmPagingFrame.dispose();
 				if (gsmBcchFrame != null) gsmBcchFrame.dispose();
 				if (lteCellDetailsFrame != null) lteCellDetailsFrame.dispose();
@@ -388,6 +426,46 @@ final class SignalQualityTesterFrame extends JFrame {
 			}
 		});
 		if (wifiMode) startWifiWorker();
+		if (ism868Mode&&ISM868_POLYPHASE_ENABLED) startIsm868DynamicWorker();
+	}
+
+	private void startIsm868DynamicWorker(){
+		ism868DynamicWorker=new Thread(() -> {
+			IQPolyphaseChannelizer channelizer=null;
+			while(!ism868DynamicWorkerClosed){IsmDynamicChunk chunk;
+				synchronized(ism868DynamicQueue){while(ism868DynamicQueue.isEmpty()&&!ism868DynamicWorkerClosed)
+					try{ism868DynamicQueue.wait();}catch(InterruptedException e){
+						if(ism868DynamicWorkerClosed)return;}
+					if(ism868DynamicWorkerClosed)return;chunk=ism868DynamicQueue.removeFirst();
+					ism868DynamicQueuedBytes-=chunk.iq.length;}
+				if(chunk.reset||channelizer==null||!channelizer.matches(chunk.centerFreqHz,chunk.sampleRateHz))
+					channelizer=new IQPolyphaseChannelizer(chunk.centerFreqHz,chunk.sampleRateHz);
+				channelizer.accept(chunk.iq,chunk.iq.length);ism868PolyphaseChannelizer=channelizer;
+			}
+		},"ISM 868 polyphase channelizer");
+		ism868DynamicWorker.setDaemon(true);ism868DynamicWorker.setPriority(Thread.MIN_PRIORITY);
+		ism868DynamicWorker.start();
+	}
+
+	private void stopIsm868DynamicWorker(){
+		ism868DynamicWorkerClosed=true;synchronized(ism868DynamicQueue){ism868DynamicQueue.clear();
+			ism868DynamicQueuedBytes=0;ism868DynamicQueue.notifyAll();}
+		Thread worker=ism868DynamicWorker;if(worker!=null)worker.interrupt();
+	}
+
+	private void offerIsm868Dynamic(long centerFreqHz,int sampleRateHz,byte[] iqData,int length){
+		if(sampleRateHz<ISM868_POLYPHASE_MIN_RATE_HZ)return;
+		int queueLimit=(int)Math.min(ISM868_DYNAMIC_MAX_QUEUED_BYTES,Math.max(
+				(long)ISM868_DYNAMIC_MIN_QUEUED_BYTES,sampleRateHz*4L));
+		int copyLength=Math.min(Math.min(length,iqData.length),queueLimit)&~1;
+		if(copyLength<2)return;boolean reset=copyLength<Math.min(length,iqData.length);
+		byte[] copy=new byte[copyLength];System.arraycopy(iqData,Math.min(length,iqData.length)-copyLength,
+				copy,0,copyLength);
+		synchronized(ism868DynamicQueue){if(ism868DynamicWorkerClosed)return;
+			if(ism868DynamicQueuedBytes+copyLength>queueLimit){
+				ism868DynamicQueue.clear();ism868DynamicQueuedBytes=0;reset=true;ism868DynamicQueueResets++;}
+			ism868DynamicQueue.addLast(new IsmDynamicChunk(copy,centerFreqHz,sampleRateHz,reset));
+			ism868DynamicQueuedBytes+=copyLength;ism868DynamicQueue.notifyAll();}
 	}
 
 	private void openWifiNetworkDetails() {
@@ -495,7 +573,7 @@ final class SignalQualityTesterFrame extends JFrame {
 					wifiQueuedBytes -= chunk.iq.length;
 				}
 				/* A busy GUI may drop queued replay blocks.  Only discard the timing
-				 * overlap; keep the last decoded packet visible in the tester. */
+				 * overlap; keep the last decoded packet visible in the analyzer. */
 				if (chunk.reset) {
 					wifiAnalyzer.discardOverlap();
 				}
@@ -616,6 +694,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (dvbtMode) offerDvbtTpsCapture(sampleRateHz, iqData, evenLength);
 		if (dvbt2Mode) offerDvbt2SignallingCapture(sampleRateHz, iqData, evenLength);
 		if (nrMode) appendNrHistory(iqData, evenLength, sampleRateHz);
+		if (ism868Mode) appendIsm868History(centerFreqHz, sampleRateHz, iqData, evenLength);
 		byte[] dabAnalysisData = iqData;
 		int dabAnalysisLength = evenLength;
 		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || umtsMode) {
@@ -624,11 +703,13 @@ final class SignalQualityTesterFrame extends JFrame {
 		}
 		long now = System.nanoTime();
 		long interval = gsmMode || rdsMode || lteMode || nrMode || umtsMode ? GSM_MIN_ANALYSIS_INTERVAL_NANOS
+				: ism868Mode ? ISM868_MIN_ANALYSIS_INTERVAL_NANOS
 				: dabMode || dvbtMode || dvbt2Mode ? DAB_MIN_ANALYSIS_INTERVAL_NANOS : MIN_ANALYSIS_INTERVAL_NANOS;
 		if (now - lastAnalysisNanos < interval) {
 			return;
 		}
 		lastAnalysisNanos = now;
+		if (ism868Mode) scheduleIsm868Analysis();
 		int sampleCount = Math.min(MAX_SAMPLES, totalSamples);
 		int stride = Math.max(1, totalSamples / sampleCount);
 		byte[] samples = new byte[sampleCount * 2];
@@ -757,6 +838,94 @@ final class SignalQualityTesterFrame extends JFrame {
 		worker.setDaemon(true);
 		worker.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
 		worker.start();
+	}
+
+	private synchronized void appendIsm868History(long centerFreqHz, int sampleRateHz,
+			byte[] iqData, int length) {
+		if(centerFreqHz!=ism868HistoryCenterHz||sampleRateHz!=ism868HistorySampleRateHz){
+			ism868HistoryLength=0;ism868HistoryCenterHz=centerFreqHz;
+			ism868HistorySampleRateHz=sampleRateHz;
+			ism868CtHistory.clear();ism868SHistory.clear();
+			ism868PolyphaseChannelizer=null;
+			synchronized(ism868DynamicQueue){ism868DynamicQueue.clear();ism868DynamicQueuedBytes=0;}
+			ism868DynamicQueueResets=0L;
+			ism868CtChannelizer=channelVisible(centerFreqHz,sampleRateHz,WmbusPhyDecoder.CT_FREQUENCY_HZ)
+					?new IQSubchannelExtractor.Stream(sampleRateHz,
+							WmbusPhyDecoder.CT_FREQUENCY_HZ-centerFreqHz,
+							WmbusPhyDecoder.CT_OCCUPIED_BANDWIDTH,WmbusPhyDecoder.CHANNEL_OUTPUT_RATE):null;
+			ism868SChannelizer=channelVisible(centerFreqHz,sampleRateHz,WmbusPhyDecoder.S_FREQUENCY_HZ)
+					?new IQSubchannelExtractor.Stream(sampleRateHz,
+							WmbusPhyDecoder.S_FREQUENCY_HZ-centerFreqHz,
+							WmbusPhyDecoder.S_OCCUPIED_BANDWIDTH,WmbusPhyDecoder.CHANNEL_OUTPUT_RATE):null;
+		}
+		if(ISM868_POLYPHASE_ENABLED&&sampleRateHz>=ISM868_POLYPHASE_MIN_RATE_HZ)
+			offerIsm868Dynamic(centerFreqHz,sampleRateHz,iqData,length);
+		if(ism868CtChannelizer!=null)ism868CtHistory.append(ism868CtChannelizer.process(iqData,length));
+		if(ism868SChannelizer!=null)ism868SHistory.append(ism868SChannelizer.process(iqData,length));
+		/* Narrowband LoRa SF12 can occupy roughly two seconds.  Wideband LoRa is
+		 * retained by the PFB's per-channel history, so the large raw window is
+		 * only needed when the input itself is narrow. */
+		long requiredBytes=sampleRateHz<=1_000_000?Math.round(sampleRateHz*4.8d):
+				Math.round(sampleRateHz*.7d);
+		int capacity=(int)Math.min(ISM868_MAX_HISTORY_BYTES,
+				Math.max(2_000_000L,requiredBytes))&~1;
+		if(ism868History.length!=capacity){
+			byte[] replacement=new byte[capacity];int keep=Math.min(ism868HistoryLength,capacity)&~1;
+			if(keep>0)System.arraycopy(ism868History,ism868HistoryLength-keep,replacement,0,keep);
+			ism868History=replacement;ism868HistoryLength=keep;
+		}
+		int copy=Math.min(Math.min(length,iqData.length),capacity)&~1;
+		if(copy<=0)return;
+		if(copy==capacity){System.arraycopy(iqData,Math.min(length,iqData.length)-copy,ism868History,0,copy);
+			ism868HistoryLength=copy;return;}
+		int overflow=Math.max(0,ism868HistoryLength+copy-capacity)&~1;
+		if(overflow>0){System.arraycopy(ism868History,overflow,ism868History,0,ism868HistoryLength-overflow);
+			ism868HistoryLength-=overflow;}
+		System.arraycopy(iqData,Math.min(length,iqData.length)-copy,ism868History,ism868HistoryLength,copy);
+		ism868HistoryLength+=copy;
+	}
+
+	private synchronized void scheduleIsm868Analysis() {
+		if (ism868AnalysisRunning || ism868HistoryLength < 8192) return;
+		final long centerFreqHz=ism868HistoryCenterHz;
+		final int sampleRateHz=ism868HistorySampleRateHz;
+		final byte[] capture=new byte[ism868HistoryLength];
+		System.arraycopy(ism868History,0,capture,0,capture.length);
+		long overlapBytes=sampleRateHz<=1_000_000?Math.round(sampleRateHz*4.4d):
+				Math.round(sampleRateHz*.3d);
+		int overlap=Math.min(ism868HistoryLength,(int)Math.min(Integer.MAX_VALUE,overlapBytes))&~1;
+		if(overlap>0)System.arraycopy(ism868History,ism868HistoryLength-overlap,ism868History,0,overlap);
+		ism868HistoryLength=overlap;
+		IQPolyphaseChannelizer polyphase=ISM868_POLYPHASE_ENABLED&&
+				sampleRateHz>=ISM868_POLYPHASE_MIN_RATE_HZ?ism868PolyphaseChannelizer:null;
+		final Ism868SignalAnalyzer.ChannelizedWmbus channelized=new Ism868SignalAnalyzer.ChannelizedWmbus(
+				ism868CtHistory.snapshotAndKeep(),ism868CtHistory.sampleRateHz,
+				ism868SHistory.snapshotAndKeep(),ism868SHistory.sampleRateHz,
+				polyphase==null||!polyphase.matches(centerFreqHz,sampleRateHz)
+						?java.util.Collections.<IQDynamicChannelizer.Capture>emptyList():polyphase.snapshotAndKeep());
+		long captureMillis = System.currentTimeMillis();
+		LongSupplier supplier = captureTimeMillisSupplier;
+		if (supplier != null) {
+			long supplied = supplier.getAsLong();
+			if (supplied > 0L) captureMillis = supplied;
+		}
+		final long timestamp = captureMillis;
+		ism868AnalysisRunning = true;
+		Thread worker = new Thread(() -> {
+			try {
+				Ism868SignalAnalyzer.Result result = ism868Analyzer.analyze(centerFreqHz,
+						sampleRateHz, capture, capture.length, timestamp,channelized);
+				latestIsm868Result = result;
+				ism868SignalTablePanel.observe(result);
+			} finally { ism868AnalysisRunning = false; }
+		}, "ISM 868 wide-band activity scan");
+		worker.setDaemon(true);
+		worker.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
+		worker.start();
+	}
+
+	private static boolean channelVisible(long centerHz,int sampleRateHz,long channelHz){
+		return sampleRateHz>0&&Math.abs(channelHz-centerHz)<sampleRateHz/2d;
 	}
 
 	private synchronized void scheduleDabFicAnalysis(long centerFreqHz, byte[] iqData, int length,
@@ -1641,6 +1810,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		dabConstellationPanel.setSnapshot(active);
 		dvbt2P2Panel.setSnapshot(active);
 		if (wifiMode) wifiNetworkTablePanel.refresh();
+		if (ism868Mode) ism868SignalTablePanel.refresh(latestIsm868Result);
 		qualityPanel.setSnapshot(active);
 		dabLockPanel.setSnapshot(active);
 		refreshDvbt2CrcPanel();
@@ -1664,6 +1834,7 @@ final class SignalQualityTesterFrame extends JFrame {
 					"Waiting for UMTS IQ samples..."));
 			if (wifiMode) wifiParameterLabel.setText(parameterTable("WI-FI CHANNEL", "",
 					"Waiting for Wi-Fi IQ samples..."));
+			if (ism868Mode) detailLabel.setText("Waiting for an IQ window that overlaps 863-870 MHz");
 			return;
 		}
 		statsLabel.setText(String.format(Locale.US, "%.3f MHz   %.3f MS/s   RMS %.1f dBFS   peak %d",
@@ -1893,6 +2064,14 @@ final class SignalQualityTesterFrame extends JFrame {
 						wifi.state, wifi.ltfCorrelation * 100d, wifi.snrDb, wifi.evmPercent,
 						wifi.cfoHz, wifi.decodedPackets, wifi.detectedPreambles));
 			}
+		} else if (ism868Mode) {
+			Ism868SignalAnalyzer.Result ism = latestIsm868Result;
+			detailLabel.setText(ism == null ? "Waiting for ISM 868 analysis"
+					: String.format(Locale.US,
+							"%s   noise %.1f dBFS   %d live candidate%s%s   RSSI is relative dBFS until RF calibration",
+							ism.state, ism.noiseFloorDbfs, ism.observations.size(),
+							ism.observations.size() == 1 ? "" : "s",
+							ism868DynamicQueueResets==0L?"":"   PFB queue resets "+ism868DynamicQueueResets));
 		} else {
 			detailLabel.setText(String.format(Locale.US, "DC %.1f%%   clipping %.2f%%   stability %.2f dB",
 					active.dcPercent, active.clippingPercent, active.stabilityDb));
@@ -1950,7 +2129,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		String clock = rds.clockText.length() == 0 ? "--" : rds.clockText;
 		StringBuilder html = new StringBuilder(1200);
 		long ageMillis = lastRdsChangeMillis == 0L ? -1L : Math.max(0L, System.currentTimeMillis() - lastRdsChangeMillis);
-		html.append("<html><b>FM RDS DECODER</b><br>")
+		html.append("<html><b>FM RDS ANALYZER</b><br>")
 				.append("<table style='table-layout:fixed' border='1' bordercolor='#e8eef5' ")
 				.append("cellspacing='0' cellpadding='1' width='690'>");
 		appendRdsPairRow(html, "Station name", ps, "Programme type", pty);
@@ -2266,6 +2445,12 @@ final class SignalQualityTesterFrame extends JFrame {
 			this.iq = iq; this.centerFreqHz = centerFreqHz;
 			this.sampleRateHz = sampleRateHz; this.captureMillis = captureMillis; this.reset = reset;
 		}
+	}
+
+	private static final class IsmDynamicChunk{
+		final byte[] iq;final long centerFreqHz;final int sampleRateHz;final boolean reset;
+		IsmDynamicChunk(byte[] iq,long centerFreqHz,int sampleRateHz,boolean reset){
+			this.iq=iq;this.centerFreqHz=centerFreqHz;this.sampleRateHz=sampleRateHz;this.reset=reset;}
 	}
 
 	private static final class Snapshot {
@@ -2822,6 +3007,30 @@ final class SignalQualityTesterFrame extends JFrame {
 			} finally {
 				g.dispose();
 			}
+		}
+	}
+
+	private static final class FloatIqHistory{
+		private float[] values=new float[0];private int length;private double sampleRateHz;
+		void clear(){length=0;sampleRateHz=0d;}
+		void append(IQSubchannelExtractor.Result block){
+			if(block==null||block.iq.length==0)return;sampleRateHz=block.sampleRateHz;
+			int capacity=(int)Math.min(2_000_000L,Math.max(16_384L,Math.round(sampleRateHz*.7d)))&~1;
+			if(values.length!=capacity){float[] replacement=new float[capacity];
+				int keep=Math.min(length,capacity)&~1;
+				if(keep>0)System.arraycopy(values,length-keep,replacement,0,keep);
+				values=replacement;length=keep;}
+			int copy=Math.min(block.iq.length,capacity)&~1;if(copy<=0)return;
+			if(copy==capacity){System.arraycopy(block.iq,block.iq.length-copy,values,0,copy);length=copy;return;}
+			int overflow=Math.max(0,length+copy-capacity)&~1;
+			if(overflow>0){System.arraycopy(values,overflow,values,0,length-overflow);length-=overflow;}
+			System.arraycopy(block.iq,block.iq.length-copy,values,length,copy);length+=copy;
+		}
+		float[] snapshotAndKeep(){
+			float[] snapshot=new float[length];if(length>0)System.arraycopy(values,0,snapshot,0,length);
+			int overlap=Math.min(length,(int)Math.round(sampleRateHz*.3d))&~1;
+			if(overlap>0)System.arraycopy(values,length-overlap,values,0,overlap);length=overlap;
+			return snapshot;
 		}
 	}
 

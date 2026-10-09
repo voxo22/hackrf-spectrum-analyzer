@@ -38,7 +38,7 @@ final class LteCellDetailsFrame extends JFrame {
 			IntFunction<LteSignalAnalyzer.SiData> siSupplier,
 			java.util.function.IntToLongFunction pagingCountSupplier,
 			IntFunction<Double> loadSupplier) {
-		super("LTE Cell Details");
+		super("LTE Signal Analyzer - Cell Details");
 		this.pciSupplier=pciSupplier;this.cellSupplier=cellSupplier;this.siSupplier=siSupplier;this.pagingCountSupplier=pagingCountSupplier;this.loadSupplier=loadSupplier;
 		setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 		status.setBorder(new EmptyBorder(8,10,8,10));status.setForeground(Color.WHITE);

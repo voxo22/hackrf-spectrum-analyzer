@@ -37,7 +37,7 @@ final class GsmBcchDetailsFrame extends JFrame {
 
 	GsmBcchDetailsFrame(Supplier<GsmSignalAnalyzer.Result> resultSupplier,
 			LongSupplier frequencySupplier, DoubleSupplier levelSupplier) {
-		super("GSM BCCH / Cell Details");
+		super("GSM Signal Analyzer - BCCH / Cell Details");
 		this.resultSupplier=resultSupplier; this.frequencySupplier=frequencySupplier; this.levelSupplier=levelSupplier;
 		setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 		status.setBorder(new EmptyBorder(8, 10, 8, 10));

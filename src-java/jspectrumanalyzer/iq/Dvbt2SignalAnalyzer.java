@@ -193,9 +193,9 @@ final class Dvbt2SignalAnalyzer {
 				+"\nL1-post extension|"+yesNo(sig.l1PostExtension)
 				+"\nL1-post size|"+sig.l1PostSize+" cells"
 				+"\nL1-post information size|"+sig.l1PostInfoSize+" bits"
-				+"\n\nCell ID|"+sig.cellId
-				+"\nNetwork ID|"+sig.networkId
-				+"\nT2 system ID|"+sig.systemId
+				+"\n\nCell ID|"+identifier(sig.cellId)
+				+"\nNetwork ID|"+networkIdentifier(sig.networkId)
+				+"\nT2 system ID|"+identifier(sig.systemId)
 				+"\nT2 frames per superframe|"+sig.numT2Frames
 				+"\nData symbols per frame|"+sig.numDataSymbols
 				+"\nNumber of RF channels|"+sig.numRf
@@ -237,6 +237,9 @@ final class Dvbt2SignalAnalyzer {
 			return new Result(new float[0],q,usedMer,cpCorrelation,pilotCoherence,cfoHz,sig.fftMode,guardName(sig.guard),mod,"PP"+(sig.pilotPattern+1),live?"DVB-T2 live tracking":"DVB-T2 L1 locked",rate,details,sig.p2Points,pre,post,true,postLocked,sig.l1PostPoints,l1Mod);
 		}
 		private static String name(int value,String[] names){return value>=0&&value<names.length?names[value]:"--";}
+		private static String identifier(int value){return value<0?"--":String.format("0x%04X (%d)",value,value);}
+		private static String networkIdentifier(int value){return identifier(value)
+				+(value>=0x3001&&value<=0x3100?" *Slovakia":"");}
 		private static String raw(int value){return value<0?"":"  ["+value+"]";}
 		private static String yesNo(int value){return value==1?"Yes":value==0?"No":"--";}
 		private static int modulationIndex(String value){return "256-QAM".equals(value)?3:"64-QAM".equals(value)?2:"16-QAM".equals(value)?1:0;}

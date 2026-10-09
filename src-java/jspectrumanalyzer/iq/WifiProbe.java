@@ -11,7 +11,7 @@ final class WifiProbe {
 
 	public static void main(String[] args) throws Exception {
 		if (args.length == 0) {
-			System.err.println("Usage: WifiProbe <iq.wav|iq.pcm> [maxMillis] [startMillis]");
+			System.err.println("Usage: WifiProbe <iq.wav|iq.pcm|iq.cu8> [maxMillis] [startMillis]");
 			return;
 		}
 		File file = new File(args[0]);

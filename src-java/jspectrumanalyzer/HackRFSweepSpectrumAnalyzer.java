@@ -2995,7 +2995,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			replayDirectory = new File(".");
 		JFileChooser chooser = new JFileChooser(replayDirectory);
 		chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
-				"HackRF replay (*.hsr, *.wav, *.pcm)", "hsr", "wav", "pcm"));
+				"HackRF replay (*.hsr, *.wav, *.pcm, *.cu8)", "hsr", "wav", "pcm", "cu8"));
 		int result = chooser.showOpenDialog(uiFrame);
 		if (result != JFileChooser.APPROVE_OPTION) {
 			parameterIsPlayingSpectrum.setValue(false);
@@ -3102,9 +3102,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			return ReplayType.DATA;
 		if (name.endsWith(".wav"))
 			return ReplayType.WAV;
-		if (name.endsWith(".pcm"))
+		if (name.endsWith(".pcm") || name.endsWith(".cu8"))
 			return ReplayType.RAW;
-		throw new IOException("Unsupported replay file extension");
+		throw new IOException("Unsupported replay file extension; expected .hsr, .wav, .pcm, or .cu8");
 	}
 
 	private void playIqRecording(File file) throws IOException, InterruptedException {
@@ -4887,7 +4887,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			long channelOffsetHz = centerHz - sourceCenterHz;
 			/* Feed the original replay IQ to the analyzer.  Channelizing here and
 			 * again inside IQAnalyzerApp distorted wide signals and prevented the
-			 * Wi-Fi tester from seeing the same samples as the replay source. */
+			 * Wi-Fi analyzer from seeing the same samples as the replay source. */
 			playbackIqAnalyzerWindows.incrementAndGet();
 			stopIqReplayAudio();
 			SwingUtilities.invokeLater(() -> {

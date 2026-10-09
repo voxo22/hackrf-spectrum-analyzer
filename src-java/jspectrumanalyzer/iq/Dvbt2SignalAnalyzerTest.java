@@ -17,6 +17,7 @@ public final class Dvbt2SignalAnalyzerTest {
 		check(r.quality>45,"quality "+r.quality);
 		Dvbt2P2Decoder.Result signalling=new Dvbt2P2Decoder.Result(4,1,3,0,0,100,80,256,false);
 		signalling.l1PostValid=true;signalling.plpMod=3;signalling.plpCodeRate=3;signalling.plpRotation=1;signalling.plpFec=1;
+		signalling.cellId=0x1234;signalling.networkId=0x3001;signalling.systemId=0x4567;
 		signalling.l1PostPoints=new float[]{-7,-7,7,7};
 		analyzer.setLockedParameters(signalling);
 		for(int attempt=0;attempt<3;attempt++)r=analyzer.analyze(iq,iq.length,9_142_857);
@@ -26,6 +27,11 @@ public final class Dvbt2SignalAnalyzerTest {
 		check(live.points.length==0,"payload constellation should remain disabled");
 		check(live.l1PostPoints==signalling.l1PostPoints,"L1-post constellation snapshot missing");
 		check(live.l1PreDetails.contains("L1-post constellation|64-QAM  [3]"),"wrong L1-post constellation name");
+		check(live.l1PreDetails.contains("Cell ID|0x1234 (4660)"),"cell ID should be hex and decimal");
+		check(live.l1PreDetails.contains("Network ID|0x3001 (12289) *Slovakia"),"Slovak network ID hint missing");
+		check(!live.l1PreDetails.contains("Network ID scope|"),"network ID scope should not consume another row");
+		check(!live.l1PreDetails.contains("Country / provider|"),"country note should not consume another row");
+		check(live.l1PreDetails.contains("T2 system ID|0x4567 (17767)"),"T2 system ID should be hex and decimal");
 		check(live.l1PostDetails.contains("Constellation|256-QAM  [3]"),"wrong PLP constellation name");
 		check(live.l1PostDetails.contains("Rotated constellation|Yes"),"rotation flag missing");
 		System.out.println("DVB-T2 analyzer tests passed");

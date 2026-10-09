@@ -36,7 +36,7 @@ final class UmtsPagingStatsFrame extends JFrame {
 	private int lastPsc = -1;
 
 	UmtsPagingStatsFrame(Supplier<UmtsSignalAnalyzer.Candidate> cellSupplier) {
-		super("UMTS Paging Statistics");
+		super("UMTS Signal Analyzer - Paging Statistics");
 		this.cellSupplier = cellSupplier;
 		setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
 		getContentPane().setBackground(Color.BLACK);
