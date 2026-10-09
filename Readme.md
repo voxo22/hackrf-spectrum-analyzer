@@ -8,45 +8,52 @@
 [Download the latest version](https://github.com/voxo22/hackrf-spectrum-analyzer/releases) 
 
 ### User manual:
-See Wiki
+See [Wiki](https://github.com/voxo22/hackrf-spectrum-analyzer/wiki)
 
 ### Features:
-- Make your HackRF a nearly-profi spectrum / time-domain analyzer
+- Make your HackRF a semi-profi spectrum / time-domain analyzer
 - LIVE spectrum RBW from 2.4 kHz to 2 MHz, I/Q replay RBW down to 50 Hz
-- Adjustable Realtime / Peak / Average / Max Hold / Min Hold / Persistent chart
+- Real-time, peak, average, max-hold, min-hold and persistence traces
 - Up to 5 simultaneous Peak and Max Hold markers
-- Customizable Frequency band presets with detail setting, add new preset option directly from settings panel
-- Customizable multicolored Frequency allocation bands -> you can make your own!
+- Customizable frequency-band presets with frequency range, RBW, frequency shift and amplitude offset; new presets can be added directly from the settings panel
+- Custom multicolor frequency-allocation overlays loaded from editable tables -> make your own!
 - Adjustable high resolution Waterfall Plot
 - Multi-range sweep support, automatic compression of X-axis (stitching ranges together)
-- Widely adjustable live screen recording into GIF or MP4 video (MP4 incl. audio)
-- Stats recording feature into CSV file with MaxFreq, TotalPower, PeakPower + adjustable timing (minutes, seconds, fractions)
-- Data record and replay feature of live Spectrum data (bins) into binary HSR file, featuring real datestamp and replay pause
-- Realtime/peaks trigger level feature with audio alert and CSV logging
-- Data replay progress bar with click to seek function, quick search, infinite loop, autoFIND trigger events
-- Power Calibration adjustment for RF Power Flux Density sum reading in µW/m²
-- Spur filter (no DC) for removing spur artifacts
-- Arrow left/right button, X-axis mouse drag for comfortable frequency range setting
-- Spectrum zooming by mouse dragging, mouse wheel for quick zooming/unzooming
-- Adjustable amplitude and average chart offset
+- Configurable screen recording to GIF or MP4, with optional MP4 audio
+- CSV statistics logging at configurable intervals  (minutes, seconds, fractions), including peak frequency, total power and peak power
+- Recording and replay of live spectrum-bin data in the binary HSR format, preserving original timestamps and supporting pause
+- Level triggers for real-time and peak traces, with audio alerts and CSV event logging
+- Data replay progress bar with click to seek function, quick search, infinite loop, automatic trigger-event search
+- Calibrated power-flux-density readout in µW/m²
+- DC-spur suppression for live and replayed spectra
+- Left/right navigation buttons and x-axis dragging for convenient frequency-range selection
+- Spectrum zooming by mouse dragging, mouse wheel for quick zooming in and out
+- Adjustable amplitude and offset of Average trace
 - Selectable Frequency Shift for up/down-converters
 - Time-Domain Analyzer window accessed directly from Spectrum Analyzer, using right mouse click and drag in spectrum (red highlight)
 - Draggable channel spectrum sub-window
-- Narrowband (channel) view (up to 1 Ms/s) with decimation feature + raw wideband view (up to 20 Ms/s)
-- I+Q, |IQ| or envelope only views, FSK deviation chart, burst detector with additional info
-- Auto-level I/Q analyze feature
-- Switchable AM/OOK-NFM/WFM audio demodulation of selected range, also in spectrum I/Q replay mode
-- Audio recording feature into 48 kHz/16bit WAV file
-- I/Q recording feature into 8-bit WAV file (with header)
-- Auto + One shot trigger feature with adjustable level (orange/green markline on the graph)
-- Auto save of all sweep parameters into .ini file / auto restore + RESET to default button
-- Switchable Datestamp and Infobox
-- Replay option of WAV/PCM/CU8 I/Q files, can be used without HackRF HW, just to analyze any I/Q records
-- Direct HackRF HW Tx option of WAV/PCM/CU8 IQ files while REPLAY in spectrum mode (orig/custom center freq setting, Tx power slider)
-- hackrf_sweep and hackrf_iq integrated as a shared library
+- Narrowband (channel) view (up to 1 MS/s) with decimation feature + raw wideband view (up to 20 MS/s)
+- Raw I/Q waveforms or envelope-only (|IQ|) view, plus FSK/FM deviation and burst detection
+- Automatic I/Q level scaling with clipping indication
+- Built-in Signal Analyzer for live HackRF input and recorded I/Q replay: Generic QAM, FM RDS, DAB, DVB-T/T2, ISM 868, GSM 2G, UMTS 3G, LTE 4G, 5G NR and Wi-Fi
+- Signal-quality views with spectrum and constellation plots, lock/quality indicators, SNR, EVM/MER where applicable, carrier-frequency offset and protocol-specific parameters
+- Broadcast signal decoding: FM RDS data, DAB ensemble and service information, DVB-T TPS and DVB-T2 P1/L1 signalling
+- Cellular downlink analysis with cell discovery, operator/PLMN lookup and decoded system information for GSM, UMTS, LTE and 5G NR, plus load and paging statistics where supported
+- Wi-Fi OFDM and DSSS analysis with decoded frame details, SSID/channel discovery, AP/client tables and manufacturer lookup
+- Multi-channel ISM 868 analysis with protocol detection and decoding for Wireless M-Bus, LoRa/LoRaWAN, Fine Offset weather stations and Renault TPMS, plus automotive key-fob candidate classification
+- Copyable signal-analyzer snapshots and built-in context-sensitive help for controls and decoded parameters
+- Switchable AM/OOK and FM (NFM/WFM) audio demodulation of selected range, also in spectrum I/Q replay mode
+- Recording of demodulated audio to 48 kHz, 16-bit WAV files
+- Recording of unsigned 8-bit stereo I/Q data to WAV files
+- Automatic and one-shot trigger modes with an adjustable, color-coded threshold marker
+- Automatic saving and restoring of sweep parameters in an INI file, with one-click reset to defaults
+- Switchable timestamp and information overlays
+- Replay of WAV, PCM and CU8 I/Q recordings without HackRF hardware
+- Direct transmission of replayed WAV, PCM and CU8 I/Q files through HackRF, with original or custom center frequency and adjustable TX gain
+- Native hackrf_sweep and hackrf_iq back ends integrated as shared libraries
 
-You can customize "presets.csv" file by adding or deleting requested rows. Follow the structure and column meaning.
-Additionaly, in "freq" folder you can edit frequency allocation tables or make your own. "Slash" character (/) in text columns hyphenates rows.
+You can customize "presets.csv" file by adding or removing entries. Follow the structure and column meaning.
+Additionally, in "freq" folder you can edit frequency allocation tables or make your own. A slash (/) in a text column inserts a line break.
 
 ### Requirements:
 * HackRF One with [Firmware 2023.01.1](https://github.com/mossmann/hackrf/releases/tag/v2023.01.1) or newer 
@@ -54,14 +61,14 @@ Additionaly, in "freq" folder you can edit frequency allocation tables or make y
 ### Installation:
 Make sure HackRF is using at least the minimum firmware version (see above) 
 
-1. Minimum Windows 7 x64 or Vista x64 with extended kernel
-2. Minimum Java JRE 64bit v1.8 ([Java JRE for Windows x64](http://www.oracle.com/technetwork/java/javase/downloads/jre8-downloads-2133155.html)) 
+1. Supported OS: Windows 7 x64 or newer
+2. Minimum 64-bit Java 8 JRE
 3. [Download the latest version of Spectrum Analyzer](https://github.com/voxo22/hackrf-spectrum-analyzer/releases) and unzip
 4. Connect and install HackRF as a libusb device
-    - [Download Zadig](https://zadig.akeo.ie/) (or use packed one) and install
-    - Goto Options and check List All Devices
+    - [Download Zadig](https://zadig.akeo.ie/) and install
+    - Go to Options and check List All Devices
     - Find "HackRF One" and select Driver "WinUSB" and click install
-5. Run "v2.21.jar"
+5. Run "hackrf-spectrum-analyzer.jar"
 
 ### License:
 GPL v3
