@@ -1,15 +1,15 @@
 # HackRF Spectrum Analyzer for Windows
 
 ### Screenshots:
-![spectrum demo](https://voxo.eu/github/FULLSCR_758-788+791-821+925-960+1805-1880+2110-2170+2630-2690_MHz.gif)
-![IQ replay_demo](https://voxo.eu/github/FULLSCR_223-231_MHz.gif)
-![FULL_920-960MHz_demo](https://github.com/user-attachments/assets/63bb1506-ebf1-4002-b53a-cc934590743b)
-![FULL_2400-2483MHz_demo3](https://github.com/user-attachments/assets/699d551f-88f3-4ad6-a107-120bf3b513e4)
+![spectrum_demo](https://github.com/voxo22/hackrf-spectrum-analyzer/blob/master/docs/images/FULLSCR_758-788+791-821+925-960+1805-1880+2110-2170+2630-2690_MHz.gif)
+![IQ_replay_demo](https://github.com/voxo22/hackrf-spectrum-analyzer/blob/master/docs/images/FULLSCR_223-231_MHz.gif)
+![Time-domain_analyzer](https://github.com/voxo22/hackrf-spectrum-analyzer/blob/master/docs/images/951800000Hz_BW-400k.gif)
+![DVB-T2_analyzer](https://github.com/voxo22/hackrf-spectrum-analyzer/blob/master/docs/images/DVB-T2_analyzer.jpg)
 
 ### Download:
 [Download the latest version](https://github.com/voxo22/hackrf-spectrum-analyzer/releases) 
 
-### User manual:
+### Detailed user manual with images:
 See [Wiki](https://github.com/voxo22/hackrf-spectrum-analyzer/wiki)
 
 ### Features:
@@ -26,7 +26,7 @@ See [Wiki](https://github.com/voxo22/hackrf-spectrum-analyzer/wiki)
 - Recording and replay of live spectrum-bin data in the binary HSR format, preserving original timestamps and supporting pause
 - Level triggers for real-time and peak traces, with audio alerts and CSV event logging
 - Data replay progress bar with click to seek function, quick search, infinite loop, automatic trigger-event search
-- Calibrated power-flux-density readout in µW/m²
+- Calibrated power-flux-density readout in µW/m2
 - DC-spur suppression for live and replayed spectra
 - Left/right navigation buttons and x-axis dragging for convenient frequency-range selection
 - Spectrum zooming by mouse dragging, mouse wheel for quick zooming in and out
