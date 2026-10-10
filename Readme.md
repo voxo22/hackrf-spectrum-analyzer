@@ -1,6 +1,8 @@
 # HackRF Spectrum Analyzer for Windows
 
 ### Screenshots:
+![spectrum demo](https://voxo.eu/github/FULLSCR_758-788+791-821+925-960+1805-1880+2110-2170+2630-2690_MHz.gif)
+![IQ replay_demo](https://voxo.eu/github/FULLSCR_223-231_MHz.gif)
 ![FULL_920-960MHz_demo](https://github.com/user-attachments/assets/63bb1506-ebf1-4002-b53a-cc934590743b)
 ![FULL_2400-2483MHz_demo3](https://github.com/user-attachments/assets/699d551f-88f3-4ad6-a107-120bf3b513e4)
 
