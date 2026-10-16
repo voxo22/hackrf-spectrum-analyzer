@@ -13,6 +13,7 @@ final class NrLdpcDecoderTest {
 		checkProfile(176, 32, 1536, 0, "BG2_32", false);
 		checkProfile(640, 72, 5280, 0, "BG2_72", false);
 		checkProfile(768, 80, 6480, 0, "BG2_80", false);
+		checkProfile(808, 88, 6720, 0, "BG2_88", false);
 		checkProfile(928, 96, 3024, 3, "BG2_96", false);
 		checkProfile(1032, 112, 1536, 0, "BG2_112", false);
 		checkProfile(1032, 112, 8640, 0, "BG2_112", true);

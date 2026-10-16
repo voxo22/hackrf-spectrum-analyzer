@@ -22,9 +22,15 @@ final class Ism868ProtocolDispatcher {
 	private final Map<String,History> history=new HashMap<String,History>();
 
 	synchronized List<Dispatch> dispatch(List<IQDynamicChannelizer.Capture> captures,long captureMillis){
+		return dispatch(captures,captureMillis,false);
+	}
+
+	synchronized List<Dispatch> dispatch(List<IQDynamicChannelizer.Capture> captures,long captureMillis,
+			boolean exhaustive){
 		if(captures==null||captures.isEmpty())return Collections.emptyList();
 		long now=captureMillis>0L?captureMillis:System.currentTimeMillis();
 		Map<String,Dispatch> strongest=new LinkedHashMap<String,Dispatch>();
+		List<Dispatch> completed=new ArrayList<Dispatch>();
 		for(IQDynamicChannelizer.Capture capture:captures){
 			Profile profile=profile(capture);String key=key(capture.frequencyHz,profile.modulation);
 			History old=history.get(key);long period=0L;long seen=1L;
@@ -33,15 +39,30 @@ final class Ism868ProtocolDispatcher {
 			old.lastMillis=now;old.seen=seen;
 			if(period>0L)old.periodMillis=old.periodMillis<=0d?period:old.periodMillis*.75d+period*.25d;
 			Dispatch next=route(capture,profile,seen,old.periodMillis);
+			/* Every frozen falling-edge capture is a distinct burst.  Deduplicating it
+			 * by frequency can replace a weak LSE frame with a later, stronger signal
+			 * before the CRC-backed decoder gets to see it. */
+			if(capture.complete){completed.add(next);continue;}
 			Dispatch previous=strongest.get(key);
 			if(previous==null||next.priority>previous.priority)strongest.put(key,next);
 		}
 		for(java.util.Iterator<Map.Entry<String,History>> it=history.entrySet().iterator();it.hasNext();)
 			if(now-it.next().getValue().lastMillis>STATE_LIFETIME_MS)it.remove();
-		List<Dispatch> result=new ArrayList<Dispatch>(strongest.values());
+		List<Dispatch> result=new ArrayList<Dispatch>(completed);
+		result.addAll(strongest.values());
 		Collections.sort(result,new Comparator<Dispatch>(){
 			@Override public int compare(Dispatch left,Dispatch right){return Double.compare(right.priority,left.priority);}});
-		for(int n=0;n<result.size();n++)result.get(n).decoderEligible=n<MAX_DECODER_JOBS_PER_WINDOW;
+		int extraClockDriftJobs=0;
+		for(int n=0;n<result.size();n++){
+			Dispatch dispatch=result.get(n);
+			boolean completedClockDrift="W-MBus S clock-drift".equals(dispatch.decoder)
+					&&dispatch.capture.complete;
+			/* A valid but weak S-mode burst must not lose its only decode attempt just
+			 * because six simultaneous C/T bursts have higher SNR.  Permit at most one
+			 * extra completed fallback job, so the GUI budget remains bounded. */
+			dispatch.decoderEligible=exhaustive||n<MAX_DECODER_JOBS_PER_WINDOW
+					||(completedClockDrift&&extraClockDriftJobs++==0);
+		}
 		return result;
 	}
 
@@ -51,7 +72,21 @@ final class Ism868ProtocolDispatcher {
 		long ctDistance=Math.abs(capture.frequencyHz-WmbusPhyDecoder.CT_FREQUENCY_HZ);
 		long sDistance=Math.abs(capture.frequencyHz-WmbusPhyDecoder.S_FREQUENCY_HZ);
 		String protocol,decoder;
-		if("CSS".equals(profile.modulation)){protocol="LoRa candidate";decoder="LoRa";}
+		/* An S-mode Manchester stream at a PFB/Nyquist edge can resemble alternating
+		 * chirps at half its 32.768 kchip/s clock.  Route that narrow signature to
+		 * the CRC-backed W-MBus decoder before accepting the heuristic CSS label. */
+		if("CSS".equals(profile.modulation)&&sDistance<=400_000L
+				&&profile.symbolRate>=12_000d&&profile.symbolRate<=20_000d){
+			protocol="W-MBus S candidate";decoder="W-MBus S clock-drift";
+		}else if("CSS".equals(profile.modulation)){protocol="LoRa candidate";decoder="LoRa";}
+		/* A faded/partially clipped LSE burst sometimes has too few clean frequency
+		 * samples for the CSS-edge signature.  Its short, wide PFB image close to
+		 * 868.3 MHz is still distinctive enough for one CRC-backed fallback try. */
+		else if("unknown".equals(profile.modulation)&&sDistance<=100_000L
+				&&profile.burstMillis>=20d&&profile.burstMillis<=120d
+				&&profile.occupiedBandwidthHz>=200_000){
+			protocol="W-MBus S candidate";decoder="W-MBus S clock-drift";
+		}
 		else if("FSK".equals(profile.modulation)&&ctDistance<=150_000L){
 			protocol="W-MBus C/T candidate";decoder="W-MBus C/T";
 		}else if("FSK".equals(profile.modulation)&&sDistance<=100_000L){
@@ -116,9 +151,6 @@ final class Ism868ProtocolDispatcher {
 			int bandwidth=snapLoraBandwidth(spread);
 			return new Profile("CSS",chirp.rate,bandwidth,burstMillis,92d);
 		}
-		if(ook){double rate=symbolRate(amplitude,activeThreshold,capture.sampleRateHz);
-			return new Profile("OOK",rate,ookBandwidth(rate,capture.bandwidthHz),burstMillis,82d);}
-
 		double threshold=(f25+f75)/2d,lowSum=0d,highSum=0d;int lowCount=0,highCount=0;
 		for(int n=0;n<frequencyCount;n++)if(frequency[n]<threshold){lowSum+=frequency[n];lowCount++;}
 			else{highSum+=frequency[n];highCount++;}
@@ -133,6 +165,11 @@ final class Ism868ProtocolDispatcher {
 			int bandwidth=(int)Math.round(Math.max(5_000d,separation+Math.max(0d,rate)*2d));
 			return new Profile("FSK",rate,Math.min(1_500_000,bandwidth),burstMillis,
 					Math.min(90d,60d+separation/Math.max(1d,within)*4d));}
+		/* Deep fading can make a constant-envelope FSK burst look amplitude keyed.
+		 * Prefer two statistically separated frequency states; a real OOK carrier
+		 * has only one gated frequency cluster and therefore cannot pass this test. */
+		if(ook){double rate=symbolRate(amplitude,activeThreshold,capture.sampleRateHz);
+			return new Profile("OOK",rate,ookBandwidth(rate,capture.bandwidthHz),burstMillis,82d);}
 		return new Profile(spread<2_500d?"CW":"unknown",0d,
 				(int)Math.round(Math.max(2_000d,Math.min(capture.bandwidthHz,spread))),burstMillis,25d);
 	}

@@ -59,10 +59,10 @@ public final class IQReplayFile implements AutoCloseable {
 		if (name.endsWith(".wav")) {
 			return openWav(file);
 		}
-		if (name.endsWith(".pcm") || name.endsWith(".cu8")) {
+		if (name.endsWith(".pcm") || name.endsWith(".cu8") || name.endsWith(".cs8")) {
 			return openRaw(file);
 		}
-		throw new IOException("Unsupported IQ file extension; expected .wav, .pcm, or .cu8");
+		throw new IOException("Unsupported IQ file extension; expected .wav, .pcm, .cu8, or .cs8");
 	}
 
 	public static long getRecordingStartEpochMillis(File file) {
@@ -282,6 +282,10 @@ public final class IQReplayFile implements AutoCloseable {
 		return Math.max(1, Math.round(dataLength * 1000d / (sampleRateHz * bytesPerComponent * 2d)));
 	}
 
+	public long getTotalIqSamples() {
+		return dataLength / (bytesPerComponent * 2L);
+	}
+
 	public synchronized long getPositionMillis() {
 		return Math.round(dataPosition * 1000d / (sampleRateHz * bytesPerComponent * 2d));
 	}
@@ -332,16 +336,16 @@ public final class IQReplayFile implements AutoCloseable {
 		String stem = fileStem(name);
 		Matcher matcher = RAW_SAMPLE_RATE_PATTERN.matcher(stem);
 		if (!matcher.find()) {
-			throw new IOException("PCM/CU8 filename must end with the sample rate before the extension "
-					+ "(for example _2.4.pcm or _1000k.cu8)");
+			throw new IOException("PCM/CU8/CS8 filename must end with the sample rate before the extension "
+					+ "(for example _2.4.pcm, _1000k.cu8, or _500k.cs8)");
 		}
 		if (matcher.start(1) >= center.start && matcher.start(1) < center.end) {
-			throw new IOException("PCM/CU8 filename requires a separate sample rate after the center frequency");
+			throw new IOException("PCM/CU8/CS8 filename requires a separate sample rate after the center frequency");
 		}
 		double multiplier = matcher.group(2) == null ? 1_000_000d : 1_000d;
 		double scaled = Double.parseDouble(matcher.group(1)) * multiplier;
 		if (!Double.isFinite(scaled) || scaled <= 0d || scaled > Integer.MAX_VALUE) {
-			throw new IOException("Invalid PCM/CU8 sample rate; use Ms/s, or append k for ks/s");
+			throw new IOException("Invalid PCM/CU8/CS8 sample rate; use Ms/s, or append k for ks/s");
 		}
 		return (int)Math.round(scaled);
 	}

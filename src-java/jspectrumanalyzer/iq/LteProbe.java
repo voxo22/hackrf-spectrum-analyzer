@@ -6,13 +6,14 @@ import java.util.Locale;
 final class LteProbe {
 	public static void main(String[] args) throws Exception {
 		if (args.length == 0) {
-			System.err.println("Usage: LteProbe <iq.wav> [maxMillis] [stepMillis] [windowMillis]");
+			System.err.println("Usage: LteProbe <iq.wav> [maxMillis] [stepMillis] [windowMillis] [carrierOffsetHz]");
 			return;
 		}
 		File file = new File(args[0]);
 		int maxMillis = args.length > 1 ? Integer.parseInt(args[1]) : 20_000;
 		int stepMillis = args.length > 2 ? Integer.parseInt(args[2]) : 1_000;
 		int windowMillis = args.length > 3 ? Integer.parseInt(args[3]) : 50;
+		double carrierOffsetHz = args.length > 4 ? Double.parseDouble(args[4]) : 0d;
 		try (IQReplayFile replay = IQReplayFile.open(file)) {
 			int rate = replay.getSampleRateHz();
 			int windowSamples = (int) Math.min(Integer.MAX_VALUE / 2,
@@ -22,6 +23,9 @@ final class LteProbe {
 			for (int position = 0; position < Math.min(maxMillis, replay.getDurationMillis()); position += stepMillis) {
 				replay.seekMillis(position);
 				replay.readLoopedSigned(iq);
+				if (carrierOffsetHz != 0d) {
+					frequencyShift(iq, rate, carrierOffsetHz);
+				}
 				LteSignalAnalyzer.Result result = analyzer.analyze(iq, iq.length, rate);
 				boolean printed = false;
 				for (LteSignalAnalyzer.Candidate c : result.candidates) {
@@ -49,9 +53,36 @@ final class LteProbe {
 							LteSignalAnalyzer.sib1DciDiagnostics(), LteSignalAnalyzer.pbchDiagnostics()));
 				}
 				if (!printed) {
-					System.out.println(String.format(Locale.US, "%5d ms no PCI/MIB candidate state %s", position,
-							result.state));
+					LteSignalAnalyzer.Candidate raw = result.candidates.isEmpty()
+							? null : result.candidates.get(0);
+					System.out.println(raw == null
+							? String.format(Locale.US, "%5d ms no PCI/MIB candidate state %s", position,
+									result.state)
+							: String.format(Locale.US,
+									"%5d ms no PCI/MIB state %s raw NID2 %d PSS %.1f%% SSS %.1f%% CFO %+.0f Hz half-frame %.2f samples ppm %+.1f %s",
+									position, result.state, raw.nid2, raw.correlation * 100d,
+									raw.sssCorrelation * 100d, raw.cfoHz, raw.halfFrameSamples,
+									raw.samplingPpm, raw.iqOrientation > 0 ? "normal" : "conjugated"));
 				}
+			}
+		}
+	}
+
+	private static void frequencyShift(byte[] iq, int sampleRateHz, double carrierOffsetHz) {
+		double phase = 0d;
+		double phaseStep = -2d * Math.PI * carrierOffsetHz / sampleRateHz;
+		for (int n = 0; n + 1 < iq.length; n += 2) {
+			double i = iq[n];
+			double q = iq[n + 1];
+			double cos = Math.cos(phase);
+			double sin = Math.sin(phase);
+			iq[n] = (byte) Math.max(-128, Math.min(127, Math.round(i * cos - q * sin)));
+			iq[n + 1] = (byte) Math.max(-128, Math.min(127, Math.round(i * sin + q * cos)));
+			phase += phaseStep;
+			if (phase > Math.PI) {
+				phase -= 2d * Math.PI;
+			} else if (phase < -Math.PI) {
+				phase += 2d * Math.PI;
 			}
 		}
 	}

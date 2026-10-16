@@ -60,6 +60,8 @@ final class NrProbe {
 										c.mib.systemFrameNumber, c.mib.subcarrierSpacingCommonKhz,
 										c.mib.ssbSubcarrierOffset, c.mib.dmrsTypeAPosition,
 										c.mib.pdcchConfigSib1, c.mib.cellBarred) : "--"));
+						if (c.mib.valid && !c.mib.hasType0PdcchCss())
+							System.out.println("          MIB: no associated Type0 PDCCH CSS / SIB1 on this SSB");
 					}
 					if (c.pdcch.slot >= 0) {
 						System.out.println(String.format(Locale.US,
@@ -233,6 +235,7 @@ final class NrProbe {
 	}
 
 	private static int[] coreset0Geometry(NrSignalAnalyzer.MibData mib, int ssbOffsetHz) {
+		if (!mib.hasType0PdcchCss()) return null;
 		int coreSetIndex = (mib.pdcchConfigSib1 >>> 4) & 15;
 		int[][] table = mib.subcarrierSpacingCommonKhz == 30 ? CORESET_30_30 : CORESET_15_15;
 		if (coreSetIndex < 0 || coreSetIndex >= table.length || table[coreSetIndex][0] <= 0)

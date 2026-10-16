@@ -4,6 +4,11 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
+import java.awt.GridLayout;
+import java.awt.Toolkit;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.io.File;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -21,12 +26,16 @@ import javax.swing.JTable;
 import javax.swing.RowSorter;
 import javax.swing.SortOrder;
 import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 
 /** Session-scoped AP and probing-client list built from CRC-valid Wi-Fi frames. */
 final class WifiNetworkTablePanel extends JPanel {
 	private static final Color CLIENT_ROW = new Color(0x291f38);
+	private static final Color HEADER_BG=new Color(0x202020),HEADER_FG=Color.WHITE,HEADER_BORDER=new Color(0x555555),TRACKED_BACKGROUND=new Color(0xeeeeee);
+	private static final Color[] SORT_HEADER_BACKGROUNDS={new Color(0x17627d),new Color(0x4b557c),new Color(0x685076)};
+	private static final long TRACKING_CHIME_COOLDOWN_MILLIS=750L;
 	private static final String[] COLUMNS = {
 			"SSID / requested SSID", "BSSID / client MAC", "RSSI", "Role", "PHY", "Standards",
 			"Max advertised PHY", "Channel", "Current width", "Width capability", "Security", "WPS",
@@ -38,6 +47,9 @@ final class WifiNetworkTablePanel extends JPanel {
 	private final Map<String, Network> clients = new LinkedHashMap<String, Network>();
 	private final Map<String, Long> channelFrameTypes = new LinkedHashMap<String, Long>();
 	private final List<String> rowKeys = new ArrayList<String>();
+	private boolean headerPopupHandled,rowPopupHandled;
+	private volatile String trackedKey="--";
+	private long lastChimeMillis;
 	private long channelManagementFrames, channelControlFrames, channelDataFrames;
 	private String latestChannelFrame = "--";
 	private final DefaultTableModel model = new DefaultTableModel(COLUMNS, 0) {
@@ -52,33 +64,61 @@ final class WifiNetworkTablePanel extends JPanel {
 		}
 	};
 	private final JTable table = new JTable(model);
+	private final JLabel sortHint=new JLabel("Sort: click a column to add/prioritize; right-click a sorted column to remove it; right-click an unsorted column to clear sorting.");
+	private final JLabel trackingHelp=new JLabel("Tracking: right-click a network row to enable its chime; right-click it again to disable tracking.");
 	private final JLabel status = new JLabel("Waiting for Wi-Fi beacons and probe requests...");
+	private final PersistentTableLayout tableLayout;
 
-	WifiNetworkTablePanel() {
+	WifiNetworkTablePanel() { this(PersistentTableLayout.DEFAULT_SETTINGS_FILE); }
+	WifiNetworkTablePanel(File tableSettingsFile) {
 		super(new BorderLayout()); setBackground(Color.BLACK);
 		table.setAutoCreateRowSorter(true); table.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
 		table.setRowHeight(23); table.setFillsViewportHeight(true); table.setBackground(Color.BLACK);
 		table.setForeground(Color.WHITE); table.setGridColor(new Color(0x333333));
 		table.setSelectionBackground(new Color(0x244b66)); table.setSelectionForeground(Color.WHITE);
-		DefaultTableCellRenderer header = new DefaultTableCellRenderer();
-		header.setHorizontalAlignment(SwingConstants.CENTER); header.setOpaque(true);
-		header.setBackground(new Color(0x202020)); header.setForeground(Color.WHITE);
-		header.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 1, new Color(0x555555)));
-		table.getTableHeader().setDefaultRenderer(header);
+		table.getTableHeader().setDefaultRenderer(new SortHeaderRenderer());
+		table.getRowSorter().addRowSorterListener(event->table.getTableHeader().repaint());
+		table.getTableHeader().addMouseListener(new MouseAdapter(){@Override public void mousePressed(MouseEvent event){headerPopupHandled=handleHeaderPopup(event);}
+			@Override public void mouseReleased(MouseEvent event){if(!headerPopupHandled)handleHeaderPopup(event);headerPopupHandled=false;}});
+		table.addMouseListener(new MouseAdapter(){@Override public void mousePressed(MouseEvent event){rowPopupHandled=handleRowPopup(event);}
+			@Override public void mouseReleased(MouseEvent event){if(!rowPopupHandled)handleRowPopup(event);rowPopupHandled=false;}});
 		int[] widths = {170,132,78,66,92,112,135,62,92,160,118,112,92,62,145,145,145,135,
 				68,105,98,78,92,55,145,82};
 		for (int n = 0; n < widths.length; n++) table.getColumnModel().getColumn(n).setPreferredWidth(widths[n]);
 		DefaultTableCellRenderer centered = new ValueRenderer();
 		for (int n = 0; n < COLUMNS.length; n++) table.getColumnModel().getColumn(n).setCellRenderer(centered);
-		status.setBorder(BorderFactory.createEmptyBorder(3, 7, 3, 7)); status.setForeground(new Color(0xdddddd));
+		sortHint.setBorder(BorderFactory.createEmptyBorder(3,7,0,7));sortHint.setForeground(new Color(0x999999));sortHint.setBackground(Color.BLACK);sortHint.setOpaque(true);
+		status.setBorder(BorderFactory.createEmptyBorder(3, 7, 1, 7)); status.setForeground(new Color(0xdddddd));
 		status.setBackground(Color.BLACK); status.setOpaque(true);
+		trackingHelp.setBorder(BorderFactory.createEmptyBorder(0,7,3,7));trackingHelp.setForeground(new Color(0x9fd7ff));trackingHelp.setBackground(Color.BLACK);trackingHelp.setOpaque(true);
 		JScrollPane scroll = new JScrollPane(table); scroll.getViewport().setBackground(Color.BLACK);
 		scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
 		scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_ALWAYS);
-		scroll.setPreferredSize(new Dimension(1000, 300)); add(scroll, BorderLayout.CENTER); add(status, BorderLayout.SOUTH);
-		table.getRowSorter().setSortKeys(java.util.Collections.singletonList(
-				new RowSorter.SortKey(2, SortOrder.DESCENDING)));
+		JPanel footer=new JPanel(new GridLayout(3,1));footer.setBackground(Color.BLACK);footer.add(sortHint);footer.add(trackingHelp);footer.add(status);
+		scroll.setPreferredSize(new Dimension(1000, 300)); add(scroll, BorderLayout.CENTER); add(footer, BorderLayout.SOUTH);
+		setDefaultSort();
+		tableLayout=new PersistentTableLayout(table,COLUMNS.length,tableSettingsFile,"wifi.table.",this::setDefaultSort);
 	}
+	@Override public void addNotify(){super.addNotify();tableLayout.installAndRestore();}
+	@Override public void removeNotify(){tableLayout.saveAndStop();super.removeNotify();}
+	private void setDefaultSort(){table.getRowSorter().setSortKeys(java.util.Collections.singletonList(
+			new RowSorter.SortKey(2,SortOrder.DESCENDING)));}
+	void saveTableLayoutForTest(){tableLayout.save();}void restoreTableLayoutForTest(){tableLayout.restore();}
+	void moveColumnForTest(String name,int target){int modelColumn=model.findColumn(name),view=table.convertColumnIndexToView(modelColumn);if(view>=0)table.moveColumn(view,target);}
+	void setColumnWidthForTest(String name,int width){int view=table.convertColumnIndexToView(model.findColumn(name));table.getColumnModel().getColumn(view).setWidth(width);}
+	int viewColumnForTest(String name){return table.convertColumnIndexToView(model.findColumn(name));}
+	int columnWidthForTest(String name){return table.getColumnModel().getColumn(viewColumnForTest(name)).getWidth();}
+	void sortByColumnForTest(String name,SortOrder order){table.getRowSorter().setSortKeys(java.util.Collections.singletonList(new RowSorter.SortKey(model.findColumn(name),order)));}
+	String primarySortColumnForTest(){List<? extends RowSorter.SortKey> keys=table.getRowSorter().getSortKeys();return keys.isEmpty()?"":COLUMNS[keys.get(0).getColumn()];}
+	SortOrder primarySortOrderForTest(){List<? extends RowSorter.SortKey> keys=table.getRowSorter().getSortKeys();return keys.isEmpty()?SortOrder.UNSORTED:keys.get(0).getSortOrder();}
+	private boolean handleHeaderPopup(MouseEvent event){if(!event.isPopupTrigger())return false;int viewColumn=table.getTableHeader().columnAtPoint(event.getPoint());if(viewColumn<0)return false;
+		event.consume();int modelColumn=table.convertColumnIndexToModel(viewColumn);List<RowSorter.SortKey> retained=new ArrayList<RowSorter.SortKey>();boolean removed=false;
+		for(RowSorter.SortKey key:table.getRowSorter().getSortKeys())if(key.getColumn()==modelColumn&&key.getSortOrder()!=SortOrder.UNSORTED)removed=true;else retained.add(key);
+		table.getRowSorter().setSortKeys(removed?retained:java.util.Collections.<RowSorter.SortKey>emptyList());return true;}
+	private boolean handleRowPopup(MouseEvent event){if(!event.isPopupTrigger())return false;int viewRow=table.rowAtPoint(event.getPoint());if(viewRow<0)return false;int modelRow=table.convertRowIndexToModel(viewRow);
+		if(modelRow<0||modelRow>=rowKeys.size())return false;event.consume();String key=rowKeys.get(modelRow);trackedKey=key.equals(trackedKey)?"--":key;table.repaint();return true;}
+	private void chimeForTrackedKey(String key){if(!key.equals(trackedKey))return;long now=System.currentTimeMillis();if(now-lastChimeMillis<TRACKING_CHIME_COOLDOWN_MILLIS)return;
+		lastChimeMillis=now;SwingUtilities.invokeLater(()->Toolkit.getDefaultToolkit().beep());}
 
 	synchronized void observe(WifiDsssAnalyzer.Result result) {
 		observe(result, result == null ? 0L : result.decodedMillis);
@@ -115,6 +155,7 @@ final class WifiNetworkTablePanel extends JPanel {
 				clients.put(address, client);
 			}
 			client.updateClient(frame, phy, rate, levelDbfs, correlation, cfoHz, decodedMillis);
+			chimeForTrackedKey(client.key);
 			return;
 		}
 
@@ -129,6 +170,7 @@ final class WifiNetworkTablePanel extends JPanel {
 			networks.put(address, network);
 		}
 		network.updateAp(frame, phy, rate, levelDbfs, correlation, cfoHz, decodedMillis, captureMillis);
+		chimeForTrackedKey(network.key);
 	}
 
 	private static boolean usableAddress(String address) {
@@ -301,7 +343,15 @@ final class WifiNetworkTablePanel extends JPanel {
 		private static String join(Iterable<String> values,String separator) { StringBuilder out=new StringBuilder();for(String value:values){if(out.length()>0)out.append(separator);out.append(value);}return out.toString(); }
 	}
 
-	private static final class ValueRenderer extends DefaultTableCellRenderer {
+	private static final class SortHeaderRenderer extends DefaultTableCellRenderer {
+		SortHeaderRenderer(){setHorizontalAlignment(SwingConstants.CENTER);setOpaque(true);setBorder(BorderFactory.createMatteBorder(0,0,1,1,HEADER_BORDER));}
+		@Override public Component getTableCellRendererComponent(JTable table,Object value,boolean selected,boolean focus,int row,int column){super.getTableCellRendererComponent(table,value,selected,focus,row,column);
+			int modelColumn=table.convertColumnIndexToModel(column),priority=-1;SortOrder order=SortOrder.UNSORTED;int index=0;for(RowSorter.SortKey key:table.getRowSorter().getSortKeys()){
+				if(key.getSortOrder()==SortOrder.UNSORTED)continue;if(key.getColumn()==modelColumn){priority=index;order=key.getSortOrder();break;}index++;}
+			setBackground(priority<0?HEADER_BG:SORT_HEADER_BACKGROUNDS[priority%SORT_HEADER_BACKGROUNDS.length]);setForeground(HEADER_FG);String text=String.valueOf(value);
+			setText(priority<0?text:text+" "+(order==SortOrder.ASCENDING?"\u25B2":"\u25BC")+(table.getRowSorter().getSortKeys().size()>1?Integer.toString(priority+1):""));return this;}
+	}
+	private final class ValueRenderer extends DefaultTableCellRenderer {
 		private int column;
 		private boolean lastSeenColumn;
 		ValueRenderer() { setHorizontalAlignment(SwingConstants.CENTER); }
@@ -313,7 +363,8 @@ final class WifiNetworkTablePanel extends JPanel {
 		@Override public Component getTableCellRendererComponent(JTable table,Object value,boolean selected,boolean focus,int row,int column) {
 			this.column=column;this.lastSeenColumn="Last seen".equals(table.getColumnName(column));
 			Component component=super.getTableCellRendererComponent(table,value,selected,focus,row,column);
-			if(!selected){int modelRow=table.convertRowIndexToModel(row);Object role=table.getModel().getValueAt(modelRow,3);component.setBackground("Client".equals(role)?CLIENT_ROW:Color.BLACK);component.setForeground(Color.WHITE);}return component;
+			int modelRow=table.convertRowIndexToModel(row);boolean tracked=modelRow>=0&&modelRow<rowKeys.size()&&trackedKey.equals(rowKeys.get(modelRow));if(tracked){component.setBackground(TRACKED_BACKGROUND);component.setForeground(Color.BLACK);
+			}else if(!selected){Object role=table.getModel().getValueAt(modelRow,3);component.setBackground("Client".equals(role)?CLIENT_ROW:Color.BLACK);component.setForeground(Color.WHITE);}return component;
 		}
 	}
 }

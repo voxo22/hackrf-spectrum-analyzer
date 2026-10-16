@@ -4,7 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/** Regression tests for the shared WAV/PCM/CU8 filename contract. */
+/** Regression tests for the shared WAV/PCM/CU8/CS8 filename contract. */
 public final class IQReplayFileNameTest {
 	public static void main(String[] args) throws Exception {
 		frequency("capture_868.3_test.wav", 868_300_000L);
@@ -20,6 +20,8 @@ public final class IQReplayFileNameTest {
 		rate("capture_868.3_2.4.pcm", 2_400_000);
 		rate("capture-868.3MHz-1000k.cu8", 1_000_000);
 		rate("g001_TCH_868.9M_14_250k.cu8", 250_000);
+		frequency("433735000Hz_500k.cs8", 433_735_000L);
+		rate("433735000Hz_500k.cs8", 500_000);
 		frequency("capture16b_868.3_2.pcm", 868_300_000L);
 		rate("capture16b_868.3_2.pcm", 2_000_000);
 		if (IQReplayFile.rawBitsPerComponent("capture_868.3_16b_2.pcm") != 16)
@@ -35,7 +37,8 @@ public final class IQReplayFileNameTest {
 		rateError("capture_868.3MHz_2M.pcm", "sample rate");
 
 		verifyCu8UnsignedReplay();
-		System.out.println("IQReplayFileNameTest OK: unified WAV/PCM/CU8 filename rules");
+		verifyCs8SignedReplay();
+		System.out.println("IQReplayFileNameTest OK: unified WAV/PCM/CU8/CS8 filename rules");
 	}
 
 	private static void frequency(String name, long expected) throws Exception {
@@ -78,6 +81,23 @@ public final class IQReplayFileNameTest {
 				byte[] expected = { -128, 0, 127, -64 };
 				for (int n=0;n<signed.length;n++) if (signed[n] != expected[n])
 					throw new AssertionError("CU8 unsigned conversion failed at byte " + n);
+			}
+		} finally {
+			Files.deleteIfExists(path);
+			Files.deleteIfExists(directory);
+		}
+	}
+
+	private static void verifyCs8SignedReplay() throws Exception {
+		Path directory = Files.createTempDirectory("iq-replay-cs8-test-");
+		Path path = directory.resolve("433735000Hz_500k.cs8");
+		try {
+			byte[] expected = { -128, 0, 127, -64 };
+			Files.write(path, expected);
+			try (IQReplayFile replay = IQReplayFile.open(path.toFile())) {
+				byte[] signed = new byte[4]; replay.readLoopedSigned(signed);
+				for (int n=0;n<signed.length;n++) if (signed[n] != expected[n])
+					throw new AssertionError("CS8 signed replay changed byte " + n);
 			}
 		} finally {
 			Files.deleteIfExists(path);

@@ -77,10 +77,12 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final JLabel nrParameterLabel = new JLabel();
 	private final JLabel umtsParameterLabel = new JLabel();
 	private final JLabel wifiParameterLabel = new JLabel();
+	private final JLabel bluetoothParameterLabel = new JLabel();
 	private final LteCellTablePanel lteCellTablePanel = new LteCellTablePanel();
 	private final NrCellTablePanel nrCellTablePanel = new NrCellTablePanel();
 	private final UmtsCellTablePanel umtsCellTablePanel = new UmtsCellTablePanel();
 	private final WifiNetworkTablePanel wifiNetworkTablePanel = new WifiNetworkTablePanel();
+	private final BluetoothDeviceTablePanel bluetoothDeviceTablePanel = new BluetoothDeviceTablePanel();
 	private final Ism868SignalTablePanel ism868SignalTablePanel = new Ism868SignalTablePanel();
 	private final LteConstellationPanel lteConstellationPanel = new LteConstellationPanel();
 	private final JLabel titleLabel;
@@ -98,6 +100,7 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final boolean nrMode;
 	private final boolean umtsMode;
 	private final boolean wifiMode;
+	private final boolean bluetoothMode;
 	private final boolean ism868Mode;
 	private final LongSupplier captureTimeMillisSupplier;
 	private final DvbtSignalAnalyzer dvbtAnalyzer = new DvbtSignalAnalyzer();
@@ -110,6 +113,7 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final UmtsSignalAnalyzer umtsAnalyzer = new UmtsSignalAnalyzer();
 	private final WifiSignalAnalyzer wifiAnalyzer = new WifiSignalAnalyzer();
 	private final WifiDsssAnalyzer wifiDsssAnalyzer = new WifiDsssAnalyzer();
+	private final BluetoothSignalAnalyzer bluetoothAnalyzer = new BluetoothSignalAnalyzer();
 	private final Ism868SignalAnalyzer ism868Analyzer = new Ism868SignalAnalyzer();
 	private volatile Ism868SignalAnalyzer.Result latestIsm868Result;
 	private volatile boolean ism868AnalysisRunning;
@@ -137,6 +141,12 @@ final class SignalQualityTesterFrame extends JFrame {
 	private volatile boolean wifiWorkerClosed;
 	private Thread wifiWorker;
 	private Thread wifiDsssWorker;
+	private volatile BluetoothSignalAnalyzer.Result latestBluetoothResult;
+	private static final int BLUETOOTH_MAX_QUEUED_BYTES = 8_000_000;
+	private final ArrayDeque<BluetoothChunk> bluetoothQueue = new ArrayDeque<BluetoothChunk>();
+	private int bluetoothQueuedBytes;
+	private volatile boolean bluetoothWorkerClosed;
+	private Thread bluetoothWorker;
 	private volatile boolean gsmAnalysisRunning;
 	private volatile boolean dabFicAnalysisRunning;
 	private volatile DabFicDecoder.Result latestDabFicResult = DabFicDecoder.Result.empty("Collecting DAB frame IQ");
@@ -224,6 +234,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		nrMode = mode.startsWith("5G NR") || mode.startsWith("NR");
 		umtsMode = mode.startsWith("UMTS") || mode.startsWith("WCDMA");
 		wifiMode = mode.startsWith("Wi-Fi");
+		bluetoothMode = mode.startsWith("Bluetooth");
 		ism868Mode = mode.startsWith("ISM 868");
 		if (gsmMode) {
 			latestGsmResult = GsmSignalAnalyzer.Result.empty("collecting GSM channel IQ");
@@ -255,6 +266,11 @@ final class SignalQualityTesterFrame extends JFrame {
 			latestWifiDsssResult = WifiDsssAnalyzer.Result.empty("Searching for Wi-Fi DSSS preamble");
 			prepareParameterLabel(wifiParameterLabel);
 			wifiParameterLabel.setFont(wifiParameterLabel.getFont().deriveFont(12f));
+		}
+		if (bluetoothMode) {
+			latestBluetoothResult = BluetoothSignalAnalyzer.Result.empty("Searching for BLE 1M advertising packets");
+			prepareParameterLabel(bluetoothParameterLabel);
+			bluetoothParameterLabel.setFont(bluetoothParameterLabel.getFont().deriveFont(12f));
 		}
 		if (ism868Mode)
 			latestIsm868Result = Ism868SignalAnalyzer.Result.empty(0L, 0,
@@ -316,11 +332,11 @@ final class SignalQualityTesterFrame extends JFrame {
 		JPanel footer = new JPanel(new BorderLayout(8, 4));
 		footer.setBackground(PANEL_BG);
 		footer.setBorder(new EmptyBorder(6, 10, 8, 10));
-		JPanel qualityRows = new JPanel(new GridLayout(dvbt2Mode ? 3 : dabMode || dvbtMode || gsmMode
-				|| rdsMode || lteMode || nrMode || umtsMode || wifiMode ? 2 : 1, 1, 0, 2));
+		boolean showSecondaryQuality=dabMode||dvbtMode||gsmMode||rdsMode||lteMode||nrMode||umtsMode;
+		JPanel qualityRows = new JPanel(new GridLayout(dvbt2Mode ? 3 : showSecondaryQuality ? 2 : 1, 1, 0, 2));
 		qualityRows.setBackground(PANEL_BG);
 		qualityRows.add(qualityPanel);
-		if (dabMode || dvbtMode || dvbt2Mode || gsmMode || rdsMode || lteMode || nrMode || umtsMode || wifiMode) {
+		if (showSecondaryQuality || dvbt2Mode) {
 			qualityRows.add(dabLockPanel);
 		}
 		if (dvbt2Mode) qualityRows.add(dvbt2CrcPanel);
@@ -383,6 +399,15 @@ final class SignalQualityTesterFrame extends JFrame {
 			wifiColumn.add(wifiParameterLabel, BorderLayout.NORTH);
 			wifiColumn.add(wifiNetworkTablePanel, BorderLayout.CENTER);
 			plots.add(wifiColumn);
+		} else if (bluetoothMode) {
+			bluetoothParameterLabel.setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createLineBorder(Color.DARK_GRAY), new EmptyBorder(8, 14, 8, 14)));
+			bluetoothParameterLabel.setPreferredSize(new Dimension(100, 245));
+			JPanel bluetoothColumn = new JPanel(new BorderLayout(0, 6));
+			bluetoothColumn.setBackground(PANEL_BG);
+			bluetoothColumn.add(bluetoothParameterLabel, BorderLayout.NORTH);
+			bluetoothColumn.add(bluetoothDeviceTablePanel, BorderLayout.CENTER);
+			plots.add(bluetoothColumn);
 		} else if (ism868Mode) {
 			plots.add(ism868SignalTablePanel, BorderLayout.CENTER);
 		} else if (dabMode) {
@@ -401,8 +426,8 @@ final class SignalQualityTesterFrame extends JFrame {
 		add(header, BorderLayout.NORTH);
 		add(plots, BorderLayout.CENTER);
 		add(footer, BorderLayout.SOUTH);
-		setSize(dvbt2Mode || ism868Mode ? 1100 : 760,
-				dvbt2Mode ? 650 : ism868Mode ? 560 : dabMode || wifiMode || lteMode ? 570 : nrMode || umtsMode ? 500
+		setSize(bluetoothMode ? 900 : dvbt2Mode || ism868Mode ? 1100 : 760,
+				dvbt2Mode ? 650 : bluetoothMode ? 680 : ism868Mode ? 560 : dabMode || wifiMode || lteMode ? 570 : nrMode || umtsMode ? 500
 						: gsmMode || rdsMode ? 445 : 420);
 
 		repaintTimer = new Timer(100, e -> updateView());
@@ -412,6 +437,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			public void windowClosed(WindowEvent e) {
 				repaintTimer.stop();
 				stopWifiWorker();
+				stopBluetoothWorker();
 				stopIsm868DynamicWorker();
 				if (gsmPagingFrame != null) gsmPagingFrame.dispose();
 				if (gsmBcchFrame != null) gsmBcchFrame.dispose();
@@ -426,6 +452,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			}
 		});
 		if (wifiMode) startWifiWorker();
+		if (bluetoothMode) startBluetoothWorker();
 		if (ism868Mode&&ISM868_POLYPHASE_ENABLED) startIsm868DynamicWorker();
 	}
 
@@ -631,6 +658,60 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (worker != null) worker.interrupt();
 	}
 
+	private void startBluetoothWorker() {
+		bluetoothWorker = new Thread(() -> {
+			while (!bluetoothWorkerClosed) {
+				BluetoothChunk chunk;
+				synchronized (bluetoothQueue) {
+					while (bluetoothQueue.isEmpty() && !bluetoothWorkerClosed) {
+						try { bluetoothQueue.wait(); }
+						catch (InterruptedException e) { if (bluetoothWorkerClosed) return; }
+					}
+					if (bluetoothWorkerClosed) return;
+					chunk = bluetoothQueue.removeFirst();
+					bluetoothQueuedBytes -= chunk.iq.length;
+				}
+				if (chunk.reset) bluetoothAnalyzer.discardOverlap();
+				latestBluetoothResult = bluetoothAnalyzer.analyze(chunk.centerFreqHz, chunk.iq,
+						chunk.iq.length, chunk.sampleRateHz, chunk.captureMillis);
+				for (BluetoothLePacket packet : bluetoothAnalyzer.takeObservations())
+					bluetoothDeviceTablePanel.observe(packet);
+				for (BluetoothLeDataPacket packet : bluetoothAnalyzer.takeDataObservations())
+					bluetoothDeviceTablePanel.observe(packet);
+				for (BluetoothClassicPacket packet : bluetoothAnalyzer.takeClassicObservations())
+					bluetoothDeviceTablePanel.observe(packet);
+			}
+		}, "Bluetooth LE and Classic analyzer");
+		bluetoothWorker.setDaemon(true);
+		bluetoothWorker.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
+		bluetoothWorker.start();
+	}
+
+	private void stopBluetoothWorker() {
+		bluetoothWorkerClosed = true;
+		synchronized (bluetoothQueue) {
+			bluetoothQueue.clear(); bluetoothQueuedBytes = 0; bluetoothQueue.notifyAll();
+		}
+		Thread worker = bluetoothWorker; if (worker != null) worker.interrupt();
+	}
+
+	private void offerBluetoothAnalysis(long centerFreqHz, int sampleRateHz, byte[] iqData, int length) {
+		long captureMillis = System.currentTimeMillis();
+		LongSupplier timeSupplier = captureTimeMillisSupplier;
+		if (timeSupplier != null) { long supplied = timeSupplier.getAsLong(); if (supplied > 0L) captureMillis = supplied; }
+		int copyLength = Math.min(length, iqData.length) & ~1; boolean reset = false;
+		if (copyLength > BLUETOOTH_MAX_QUEUED_BYTES) { copyLength = BLUETOOTH_MAX_QUEUED_BYTES & ~1; reset = true; }
+		byte[] copy = new byte[copyLength]; System.arraycopy(iqData, length - copyLength, copy, 0, copyLength);
+		synchronized (bluetoothQueue) {
+			if (bluetoothWorkerClosed) return;
+			if (bluetoothQueuedBytes + copyLength > BLUETOOTH_MAX_QUEUED_BYTES) {
+				bluetoothQueue.clear(); bluetoothQueuedBytes = 0; reset = true;
+			}
+			bluetoothQueue.addLast(new BluetoothChunk(copy, centerFreqHz, sampleRateHz, captureMillis, reset));
+			bluetoothQueuedBytes += copyLength; bluetoothQueue.notifyAll();
+		}
+	}
+
 	private void offerWifiAnalysis(long centerFreqHz, int sampleRateHz, byte[] iqData, int length) {
 		boolean dsssBand = centerFreqHz >= 2_400_000_000L && centerFreqHz < 2_500_000_000L;
 		long captureMillis = System.currentTimeMillis();
@@ -691,6 +772,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			return;
 		}
 		if (wifiMode) offerWifiAnalysis(centerFreqHz, sampleRateHz, iqData, evenLength);
+		if (bluetoothMode) offerBluetoothAnalysis(centerFreqHz, sampleRateHz, iqData, evenLength);
 		if (dvbtMode) offerDvbtTpsCapture(sampleRateHz, iqData, evenLength);
 		if (dvbt2Mode) offerDvbt2SignallingCapture(sampleRateHz, iqData, evenLength);
 		if (nrMode) appendNrHistory(iqData, evenLength, sampleRateHz);
@@ -796,7 +878,8 @@ final class SignalQualityTesterFrame extends JFrame {
 		int windowBytes = Math.max(131_072, sampleRateHz * 8 / 100) & ~1;
 		final NrSignalAnalyzer.Result previous = latestNrResult;
 		final boolean needsMib = previous == null || !previous.mib.valid;
-		final boolean needsSib1 = previous == null || !previous.sib1.valid;
+		final boolean needsSib1 = previous == null || !previous.sib1.valid
+				&& (!previous.mib.valid || previous.mib.hasType0PdcchCss());
 		final boolean highBand30MibSearch = needsMib && centerFreqHz >= 3_000_000_000L;
 		int contextBytes = Math.max(windowBytes, sampleRateHz * 4 / 10) & ~1;
 		int minimumBytes = highBand30MibSearch ? windowBytes
@@ -1810,6 +1893,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		dabConstellationPanel.setSnapshot(active);
 		dvbt2P2Panel.setSnapshot(active);
 		if (wifiMode) wifiNetworkTablePanel.refresh();
+		if (bluetoothMode) bluetoothDeviceTablePanel.refresh();
 		if (ism868Mode) ism868SignalTablePanel.refresh(latestIsm868Result);
 		qualityPanel.setSnapshot(active);
 		dabLockPanel.setSnapshot(active);
@@ -1834,6 +1918,8 @@ final class SignalQualityTesterFrame extends JFrame {
 					"Waiting for UMTS IQ samples..."));
 			if (wifiMode) wifiParameterLabel.setText(parameterTable("WI-FI CHANNEL", "",
 					"Waiting for Wi-Fi IQ samples..."));
+			if (bluetoothMode) bluetoothParameterLabel.setText(parameterTable("BLUETOOTH / BLE", "",
+					"Waiting for Bluetooth-band IQ samples..."));
 			if (ism868Mode) detailLabel.setText("Waiting for an IQ window that overlaps 863-870 MHz");
 			return;
 		}
@@ -1979,7 +2065,8 @@ final class SignalQualityTesterFrame extends JFrame {
 					nr.state, nrCells.size(), nr.pci >= 0 ? Integer.toString(nr.pci) : "searching",
 					nr.pssCorrelation * 100d, nr.sssCorrelation * 100d,
 					nr.dmrsConfirmed ? String.format(Locale.US, "%.1f %%", nr.dmrsCorrelation * 100d) : "searching",
-					nr.mib.valid ? "decoded" : "waiting", nr.sib1.valid ? "decoded" : "waiting",
+					nr.mib.valid ? "decoded" : "waiting", nr.sib1.valid ? "decoded"
+							: nr.mib.valid && !nr.mib.hasType0PdcchCss() ? "not broadcast" : "waiting",
 					nr.iqOrientation > 0 ? "normal" : nr.iqOrientation < 0 ? "conjugated" : "searching");
 			if(nr.pci>=0)details+="\n"+nrDecodeBreadcrumb(nr);
 			nrParameterLabel.setText(parameterTable("NR CELL ACQUISITION / SESSION STATUS", details, nr.state));
@@ -2029,6 +2116,54 @@ final class SignalQualityTesterFrame extends JFrame {
 					active.centerFreqHz / 1e6, active.sampleRateHz / 1e6, umts.cfoHz,
 					umts.iqOrientation > 0 ? "normal" : "conjugated");
 			umtsParameterLabel.setText(parameterTable("UMTS/WCDMA DOWNLINK ACQUISITION", details, umts.state));
+		} else if (bluetoothMode) {
+			BluetoothSignalAnalyzer.Result bluetooth = latestBluetoothResult;
+			if (bluetooth == null) bluetooth = BluetoothSignalAnalyzer.Result.empty("Waiting for Bluetooth analysis");
+			BluetoothLePacket packet = bluetooth.latestPacket;
+			BluetoothLeDataPacket dataPacket = bluetooth.latestDataPacket;
+			BluetoothClassicPacket classicPacket = bluetooth.latestClassicPacket;
+			BluetoothNarrowbandDetector.Result activity = bluetooth.activity;
+			boolean narrowBluetooth = active.sampleRateHz < BluetoothSignalAnalyzer.PACKET_MIN_RATE_HZ;
+			String shortStatus=bluetoothShortStatus(bluetooth,narrowBluetooth);
+			long ageMillis = bluetooth.lastDecodedMillis <= 0L ? -1L
+					: Math.max(0L, System.currentTimeMillis() - bluetooth.lastDecodedMillis);
+			String latest = packet == null ? "--" : packet.pduType + " / " + packet.address;
+			String latestData = dataPacket == null ? "--" : dataPacket.packetType + " / " + dataPacket.accessText()
+					+ " / ch " + dataPacket.channel+(dataPacket.connectionEvent<0?"":" / event ~"+dataPacket.connectionEvent);
+			String latestClassic = classicPacket == null ? "--" : classicPacket.packetType + " / "
+					+ classicPacket.identityText() + " / ch " + classicPacket.channel;
+			String details = String.format(Locale.US,
+					"Status|%s\nCenter / rate|%.6f MHz / %.3f MS/s\nIQ range|%s\n"
+					+ "BLE centers|%s\nClassic centers|%s\nBLE decoders|%s\n"
+					+ "BLE adv / data / L2CAP|%d / %d / %d\nLE connection contexts|%d\nDevices / partial addresses|%d\n"
+					+ "Classic access/header/data/FHS|%d / %d / %d / %d\nClassic scan channels|%s\nLatest BLE advertising|%s\n"
+					+ "Latest BLE data|%s\nLatest Classic|%s\nLast activity|%s\n"
+					+ "Narrow RF / BLE candidates|%s\nNarrow rate / duty / duration|%s\n"
+					+ "Noise / peak|%s / %s\nQueue resets|%d",
+					shortStatus,active.centerFreqHz / 1e6,active.sampleRateHz / 1e6,
+					bluetooth.coverage.iqRange,bluetooth.coverage.bleChannels,bluetooth.coverage.classicChannels,
+					bluetooth.channels,bluetooth.decodedPackets,bluetooth.decodedDataPackets,bluetooth.reassembledL2capPackets,bluetooth.connectionCount,
+					bluetoothDeviceTablePanel.deviceCount(),
+					bluetooth.classicAccessCodes,bluetooth.classicHeaders,bluetooth.classicPayloads,bluetooth.classicFhsPackets,
+					bluetooth.classicScannedChannels,latest,
+					latestData,latestClassic,
+					ageMillis < 0L ? "waiting" : ageMillis + " ms ago",
+					narrowBluetooth ? activity.bursts+" / "+activity.legacyAdvertisingBursts+" (unconfirmed)" : "--",
+					!narrowBluetooth||Double.isNaN(activity.medianDurationMs)?"--":String.format(Locale.US,
+							"%.2f/s / %.2f%% / %.3f ms",activity.burstsPerSecond,activity.dutyCyclePercent,activity.medianDurationMs),
+					!narrowBluetooth || Double.isNaN(activity.noiseDbfs) ? "--" : String.format(Locale.US, "%.1f dBFS", activity.noiseDbfs),
+					!narrowBluetooth || Double.isNaN(activity.peakDbfs) ? "--" : String.format(Locale.US, "%.1f dBFS", activity.peakDbfs),
+					bluetooth.queueResets);
+			bluetoothParameterLabel.setText(parameterTable("BLUETOOTH LE / CLASSIC OBSERVATION", details, shortStatus));
+			detailLabel.setText(String.format(Locale.US,
+					"%s   devices/partial %d   BLE adv/data/L2CAP %d/%d/%d   Classic access/header/data/FHS %d/%d/%d/%d%s",
+					shortStatus, bluetoothDeviceTablePanel.deviceCount(), bluetooth.decodedPackets,bluetooth.decodedDataPackets,
+					bluetooth.reassembledL2capPackets,bluetooth.classicAccessCodes,bluetooth.classicHeaders,
+					bluetooth.classicPayloads,bluetooth.classicFhsPackets,
+					(packet == null ? "" : String.format(Locale.US, "   latest %s ch %d, %.1f dBFS",
+							packet.pduType, packet.channel, packet.levelDbfs))
+							+ (narrowBluetooth ? String.format(Locale.US, "   RF bursts %d (%.2f/s)",
+									activity.bursts, activity.burstsPerSecond) : "")));
 		} else if (wifiMode && active.wifiResult != null) {
 			WifiSignalAnalyzer.Result wifi = active.wifiResult;
 			WifiDsssAnalyzer.Result dsss = active.wifiDsssResult;
@@ -2096,6 +2231,18 @@ final class SignalQualityTesterFrame extends JFrame {
 
 	private synchronized void refreshDvbt2CrcPanel() {
 		dvbt2CrcPanel.setStats(dvbt2CrcCount, dvbt2PreCrcSuccess, dvbt2PostCrcSuccess);
+	}
+
+	static String bluetoothShortStatus(BluetoothSignalAnalyzer.Result result,boolean narrow){
+		if(narrow)return result.activity.bursts>0?"RF activity":"Searching";
+		String state=result.state==null?"":result.state;
+		if(state.contains("data channel"))return "BLE data";
+		if(state.contains("advertising decoded"))return "BLE packet";
+		if(state.contains("inquiry FHS"))return "Classic device";
+		if(state.contains("Classic BR")&&state.contains("header decoded"))return "Classic packet";
+		if(state.contains("Classic BR access"))return "Classic access";
+		if(state.startsWith("No BLE")||state.contains("no primary"))return "Out of range";
+		return "Searching";
 	}
 
 	private String parameterTable(String title, String details, String waiting) {
@@ -2232,17 +2379,20 @@ final class SignalQualityTesterFrame extends JFrame {
 		out.append("\nCORESET0|").append(pdcch.slot>=0
 				? String.format(Locale.US,"OK, %d RB x %d sym, slot %d, %.1f %%",
 						pdcch.coresetRb,pdcch.coresetDuration,pdcch.slot,pdcch.correlation*100d)
-				: nr.mib.valid ? "searching Type0 CSS" : "waiting for MIB");
-		out.append("\nPDCCH SI-RNTI DCI|").append(nrDciSummary(pdcch.dci));
-		out.append("\nPDCCH best candidate|").append(pdcch.dci.valid?"CRC OK":pdcch.debug.length()>0?shortPdcchCandidate(firstLine(pdcch.debug)):pdcch.slot>=0?"no CRC OK":"waiting");
+				: nr.mib.valid && !nr.mib.hasType0PdcchCss()
+						? "not present (MIB kSSB="+nr.mib.ssbSubcarrierOffset+")"
+						: nr.mib.valid ? "searching Type0 CSS" : "waiting for MIB");
+		boolean noSib1=nr.mib.valid&&!nr.mib.hasType0PdcchCss();
+		out.append("\nPDCCH SI-RNTI DCI|").append(noSib1?"not applicable":nrDciSummary(pdcch.dci));
+		out.append("\nPDCCH best candidate|").append(noSib1?"not applicable":pdcch.dci.valid?"CRC OK":pdcch.debug.length()>0?shortPdcchCandidate(firstLine(pdcch.debug)):pdcch.slot>=0?"no CRC OK":"waiting");
 		NrPdschDecoder.Decoded pdsch=pdcch.pdsch;
-		out.append("\nSIB1 PDSCH|").append(pdsch.demodulated
+		out.append("\nSIB1 PDSCH|").append(noSib1?"not broadcast on this SSB":pdsch.demodulated
 				? String.format(Locale.US,"OK, EVM %.1f %%, RE %d",pdsch.evm*100d,pdsch.dataResourceElements)
 				: pdcch.dci.valid ? "waiting" : "waiting for DCI");
-		out.append("\nSIB1 LDPC / CRC|").append(pdsch.demodulated
+		out.append("\nSIB1 LDPC / CRC|").append(noSib1?"not applicable":pdsch.demodulated
 				? nrLdpcSummary(pdsch)
 				: "waiting");
-		out.append("\nSIB1 ASN.1|").append(nr.sib1.valid
+		out.append("\nSIB1 ASN.1|").append(noSib1?"not broadcast on this SSB":nr.sib1.valid
 				? "OK, PLMN "+String.join(", ",nr.sib1.plmns)
 				: pdsch.transportBlock.crcOk ? "decode failed" : "waiting");
 		return out.toString();
@@ -2444,6 +2594,18 @@ final class SignalQualityTesterFrame extends JFrame {
 		WifiChunk(byte[] iq, long centerFreqHz, int sampleRateHz, long captureMillis, boolean reset) {
 			this.iq = iq; this.centerFreqHz = centerFreqHz;
 			this.sampleRateHz = sampleRateHz; this.captureMillis = captureMillis; this.reset = reset;
+		}
+	}
+
+	private static final class BluetoothChunk {
+		final byte[] iq;
+		final long centerFreqHz;
+		final int sampleRateHz;
+		final long captureMillis;
+		final boolean reset;
+		BluetoothChunk(byte[] iq, long centerFreqHz, int sampleRateHz, long captureMillis, boolean reset) {
+			this.iq=iq; this.centerFreqHz=centerFreqHz; this.sampleRateHz=sampleRateHz;
+			this.captureMillis=captureMillis; this.reset=reset;
 		}
 	}
 

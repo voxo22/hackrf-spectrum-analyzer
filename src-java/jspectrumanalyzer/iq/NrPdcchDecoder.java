@@ -49,6 +49,7 @@ final class NrPdcchDecoder {
 
 	static Survey survey(double[] inI, double[] inQ, NrSignalAnalyzer.PssSurveyCandidate candidate,
 			NrSignalAnalyzer.MibData mib) {
+		if (mib == null || !mib.hasType0PdcchCss()) return Survey.EMPTY;
 		if (candidate.ssbSubcarrierSpacingKhz == 15 && mib != null && mib.valid
 				&& mib.subcarrierSpacingCommonKhz == 15
 				&& mib.pdcchConfigSib1 == 0x72)

@@ -66,15 +66,19 @@ final class NrCellDetailsFrame extends JFrame {
 		NrSignalAnalyzer.Result cell = pci < 0 ? null : cellSupplier.apply(pci);
 		system.setRowCount(0); radio.setRowCount(0); sib1.setRowCount(0); load.setRowCount(0);
 		if (cell == null) { status.setText("Select an NR cell in the main window."); return; }
-		status.setText("PCI " + pci + " - last CRC-verified MIB and SIB1 retained during this session");
 		NrSignalAnalyzer.Sib1Data s = cell.sib1;
 		NrSignalAnalyzer.MibData m = cell.mib;
+		boolean noLocalSib1 = m.valid && !m.hasType0PdcchCss();
+		String sib1Unavailable = noLocalSib1 ? "not broadcast on this SSB" : WAIT;
+		status.setText(noLocalSib1
+				? "PCI " + pci + " - MIB indicates no associated Type-0 CSS or SIB1 on this SSB"
+				: "PCI " + pci + " - last CRC-verified MIB and SIB1 retained during this session");
 		long tuned = frequencySupplier.getAsLong() + cell.freqOffsetHz;
 		add(system, "Physical Cell ID", Integer.toString(cell.pci), "NR physical-layer cell identity.");
-		add(system, "PLMN", s.valid ? String.join(", ", s.plmns) : WAIT, "Public mobile network identifier.");
-		add(system, "Tracking Area Code", s.valid ? Integer.toString(s.trackingAreaCode) : WAIT, "Area used for mobility and paging.");
-		add(system, "NR Cell Identity", s.valid ? Long.toString(s.cellIdentity) : WAIT, "36-bit cell identity broadcast in SIB1.");
-		add(system, "NR band", s.valid ? bands(s.frequencyBands) : WAIT, "Operating band advertised by SIB1.");
+		add(system, "PLMN", s.valid ? String.join(", ", s.plmns) : sib1Unavailable, "Public mobile network identifier.");
+		add(system, "Tracking Area Code", s.valid ? Integer.toString(s.trackingAreaCode) : sib1Unavailable, "Area used for mobility and paging.");
+		add(system, "NR Cell Identity", s.valid ? Long.toString(s.cellIdentity) : sib1Unavailable, "36-bit cell identity broadcast in SIB1.");
+		add(system, "NR band", s.valid ? bands(s.frequencyBands) : sib1Unavailable, "Operating band advertised by SIB1.");
 		add(system, "SSB frequency", tuned > 0 ? String.format(Locale.US, "%.6f MHz", tuned / 1e6) : WAIT, "Measured center of the detected synchronization block.");
 
 		add(radio, "PSS / SSS quality", String.format(Locale.US, "%.1f %% / %.1f %%", cell.pssCorrelation * 100d, cell.sssCorrelation * 100d), "Synchronization quality for this PCI.");
@@ -85,21 +89,23 @@ final class NrCellDetailsFrame extends JFrame {
 		add(radio, "Common subcarrier spacing", m.valid ? m.subcarrierSpacingCommonKhz + " kHz" : WAIT, "Common SCS signalled by MIB.");
 		add(radio, "SSB subcarrier offset", m.valid ? Integer.toString(m.ssbSubcarrierOffset) : WAIT, "kSSB signalled by MIB.");
 		add(radio, "DM-RS type-A position", m.valid ? Integer.toString(m.dmrsTypeAPosition) : WAIT, "PDSCH DM-RS start position.");
-		add(radio, "CORESET0 / SearchSpace0", m.valid ? ((m.pdcchConfigSib1 >>> 4) & 15) + " / " + (m.pdcchConfigSib1 & 15) : WAIT, "Initial common control-channel configuration.");
+		add(radio, "CORESET0 / SearchSpace0", noLocalSib1 ? "not present"
+				: m.valid ? ((m.pdcchConfigSib1 >>> 4) & 15) + " / " + (m.pdcchConfigSib1 & 15) : WAIT,
+				"Initial common control-channel configuration.");
 		add(radio, "Cell access", m.valid ? (m.cellBarred ? "Barred" : "Available") : WAIT, "Whether MIB permits ordinary cell access.");
-		add(radio, "NR channel bandwidth", s.valid && s.channelBandwidthMhz > 0 ? s.channelBandwidthMhz + " MHz" : WAIT, "Nominal carrier bandwidth derived from the SIB1 transmission bandwidth configuration.");
-		add(radio, "Carrier resource grid", s.valid ? s.carrierBandwidthRb + " RB @ " + s.carrierScsKhz + " kHz" : WAIT, "Downlink carrier bandwidth and subcarrier spacing broadcast in SIB1.");
+		add(radio, "NR channel bandwidth", s.valid && s.channelBandwidthMhz > 0 ? s.channelBandwidthMhz + " MHz" : sib1Unavailable, "Nominal carrier bandwidth derived from the SIB1 transmission bandwidth configuration.");
+		add(radio, "Carrier resource grid", s.valid ? s.carrierBandwidthRb + " RB @ " + s.carrierScsKhz + " kHz" : sib1Unavailable, "Downlink carrier bandwidth and subcarrier spacing broadcast in SIB1.");
 
-		add(sib1, "Initial downlink BWP", s.valid ? s.initialBwpRb + " RB @ " + s.initialBwpScsKhz + " kHz" : WAIT, "Common downlink bandwidth part decoded from SIB1.");
-		add(sib1, "Offset to Point A", s.valid ? Integer.toString(s.offsetToPointA) : WAIT, "Common resource-block grid offset.");
-		add(sib1, "SI window", s.valid ? s.siWindowSlots + " slots" : WAIT, "Window in which scheduled System Information is transmitted.");
-		add(sib1, "SI schedule", s.valid && !s.schedules.isEmpty() ? String.join("; ", s.schedules) : WAIT, "SIB mapping, repetition period and broadcast status.");
-		add(sib1, "Other-SI search space", s.valid && s.otherSiSearchSpace >= 0 ? Integer.toString(s.otherSiSearchSpace) : WAIT, "Common search space used for other System Information.");
-		add(sib1, "BCCH modification coefficient", s.valid ? "n" + s.modificationPeriodCoefficient : WAIT, "Multiplier used for BCCH modification periods.");
-		add(sib1, "Paging cycle", s.valid ? "RF" + s.pagingCycleFrames : WAIT, "Default idle-mode paging cycle.");
-		add(sib1, "Paging frame offset", s.valid ? s.pagingFrameOffsetType + " + " + s.pagingFrameOffset : WAIT, "nAndPagingFrameOffset configuration.");
-		add(sib1, "Paging occasions per frame", s.valid ? Integer.toString(s.pagingOccasions) : WAIT, "Number of paging occasions in a paging frame.");
-		add(sib1, "Paging search space", s.valid && s.pagingSearchSpace >= 0 ? Integer.toString(s.pagingSearchSpace) : WAIT, "Common search space monitored for paging.");
+		add(sib1, "Initial downlink BWP", s.valid ? s.initialBwpRb + " RB @ " + s.initialBwpScsKhz + " kHz" : sib1Unavailable, "Common downlink bandwidth part decoded from SIB1.");
+		add(sib1, "Offset to Point A", s.valid ? Integer.toString(s.offsetToPointA) : sib1Unavailable, "Common resource-block grid offset.");
+		add(sib1, "SI window", s.valid ? s.siWindowSlots + " slots" : sib1Unavailable, "Window in which scheduled System Information is transmitted.");
+		add(sib1, "SI schedule", s.valid && !s.schedules.isEmpty() ? String.join("; ", s.schedules) : sib1Unavailable, "SIB mapping, repetition period and broadcast status.");
+		add(sib1, "Other-SI search space", s.valid && s.otherSiSearchSpace >= 0 ? Integer.toString(s.otherSiSearchSpace) : sib1Unavailable, "Common search space used for other System Information.");
+		add(sib1, "BCCH modification coefficient", s.valid ? "n" + s.modificationPeriodCoefficient : sib1Unavailable, "Multiplier used for BCCH modification periods.");
+		add(sib1, "Paging cycle", s.valid ? "RF" + s.pagingCycleFrames : sib1Unavailable, "Default idle-mode paging cycle.");
+		add(sib1, "Paging frame offset", s.valid ? s.pagingFrameOffsetType + " + " + s.pagingFrameOffset : sib1Unavailable, "nAndPagingFrameOffset configuration.");
+		add(sib1, "Paging occasions per frame", s.valid ? Integer.toString(s.pagingOccasions) : sib1Unavailable, "Number of paging occasions in a paging frame.");
+		add(sib1, "Paging search space", s.valid && s.pagingSearchSpace >= 0 ? Integer.toString(s.pagingSearchSpace) : sib1Unavailable, "Common search space monitored for paging.");
 
 		double recent = loadSupplier.apply(pci);
 		add(load, "Recent downlink air load", Double.isNaN(recent) ? WAIT : String.format(Locale.US, "%.1f %%", recent), "Smoothed occupied-PRB estimate for the captured NR downlink.");

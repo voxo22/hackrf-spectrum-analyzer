@@ -33,11 +33,13 @@ final class LoRaPhyDecoder {
 
 	private static Decoded decode(float[] input,double inputRate,Lock lock){
 		float[] iq=resampleForDetection(input,inputRate,lock.bandwidthHz*2d);
+		if(lock.inverted){iq=iq.clone();for(int n=1;n<iq.length;n+=2)iq[n]=-iq[n];}
 		int sf=lock.spreadingFactor,chips=1<<sf,size=chips*2,samples=iq.length/2;
 		double[] downI=new double[size],downQ=new double[size],upI=new double[size],upQ=new double[size];
 		chirpReference(downI,downQ,lock.sampleRateHz,lock.bandwidthHz,sf,true);
 		chirpReference(upI,upQ,lock.sampleRateHz,lock.bandwidthHz,sf,false);
-		int signedBin=lock.preambleBin>size/2?lock.preambleBin-size:lock.preambleBin;
+		int preambleBin=lock.inverted?(size-lock.preambleBin)%size:lock.preambleBin;
+		int signedBin=preambleBin>size/2?preambleBin-size:preambleBin;
 		int aligned=Math.max(0,lock.startSample-2*signedBin),sfd=-1;
 		for(int n=4;n<24;n++){int at=aligned+n*size;if(at+size>samples)break;
 			Peak up=dechirp(iq,at,downI,downQ),down=dechirp(iq,at,upI,upQ);
@@ -136,7 +138,12 @@ final class LoRaPhyDecoder {
 			if(sampleRateHz+1d<bandwidth*2d)continue;
 			float[] working=resampleForDetection(iq,sampleRateHz,bandwidth*2d);
 			double rate=bandwidth*2d;
-			for(int sf=MIN_SF;sf<=MAX_SF;sf++)locks.addAll(findLocks(working,rate,bandwidth,sf,false));
+			List<Lock> normal=new ArrayList<Lock>();
+			for(int sf=MIN_SF;sf<=MAX_SF;sf++)normal.addAll(
+					findLocks(working,rate,bandwidth,sf,false));
+			locks.addAll(normal);
+			if(normal.isEmpty())for(int sf=MIN_SF;sf<=MAX_SF;sf++)locks.addAll(
+					findLocks(working,rate,bandwidth,sf,true));
 		}
 		Collections.sort(locks,new Comparator<Lock>(){
 			@Override public int compare(Lock a,Lock b){return Double.compare(b.quality,a.quality);}});
@@ -145,11 +152,13 @@ final class LoRaPhyDecoder {
 
 	String trace(float[] iq,double sampleRateHz,Lock lock){
 		float[] working=resampleForDetection(iq,sampleRateHz,lock.bandwidthHz*2d);
+		if(lock.inverted){working=working.clone();for(int n=1;n<working.length;n+=2)working[n]=-working[n];}
 		int size=(1<<lock.spreadingFactor)*2;
 		double[] downI=new double[size],downQ=new double[size],upI=new double[size],upQ=new double[size];
 		chirpReference(downI,downQ,lock.sampleRateHz,lock.bandwidthHz,lock.spreadingFactor,true);
 		chirpReference(upI,upQ,lock.sampleRateHz,lock.bandwidthHz,lock.spreadingFactor,false);
-		int signedBin=lock.preambleBin>size/2?lock.preambleBin-size:lock.preambleBin;
+		int preambleBin=lock.inverted?(size-lock.preambleBin)%size:lock.preambleBin;
+		int signedBin=preambleBin>size/2?preambleBin-size:preambleBin;
 		int aligned=Math.max(0,lock.startSample-2*signedBin);
 		StringBuilder out=new StringBuilder(String.format(Locale.US,"\n    coarse aligned %.3f ms",aligned*1000d/lock.sampleRateHz));
 		for(int n=0;n<18;n++){int at=lock.startSample+n*size;if(at+size>working.length/2)break;
@@ -318,8 +327,9 @@ final class LoRaPhyDecoder {
 			this.sampleRateHz=sampleRateHz;this.startSample=startSample;this.preambleBin=preambleBin;
 			this.quality=quality;this.inverted=inverted;}
 		@Override public String toString(){return String.format(Locale.US,
-				"BW %d kHz, SF%d, start %.3f ms, bin %d, peak %.1f",
-				bandwidthHz/1000,spreadingFactor,startSample*1000d/sampleRateHz,preambleBin,quality);}
+				"BW %d kHz, SF%d%s, start %.3f ms, bin %d, peak %.1f",
+				bandwidthHz/1000,spreadingFactor,inverted?", inverted":"",
+				startSample*1000d/sampleRateHz,preambleBin,quality);}
 	}
 	static final class Decoded{
 		final int bandwidthHz,spreadingFactor,codingRate,receivedCrc,calculatedCrc,netId1,netId2;

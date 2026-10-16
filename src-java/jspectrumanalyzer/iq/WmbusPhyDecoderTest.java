@@ -30,6 +30,7 @@ public final class WmbusPhyDecoderTest {
 		testStreamingWidebandChannelizer();
 		testDynamicArbitraryChannelizer();
 		testPolyphaseChannelizer();
+		testPolyphaseCompletedBurstQueue();
 		testCFormatB();
 		testTFormatA();
 		testTAt250kSampleRate();
@@ -37,6 +38,7 @@ public final class WmbusPhyDecoderTest {
 		testSFormatA();
 		testSAt250kSampleRate();
 		testSAtArbitraryWidebandOffset();
+		testDriftingDirectLseHca();
 		testAnalyzerPromotion();
 		testMeterTableGrouping();
 		testTableRowTints();
@@ -312,6 +314,21 @@ public final class WmbusPhyDecoderTest {
 		throw new AssertionError("PFB did not retain the arbitrary 867.42 MHz channel: "+captures.size());
 	}
 
+	private static void testPolyphaseCompletedBurstQueue(){
+		int rate=8_000_000;long center=866_500_000L,target=867_420_000L;
+		boolean[] pattern=new boolean[800];for(int n=0;n<pattern.length;n++)pattern[n]=(n&1)==0;
+		byte[] burst=modulate(pattern,rate,100_000,35_000,target-center,13772L);
+		IQPolyphaseChannelizer channelizer=new IQPolyphaseChannelizer(center,rate);
+		channelizer.accept(burst,burst.length);
+		channelizer.accept(new byte[(int)Math.round(rate*.030d)*2],(int)Math.round(rate*.030d)*2);
+		/* Reactivate the same coarse PFB channel before the GUI takes a snapshot.
+		 * The first completed burst must remain independently available. */
+		channelizer.accept(burst,burst.length);
+		for(IQDynamicChannelizer.Capture capture:channelizer.snapshotAndKeep())
+			if(capture.complete&&Math.abs(capture.frequencyHz-target)<60_000L)return;
+		throw new AssertionError("completed PFB burst was overwritten by a later burst");
+	}
+
 	private static void testCFormatB(){
 		byte[] clean=telegram(new byte[]{0x72,0x21,0x22,0x23,0x24});
 		boolean[] air=concat(bits(new byte[]{0x54,0x3d,0x54,0x3d}),bits(formatB(clean)));
@@ -392,6 +409,28 @@ public final class WmbusPhyDecoderTest {
 		assertIdentity(decoded,"S","A",clean);
 	}
 
+	private static void testDriftingDirectLseHca(){
+		byte[] clean=fromHex("26446532256158802C087A51040000046D260F4C3A0B6E507000426C3F3C4B6E456700326CFFFF");
+		boolean[] air=concat(bits(new byte[]{0x54,0x76,(byte)0x96}),manchester(bits(formatA(clean))));
+		byte[] burst=modulate(air,1_000_000,32_990,50_000,80586125L);
+		/* Reproduce the supplied capture: one short meter frame in almost a
+		 * second of IQ, with a clock outside the old +/-1500 ppm acquisition. */
+		byte[] sparse=new byte[1_900_000];System.arraycopy(burst,0,sparse,900_000,burst.length);
+		float[] baseband=new float[sparse.length];
+		for(int n=0;n<sparse.length;n++)baseband[n]=sparse[n]/128f;
+		List<WmbusPhyDecoder.Decoded> found=new WmbusPhyDecoder()
+				.decodeSBasebandAllClockTolerant(baseband,baseband.length/2,1_000_000d);
+		WmbusPhyDecoder.Decoded decoded=found.isEmpty()?WmbusPhyDecoder.Decoded.NONE:found.get(0);
+		valid(decoded,"direct drifting LSE HCA");equal("S",decoded.mode,"direct LSE mode");
+		equal("A",decoded.format,"direct LSE is not a forwarded frame");
+		equal("LSE",decoded.manufacturer,"direct LSE manufacturer");
+		equal("80586125",decoded.id,"direct LSE meter ID");
+		equal("heat cost allocator",decoded.deviceTypeName,"direct LSE device type");
+		equal("qcaloric",decoded.application.driver,"direct LSE driver");
+		equal("7050 HCA",decoded.application.currentReading,"direct LSE current reading");
+		equal("6745 HCA",decoded.application.previousReading,"direct LSE previous reading");
+	}
+
 	private static void testAnalyzerPromotion(){
 		byte[] clean=telegram(new byte[]{0x7a,0x51,0x52,0x53});
 		boolean[] air=concat(bits(new byte[]{0x54,0x3d,0x54,(byte)0xcd}),bits(formatA(clean)));
@@ -421,6 +460,12 @@ public final class WmbusPhyDecoderTest {
 		panel.observe(result(new Ism868SignalAnalyzer.Observation(868_950_000L,100_000,-40d,20d,
 				70d,"W-MBus C/T candidate","2-FSK","candidate","",false,5000L,"","")));
 		if(panel.signalCountForTest()!=4)throw new AssertionError("spectral candidate absorbed a decoded meter row");
+		Ism868SignalTablePanel promoted=new Ism868SignalTablePanel();
+		promoted.observe(result(new Ism868SignalAnalyzer.Observation(868_950_000L,100_000,-40d,20d,
+				70d,"W-MBus S candidate","Manchester FSK","candidate","",false,5000L,"","")));
+		promoted.observe(result(observation("W-MBus S","LSE","80586125",6000L)));
+		if(promoted.signalCountForTest()!=1)
+			throw new AssertionError("confirmed W-MBus row retained its earlier candidate alias");
 	}
 
 	private static void testTableRowTints(){
@@ -461,6 +506,24 @@ public final class WmbusPhyDecoderTest {
 				||restored.primarySortOrderForTest()!=javax.swing.SortOrder.DESCENDING)
 			throw new AssertionError("868 table sorting was not restored");
 		settings.delete();
+
+		java.io.File legacySettings=java.io.File.createTempFile("ism868-table-legacy-",".ini");
+		legacySettings.deleteOnExit();java.util.Properties legacy=new java.util.Properties();
+		legacy.setProperty("ism868.table.columnOrder",
+				"28,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,29,30,31,32,33,34");
+		legacy.setProperty("ism868.table.columnWidths",
+				"105,105,92,125,145,68,62,62,58,75,150,125,105,92,105,92,82,92,92,78,92,92,78,88,92,92,72,240,177,74,72,62,72,55,82");
+		legacy.setProperty("ism868.table.sortKeys","34:D");
+		try(java.io.FileOutputStream output=new java.io.FileOutputStream(legacySettings)){
+			legacy.store(output,"legacy 35-column layout");}
+		Ism868SignalTablePanel migrated=new Ism868SignalTablePanel(legacySettings);
+		migrated.restoreTableLayoutForTest();
+		if(migrated.viewColumnForTest("RSSI")!=0||migrated.columnWidthForTest("RSSI")!=177)
+			throw new AssertionError("legacy 868 table layout was not migrated");
+		if(!"Last seen".equals(migrated.primarySortColumnForTest())
+				||migrated.primarySortOrderForTest()!=javax.swing.SortOrder.DESCENDING)
+			throw new AssertionError("legacy 868 table sort index was not migrated");
+		legacySettings.delete();
 	}
 
 	private static void testAccessCounterRate(){
@@ -468,21 +531,30 @@ public final class WmbusPhyDecoderTest {
 		panel.observe(result(observationWithAccess(254,10_000L)));
 		panel.observe(result(observationWithAccess(254,10_200L))); // overlapping IQ window
 		panel.observe(result(observationWithAccess(255,20_000L)));
+		panel.observe(result(observationWithAccess(255,30_000L))); // real retransmission, unchanged AC
 		panel.observe(result(observationWithAccess(2,50_000L)));   // wrap and two missed frames
-		if(panel.seenForMeterForTest("TCH","54013334")!=3L)
-			throw new AssertionError("duplicate AC was counted as a new telegram");
+		if(panel.seenForMeterForTest("TCH","54013334")!=4L)
+			throw new AssertionError("Tx count did not distinguish overlap from repeated AC");
 		if(panel.missedForMeterForTest("TCH","54013334")!=2L)
 			throw new AssertionError("AC gaps were not counted across rollover");
-		double period=panel.periodForMeterForTest("TCH","54013334");
-		if(Math.abs(period-10d)>.0001d)throw new AssertionError("AC-corrected period "+period);
-		equal("10 s",Ism868SignalTablePanel.formatPeriodForTest(period),"seconds period formatting");
+		double txPeriod=panel.periodForMeterForTest("TCH","54013334");
+		if(Math.abs(txPeriod-40d/3d)>.0001d)throw new AssertionError("observed Tx period "+txPeriod);
+		double acPeriod=panel.acPeriodForMeterForTest("TCH","54013334");
+		if(Math.abs(acPeriod-10d)>.0001d)throw new AssertionError("AC-corrected period "+acPeriod);
+		equal("10 s",Ism868SignalTablePanel.formatPeriodForTest(acPeriod),"seconds period formatting");
 		equal("2 min 17 s",Ism868SignalTablePanel.formatPeriodForTest(137.4d),"minutes period formatting");
+		panel.refresh(result(observationWithAccess(2,50_000L)));
+		equal("13 s",panel.renderedCellForMeterForTest("54013334","Tx period"),"Tx period column");
+		equal("10 s",panel.renderedCellForMeterForTest("54013334","AC period"),"AC period column");
+		panel.moveColumnForTest("AC period",0);
+		equal("10 s",panel.renderedCellForMeterForTest("54013334","AC period"),
+				"moved AC period formatting");
 	}
 
 	private static void testSelectedMeterNotification(){
 		Ism868SignalTablePanel panel=new Ism868SignalTablePanel();panel.setAudibleNotificationsForTest(false);
 		Ism868SignalAnalyzer.Observation first=observationWithAccess(10,10_000L);
-		panel.observe(result(first));panel.refresh(result(first));panel.selectMeterForTest("54013334");
+		panel.observe(result(first));panel.refresh(result(first));panel.rightClickMeterForTest("54013334");
 		panel.observe(result(observationWithAccess(11,20_000L)));
 		panel.observe(result(observationWithAccess(11,20_200L)));
 		if(panel.notificationCountForTest()!=1L)
@@ -504,7 +576,7 @@ public final class WmbusPhyDecoderTest {
 		long seen=panel.lastSeenForProtocolForTest("SRD / rtl_433 candidate");
 		if(seen<before||seen>System.currentTimeMillis())
 			throw new AssertionError("868 last-seen used recording timestamp instead of table arrival");
-		panel.refresh(result);panel.selectProtocolForTest("SRD / rtl_433 candidate");
+		panel.refresh(result);panel.rightClickProtocolForTest("SRD / rtl_433 candidate");
 		panel.refresh(result);
 		if(!panel.protocolTrackedForTest("SRD / rtl_433 candidate"))
 			throw new AssertionError("tracked row highlight did not survive table refresh");
@@ -514,7 +586,7 @@ public final class WmbusPhyDecoderTest {
 		if(!new java.awt.Color(0xeeeeee).equals(panel.renderedBackgroundForProtocolForTest(
 				"SRD / rtl_433 candidate")))
 			throw new AssertionError("update flash obscured the tracked-row highlight");
-		if(panel.statusTextForTest().indexOf("Highlight a row")<0)
+		if(panel.statusTextForTest().indexOf("right-click a row")<0)
 			throw new AssertionError("tracking/chime help is missing from status line");
 	}
 

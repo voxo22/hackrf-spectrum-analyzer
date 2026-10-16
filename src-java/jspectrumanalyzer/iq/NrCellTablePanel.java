@@ -2,11 +2,14 @@ package jspectrumanalyzer.iq;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import javax.swing.BorderFactory;
 import javax.swing.JLabel;
@@ -16,6 +19,7 @@ import javax.swing.JTable;
 import javax.swing.SwingConstants;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.table.TableCellRenderer;
 
 /** Compact, session-scoped NR cell list. */
 final class NrCellTablePanel extends JPanel {
@@ -61,6 +65,10 @@ final class NrCellTablePanel extends JPanel {
 		for (int index = 0; index < COLUMNS.length; index++) {
 			table.getColumnModel().getColumn(index).setCellRenderer(centered);
 		}
+		TableCellRenderer wrapped = new WrapRenderer();
+		table.getColumnModel().getColumn(1).setCellRenderer(wrapped);
+		table.getColumnModel().getColumn(2).setCellRenderer(wrapped);
+		table.getColumnModel().getColumn(3).setCellRenderer(wrapped);
 		status.setBorder(BorderFactory.createEmptyBorder(3, 7, 3, 7));
 		status.setForeground(new Color(0xdddddd));
 		status.setBackground(Color.BLACK);
@@ -78,14 +86,14 @@ final class NrCellTablePanel extends JPanel {
 				? new ArrayList<NrSignalAnalyzer.Result>() : new ArrayList<NrSignalAnalyzer.Result>(values);
 		model.setRowCount(0);
 		for (NrSignalAnalyzer.Result cell : snapshot) {
-			String firstPlmn = cell.sib1.valid && !cell.sib1.plmns.isEmpty() ? cell.sib1.plmns.get(0) : WAIT;
+			String sib1Unavailable = cell.mib.valid && !cell.mib.hasType0PdcchCss()
+					? "not broadcast" : WAIT;
 			String plmn = cell.sib1.valid && !cell.sib1.plmns.isEmpty()
-					? String.join(", ", cell.sib1.plmns) : WAIT;
-			String[] key = firstPlmn.split("-", 2);
-			PlmnDatabase.Entry network = key.length == 2 ? PlmnDatabase.lookup(key[0], key[1]) : null;
+					? String.join("\n", cell.sib1.plmns) : sib1Unavailable;
+			List<PlmnDatabase.Entry> networks = networks(cell.sib1.plmns);
 			model.addRow(new Object[] {
-					cell.pci, plmn, network == null ? WAIT : network.country,
-					network == null ? WAIT : network.networkName(),
+					cell.pci, plmn, cell.sib1.valid ? countries(networks) : sib1Unavailable,
+					cell.sib1.valid ? networkNames(networks) : sib1Unavailable,
 					cell.sib1.valid ? cell.sib1.trackingAreaCode : WAIT,
 					cell.sib1.valid ? cell.sib1.cellIdentity : WAIT,
 					cell.sib1.valid && cell.sib1.channelBandwidthMhz > 0
@@ -101,7 +109,7 @@ final class NrCellTablePanel extends JPanel {
 					cell.candidates.isEmpty() ? WAIT
 							: String.format(Locale.US, "%+.0f Hz", cell.candidates.get(0).cfoHz),
 					cell.mib.valid ? "OK" : WAIT,
-					cell.sib1.valid ? "OK" : WAIT
+					cell.sib1.valid ? "OK" : sib1Unavailable
 			});
 		}
 		if (model.getRowCount() > 0) {
@@ -115,13 +123,16 @@ final class NrCellTablePanel extends JPanel {
 			int viewRow = table.convertRowIndexToView(modelRow);
 			if (viewRow >= 0) table.setRowSelectionInterval(viewRow, viewRow);
 		}
-		boolean mib = false, sib1 = false;
+		boolean mib = false, sib1 = false, noLocalSib1 = !snapshot.isEmpty();
 		for (NrSignalAnalyzer.Result cell : snapshot) {
 			mib |= cell.mib.valid;
 			sib1 |= cell.sib1.valid;
+			noLocalSib1 &= cell.mib.valid && !cell.mib.hasType0PdcchCss();
 		}
 		status.setText(snapshot.size() + " 5G NR cell" + (snapshot.size() == 1 ? "" : "s")
-				+ " - MIB " + (mib ? "OK" : "waiting") + " - SIB1 " + (sib1 ? "OK" : "waiting"));
+				+ " - MIB " + (mib ? "OK" : "waiting") + " - SIB1 "
+				+ (sib1 ? "OK" : noLocalSib1 ? "not broadcast" : "waiting"));
+		resizeRows();
 	}
 
 	int selectedPci() {
@@ -129,6 +140,68 @@ final class NrCellTablePanel extends JPanel {
 		if (viewRow < 0) return -1;
 		Object value = model.getValueAt(table.convertRowIndexToModel(viewRow), 0);
 		return value instanceof Number ? ((Number)value).intValue() : -1;
+	}
+
+	private static List<PlmnDatabase.Entry> networks(List<String> plmns) {
+		List<PlmnDatabase.Entry> result = new ArrayList<PlmnDatabase.Entry>();
+		for (String plmn : plmns) {
+			String[] key = plmn.split("-", 2);
+			result.add(key.length == 2 ? PlmnDatabase.lookup(key[0], key[1]) : null);
+		}
+		return result;
+	}
+
+	private static String countries(List<PlmnDatabase.Entry> networks) {
+		Set<String> values = new LinkedHashSet<String>();
+		for (PlmnDatabase.Entry network : networks) {
+			if (network != null && network.country.length() > 0) values.add(network.country);
+		}
+		return values.isEmpty() ? WAIT : String.join("\n", values);
+	}
+
+	private static String networkNames(List<PlmnDatabase.Entry> networks) {
+		List<String> values = new ArrayList<String>();
+		for (PlmnDatabase.Entry network : networks) {
+			values.add(network == null ? WAIT : network.networkName());
+		}
+		return values.isEmpty() ? WAIT : String.join("\n", values);
+	}
+
+	private void resizeRows() {
+		for (int row = 0; row < table.getRowCount(); row++) {
+			int height = 23;
+			for (int column = 1; column <= 3; column++) {
+				TableCellRenderer renderer = table.getCellRenderer(row, column);
+				Component component = table.prepareRenderer(renderer, row, column);
+				height = Math.max(height, component.getPreferredSize().height + 2);
+			}
+			if (table.getRowHeight(row) != height) table.setRowHeight(row, height);
+		}
+	}
+
+	private static final class WrapRenderer extends DefaultTableCellRenderer {
+		WrapRenderer() {
+			setOpaque(true);
+			setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
+			setHorizontalAlignment(SwingConstants.CENTER);
+			setVerticalAlignment(SwingConstants.CENTER);
+		}
+
+		@Override
+		public Component getTableCellRendererComponent(JTable table, Object value,
+				boolean selected, boolean focus, int row, int column) {
+			super.getTableCellRendererComponent(table, value, selected, focus, row, column);
+			setText("<html><center>" + html(value == null ? "" : value.toString()).replace("\n", "<br>")
+					+ "</center></html>");
+			setForeground(selected ? table.getSelectionForeground() : table.getForeground());
+			setBackground(selected ? table.getSelectionBackground() : table.getBackground());
+			setFont(table.getFont());
+			return this;
+		}
+	}
+
+	private static String html(String value) {
+		return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
 	}
 
 	private static String joinBands(List<Integer> bands) {

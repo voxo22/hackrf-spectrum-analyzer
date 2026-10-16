@@ -14,12 +14,28 @@ public final class LoRaPhyDecoderTest {
 		check(fields.isLoRaWan(),"LoRaWAN recognition");equal("DEACF0A4",fields.deviceId(),"DevAddr");
 		check(fields.summary().contains("FCnt=74"),"frame counter");
 		check(fields.summary().contains("FPort=1"),"FPort");
+		testInvertedPreambleAcquisition();
 
 		File sample=new File("867900000Hz_LoRa_500k.wav");
 		if(sample.isFile())testRecording(sample);
 		File wideband=new File("868250000Hz_LoRa_8.wav");
 		if(wideband.isFile())testWidebandRecording(wideband);
 		System.out.println("LoRaPhyDecoderTest: OK");
+	}
+
+	private static void testInvertedPreambleAcquisition(){
+		int bandwidth=125_000,sf=7,chips=1<<sf,symbolSamples=chips*2,symbols=8;
+		double rate=bandwidth*2d,duration=chips/(double)bandwidth;
+		float[] iq=new float[symbolSamples*symbols*2];
+		for(int symbol=0;symbol<symbols;symbol++)for(int n=0;n<symbolSamples;n++){
+			double t=n/rate;
+			double phase=2d*Math.PI*(bandwidth/2d*t-.5d*bandwidth/duration*t*t);
+			int at=(symbol*symbolSamples+n)*2;iq[at]=(float)Math.cos(phase);
+			iq[at+1]=(float)Math.sin(phase);
+		}
+		boolean inverted=false;for(LoRaPhyDecoder.Lock lock:new LoRaPhyDecoder().findLocks(iq,rate))
+			if(lock.bandwidthHz==bandwidth&&lock.spreadingFactor==sf&&lock.inverted)inverted=true;
+		check(inverted,"inverted LoRa preamble acquisition");
 	}
 
 	private static void testRecording(File sample)throws Exception{

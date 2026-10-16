@@ -304,7 +304,7 @@ final class NrSignalAnalyzer {
 			if (decoded.crcOk) break;
 		}
 		result = result.withPbch(bestPbch);
-		if (decodePdcch && bestPbch.mib.valid
+		if (decodePdcch && bestPbch.mib.hasType0PdcchCss()
 				&& (!fastPdcchOnly || fastPdcchSupported(result, bestPbch.mib))) {
 			result = result.withPdcch(NrPdcchDecoder.survey(inI, inQ, result, bestPbch.mib));
 			result.load = estimateDownlinkLoad(inI, inQ, result);
@@ -313,6 +313,7 @@ final class NrSignalAnalyzer {
 	}
 
 	private static boolean fastPdcchSupported(PssSurveyCandidate candidate, MibData mib) {
+		if (!mib.hasType0PdcchCss()) return false;
 		int coreSetIndex = (mib.pdcchConfigSib1 >>> 4) & 15;
 		int searchSpaceIndex = mib.pdcchConfigSib1 & 15;
 		if (candidate.ssbSubcarrierSpacingKhz == 15 && mib.subcarrierSpacingCommonKhz == 15)
@@ -673,6 +674,8 @@ final class NrSignalAnalyzer {
 		Sib1Data sib1 = pdcch.pdsch.transportBlock.crcOk
 				? NrSib1Decoder.decode(pdcch.pdsch.transportBlock.payload) : Sib1Data.EMPTY;
 		String state = sib1.valid ? "5G NR SIB1 decoded"
+				: surveyPrimary.mib.valid && !surveyPrimary.mib.hasType0PdcchCss()
+						? "5G NR MIB decoded - no SIB1 on this SSB"
 				: surveyPrimary.mib.valid ? "5G NR MIB decoded"
 				: detected && surveyPrimary.dmrsConfirmed ? "5G NR PCI confirmed by PBCH DM-RS"
 				: detected ? "5G NR PSS + SSS decoded"
@@ -1406,6 +1409,10 @@ final class NrSignalAnalyzer {
 			this.pdcchConfigSib1 = pdcchConfigSib1;
 			this.cellBarred = cellBarred;
 			this.intraFrequencyReselection = intraFrequencyReselection;
+		}
+		/** TS 38.213 clause 4.1: FR1 kSSB values 24..31 signal no local Type-0 CSS. */
+		boolean hasType0PdcchCss() {
+			return valid && ssbSubcarrierOffset >= 0 && ssbSubcarrierOffset < 24;
 		}
 	}
 

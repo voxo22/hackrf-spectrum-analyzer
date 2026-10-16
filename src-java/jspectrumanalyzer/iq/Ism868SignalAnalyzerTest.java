@@ -22,6 +22,7 @@ public final class Ism868SignalAnalyzerTest {
 		testDcSpikeSuppression();
 		testDynamicChannelPromotion();
 		testProtocolDispatcherProfiles();
+		testCompletedBurstsAreNotDeduplicated();
 
 		Ism868SignalAnalyzer.Result outside = new Ism868SignalAnalyzer().analyze(
 				433_920_000L, 1_000_000, iq, iq.length, 1234L);
@@ -98,6 +99,17 @@ public final class Ism868SignalAnalyzerTest {
 				Collections.singletonList(css),1_000L).get(0);
 		if(!"LoRa candidate".equals(routed.protocol)||!"LoRa".equals(routed.decoder)||!routed.decoderEligible)
 			throw new AssertionError("CSS was not routed to LoRa: "+routed.protocol+" / "+routed.decoder);
+	}
+
+	private static void testCompletedBurstsAreNotDeduplicated(){
+		final double rate=250_000d;float[] waveform=fsk(rate,10_000d,20_000d,12_000);
+		IQDynamicChannelizer.Capture first=new IQDynamicChannelizer.Capture(868_300_000L,100_000,
+				-45d,12d,rate,waveform);
+		IQDynamicChannelizer.Capture second=new IQDynamicChannelizer.Capture(868_300_000L,100_000,
+				-35d,22d,rate,waveform);
+		java.util.List<Ism868ProtocolDispatcher.Dispatch> routed=new Ism868ProtocolDispatcher().dispatch(
+				java.util.Arrays.asList(first,second),1_000L);
+		if(routed.size()!=2)throw new AssertionError("completed same-frequency bursts were merged");
 	}
 
 	private static float[] fsk(double rate,double symbols,double deviation,int samples){

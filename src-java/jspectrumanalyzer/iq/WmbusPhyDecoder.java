@@ -16,6 +16,11 @@ final class WmbusPhyDecoder {
 	static final int CT_OCCUPIED_BANDWIDTH = 240_000;
 	static final int S_OCCUPIED_BANDWIDTH = 150_000;
 	private static final int MAX_FRAME_BYTES = 300;
+	private static final int[] NORMAL_CLOCK_PPM={0,-750,750,-1500,1500};
+	/* The supplied LSE HCA capture runs about +6.75 kppm from the nominal
+	 * 32.768 kchip/s clock.  rtl_433's edge slicer follows that drift; the
+	 * integrate-and-dump receiver has to acquire it explicitly. */
+	private static final int[] S_CLOCK_PPM={0,-750,750,-1500,1500,7500,-7500};
 	private static final int[] THREE_OF_SIX = {
 		0x16,0x0d,0x0e,0x0b,0x1c,0x19,0x1a,0x13,
 		0x2c,0x25,0x26,0x23,0x34,0x31,0x32,0x29
@@ -44,11 +49,15 @@ final class WmbusPhyDecoder {
 	}
 
 	List<Decoded> decodeCtBasebandAll(float[] iq,int samples,double sampleRateHz){
-		return decodeBasebandAll(iq,samples,sampleRateHz,CT_BIT_RATE,false);
+		return decodeBasebandAll(iq,samples,sampleRateHz,CT_BIT_RATE,false,false);
 	}
 
 	List<Decoded> decodeSBasebandAll(float[] iq,int samples,double sampleRateHz){
-		return decodeBasebandAll(iq,samples,sampleRateHz,S_CHIP_RATE,true);
+		return decodeBasebandAll(iq,samples,sampleRateHz,S_CHIP_RATE,true,false);
+	}
+
+	List<Decoded> decodeSBasebandAllClockTolerant(float[] iq,int samples,double sampleRateHz){
+		return decodeBasebandAll(iq,samples,sampleRateHz,S_CHIP_RATE,true,true);
 	}
 
 	private static Decoded decodeChannel(long centerFrequencyHz, int sampleRateHz, byte[] iq,
@@ -65,7 +74,7 @@ final class WmbusPhyDecoder {
 				channelFrequencyHz,sMode?S_OCCUPIED_BANDWIDTH:CT_OCCUPIED_BANDWIDTH);
 		if(demodulated.length<128)return Decoded.NONE;
 		for(int nominalRate:bitRates){
-			for(int ppm:new int[]{0,-750,750,-1500,1500}){
+			for(int ppm:sMode?S_CLOCK_PPM:NORMAL_CLOCK_PPM){
 				double bitRate=nominalRate*(1d+ppm/1_000_000d);
 				double samplesPerBit=demodulated.rate/bitRate;
 				int phases=Math.max(1,(int)Math.ceil(samplesPerBit));
@@ -94,20 +103,24 @@ final class WmbusPhyDecoder {
 		int inputSamples=Math.min(length,iq.length)/2;if(inputSamples<256)return empty;
 		Demodulated demodulated=demodulate(centerFrequencyHz,sampleRateHz,iq,inputSamples,
 				channelFrequencyHz,sMode?S_OCCUPIED_BANDWIDTH:CT_OCCUPIED_BANDWIDTH);
-		return decodeDemodulatedAll(demodulated,bitRate,sMode);
+		/* The ordinary replay/live path must stay bounded.  Large clock-error and
+		 * burst-local threshold searches are reserved for a positively routed,
+		 * completed S-mode capture (decodeSBasebandAllClockTolerant). */
+		return decodeDemodulatedAll(demodulated,bitRate,sMode,false);
 	}
 
 	private static List<Decoded> decodeBasebandAll(float[] iq,int samples,double sampleRateHz,
-			int bitRate,boolean sMode){
+			int bitRate,boolean sMode,boolean clockTolerant){
 		if(iq==null||samples<128||sampleRateHz<=0d)return new ArrayList<Decoded>();
 		return decodeDemodulatedAll(demodulate(iq,Math.min(samples,iq.length/2),sampleRateHz),
-				bitRate,sMode);
+				bitRate,sMode,clockTolerant);
 	}
 
-	private static List<Decoded> decodeDemodulatedAll(Demodulated demodulated,int bitRate,boolean sMode){
+	private static List<Decoded> decodeDemodulatedAll(Demodulated demodulated,int bitRate,boolean sMode,
+			boolean clockTolerant){
 		if(demodulated.length<128)return new ArrayList<Decoded>();
 		LinkedHashMap<String,Decoded> unique=new LinkedHashMap<String,Decoded>();
-		int[] ppmValues={0,-750,750,-1500,1500};
+		int[] ppmValues=sMode&&clockTolerant?S_CLOCK_PPM:NORMAL_CLOCK_PPM;
 		for(int ppmIndex=0;ppmIndex<ppmValues.length;ppmIndex++){
 			double actualRate=bitRate*(1d+ppmValues[ppmIndex]/1_000_000d);
 			double samplesPerBit=demodulated.rate/actualRate;
@@ -122,12 +135,47 @@ final class WmbusPhyDecoder {
 							:searchCtAll(hardBits(soft,threshold,true)),demodulated,phase,samplesPerBit);
 				}
 			}
+			/* A single S-mode meter telegram can occupy less than a tenth of a long
+			 * replay/live history.  Its two FSK levels then disappear in the global
+			 * discriminator quantiles.  Retry nominal timing with overlapping local
+			 * windows, equivalent to deriving the slicer threshold from the burst. */
+			if(sMode&&clockTolerant&&unique.isEmpty()
+					&&(ppmIndex==0||Math.abs(ppmValues[ppmIndex])>=6000))
+					for(int phase=0;phase<phases;phase++){
+				double[] soft=softBits(demodulated,phase,samplesPerBit);
+				collectSWindows(unique,soft,demodulated,phase,samplesPerBit);
+			}
 			/* Nominal timing decodes every standards-compliant transmitter and is
 			 * substantially cheaper.  Alternate rates are a fallback for captures
 			 * whose sample clock metadata is inaccurate. */
 			if(ppmIndex==0&&!unique.isEmpty())break;
 		}
 		return new ArrayList<Decoded>(unique.values());
+	}
+
+	private static void collectSWindows(LinkedHashMap<String,Decoded> unique,double[] soft,
+			Demodulated demodulated,int phase,double samplesPerBit){
+		final int window=4096,step=window/2,minimum=24+12*2*8;
+		if(soft.length<minimum)return;
+		for(int start=0;;start+=step){
+			int end=Math.min(soft.length,start+window);
+			if(end-start<minimum){start=Math.max(0,soft.length-window);end=soft.length;}
+			double[] local=Arrays.copyOfRange(soft,start,end);
+			for(double threshold:thresholds(local)){
+				collectShifted(unique,searchSAll(hardBits(local,threshold,false)),start,
+						demodulated,phase,samplesPerBit);
+				collectShifted(unique,searchSAll(hardBits(local,threshold,true)),start,
+						demodulated,phase,samplesPerBit);
+			}
+			if(end==soft.length)break;
+		}
+	}
+
+	private static void collectShifted(LinkedHashMap<String,Decoded> unique,List<Found> decoded,
+			int bitShift,Demodulated demodulated,int phase,double samplesPerBit){
+		List<Found> shifted=new ArrayList<Found>(decoded.size());
+		for(Found value:decoded)shifted.add(new Found(value.decoded,value.bitOffset+bitShift));
+		collect(unique,shifted,demodulated,phase,samplesPerBit);
 	}
 
 	private static void collect(LinkedHashMap<String,Decoded> unique,List<Found> decoded,

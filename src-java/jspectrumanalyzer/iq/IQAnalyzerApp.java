@@ -658,6 +658,7 @@ public class IQAnalyzerApp {
 				new SignalTestOption("UMTS 3G"),
 				new SignalTestOption("LTE 4G"),
 				new SignalTestOption("NR 5G"),
+				new SignalTestOption("Bluetooth"),
 				new SignalTestOption("Wi-Fi")
 		});
 		signalTestCombo.addActionListener(e -> applySignalTestPreset());
@@ -1198,7 +1199,7 @@ public class IQAnalyzerApp {
 		SignalTestOption option = signalTestCombo == null ? null
 				: (SignalTestOption) signalTestCombo.getSelectedItem();
 		if (option == null) return;
-		if (option.label.startsWith("Wi-Fi")) {
+		if (option.label.startsWith("Wi-Fi") || option.label.startsWith("Bluetooth")) {
 			if (dcOffsetEnableCheck != null) dcOffsetEnableCheck.setSelected(false);
 			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
 			return;

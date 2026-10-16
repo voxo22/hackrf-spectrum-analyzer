@@ -2995,7 +2995,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			replayDirectory = new File(".");
 		JFileChooser chooser = new JFileChooser(replayDirectory);
 		chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
-				"HackRF replay (*.hsr, *.wav, *.pcm, *.cu8)", "hsr", "wav", "pcm", "cu8"));
+				"HackRF replay (*.hsr, *.wav, *.pcm, *.cu8, *.cs8)", "hsr", "wav", "pcm", "cu8", "cs8"));
 		int result = chooser.showOpenDialog(uiFrame);
 		if (result != JFileChooser.APPROVE_OPTION) {
 			parameterIsPlayingSpectrum.setValue(false);
@@ -3102,9 +3102,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			return ReplayType.DATA;
 		if (name.endsWith(".wav"))
 			return ReplayType.WAV;
-		if (name.endsWith(".pcm") || name.endsWith(".cu8"))
+		if (name.endsWith(".pcm") || name.endsWith(".cu8") || name.endsWith(".cs8"))
 			return ReplayType.RAW;
-		throw new IOException("Unsupported replay file extension; expected .hsr, .wav, .pcm, or .cu8");
+		throw new IOException("Unsupported replay file extension; expected .hsr, .wav, .pcm, .cu8, or .cs8");
 	}
 
 	private void playIqRecording(File file) throws IOException, InterruptedException {

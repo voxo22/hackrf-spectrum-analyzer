@@ -1,6 +1,7 @@
 package jspectrumanalyzer.iq;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
@@ -17,6 +18,7 @@ final class IQPolyphaseChannelizer {
 	private static final double BURST_END_SILENCE_SECONDS=.020d;
 	private static final int MAX_EXTENDED_CHANNELS=8;
 	private static final int MAX_CAPTURES=8;
+	private static final int MAX_COMPLETED_CAPTURES=64;
 	private static final double DC_TRACKING_ALPHA=1d/4096d;
 	private final long centerHz;
 	private final int inputRateHz,channels;
@@ -24,6 +26,8 @@ final class IQPolyphaseChannelizer {
 	private final double[] taps,historyI,historyQ,phaseI,phaseQ,powerSum,powerNow,sortedPower;
 	private final double[] fftStepReal,fftStepImag;
 	private final Channel[] output;
+	private final ArrayDeque<IQDynamicChannelizer.Capture> completedCaptures=
+			new ArrayDeque<IQDynamicChannelizer.Capture>();
 	private int historyAt,inputPhase,powerSamples;
 	private long outputSamples;
 	private double noisePower;
@@ -57,20 +61,38 @@ final class IQPolyphaseChannelizer {
 	}
 
 	synchronized List<IQDynamicChannelizer.Capture> snapshotAndKeep(){
-		List<IQDynamicChannelizer.Capture> captures=new ArrayList<IQDynamicChannelizer.Capture>();
-		for(Channel channel:output)if(channel.changed){float[] iq=channel.capture();channel.changed=false;
-			long iqCenter=physicalChannelCenter(channel,iq);
-			long frequency=refinedFrequency(iqCenter,iq);
-			if(iq.length>0&&frequency>=Ism868SignalAnalyzer.BAND_START_HZ&&
-					frequency<=Ism868SignalAnalyzer.BAND_END_HZ)
-				captures.add(new IQDynamicChannelizer.Capture(frequency,iqCenter,
-					(int)Math.round(outputRateHz*.90d),channel.levelDbfs,channel.snrDb,outputRateHz,iq,
-					!channel.active));}
-		Collections.sort(captures,new Comparator<IQDynamicChannelizer.Capture>(){
+		/* Completed bursts are frozen at their falling edge.  A busy GUI may not
+		 * take a snapshot before another burst activates the same coarse PFB bin;
+		 * keeping them separately prevents that later burst from turning the old
+		 * capture back into an incomplete, merged stream. */
+		List<IQDynamicChannelizer.Capture> captures=
+				new ArrayList<IQDynamicChannelizer.Capture>(completedCaptures);
+		completedCaptures.clear();
+		List<IQDynamicChannelizer.Capture> live=new ArrayList<IQDynamicChannelizer.Capture>();
+		for(Channel channel:output)if(channel.changed){
+			IQDynamicChannelizer.Capture capture=snapshot(channel,!channel.active);channel.changed=false;
+			if(capture!=null)live.add(capture);}
+		Collections.sort(live,new Comparator<IQDynamicChannelizer.Capture>(){
 			@Override public int compare(IQDynamicChannelizer.Capture a,IQDynamicChannelizer.Capture b){
 				return Double.compare(b.snrDb,a.snrDb);}});
-		return captures.size()<=MAX_CAPTURES?captures:
-				new ArrayList<IQDynamicChannelizer.Capture>(captures.subList(0,MAX_CAPTURES));
+		captures.addAll(live.size()<=MAX_CAPTURES?live:live.subList(0,MAX_CAPTURES));
+		return captures;
+	}
+
+	private IQDynamicChannelizer.Capture snapshot(Channel channel,boolean complete){
+		float[] iq=channel.capture();if(iq.length==0)return null;
+		long iqCenter=physicalChannelCenter(channel,iq),frequency=refinedFrequency(iqCenter,iq);
+		if(frequency<Ism868SignalAnalyzer.BAND_START_HZ||frequency>Ism868SignalAnalyzer.BAND_END_HZ)
+			return null;
+		return new IQDynamicChannelizer.Capture(frequency,iqCenter,
+				(int)Math.round(outputRateHz*.90d),channel.levelDbfs,channel.snrDb,outputRateHz,iq,complete);
+	}
+
+	private void freezeCompleted(Channel channel){
+		IQDynamicChannelizer.Capture capture=snapshot(channel,true);channel.changed=false;
+		if(capture==null)return;
+		while(completedCaptures.size()>=MAX_COMPLETED_CAPTURES)completedCaptures.removeFirst();
+		completedCaptures.addLast(capture);
 	}
 
 	boolean matches(long centerHz,int sampleRateHz){return this.centerHz==centerHz&&inputRateHz==sampleRateHz;}
@@ -107,7 +129,7 @@ final class IQPolyphaseChannelizer {
 				/* Publish once more after the carrier disappears.  Long frames (LoRa
 				 * SF12) and burst classifiers need the completed capture, not merely
 				 * the last 250 ms UI snapshot taken while it was still arriving. */
-				channel.active=false;channel.changed=true;
+				channel.active=false;freezeCompleted(channel);
 			}}
 	}
 

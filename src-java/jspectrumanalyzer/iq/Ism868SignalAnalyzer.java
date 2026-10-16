@@ -100,7 +100,7 @@ final class Ism868SignalAnalyzer {
 			if (observation != null) observations.add(observation);
 		}
 		if(channelized!=null)for(Ism868ProtocolDispatcher.Dispatch dispatch:
-				protocolDispatcher.dispatch(channelized.dynamic,captureMillis))
+				protocolDispatcher.dispatch(channelized.dynamic,captureMillis,channelized.exhaustive))
 			mergeDynamicChannel(observations,dispatch,captureMillis);
 		/* Do not gate protocol acquisition on the FFT candidates. A short meter
 		 * burst can fall between the selected FFT windows, while a valid PHY sync
@@ -151,14 +151,20 @@ final class Ism868SignalAnalyzer {
 	static final class ChannelizedWmbus{
 		final float[] ctIq,sIq;final double ctRateHz,sRateHz;
 		final List<IQDynamicChannelizer.Capture> dynamic;
+		final boolean exhaustive;
 		ChannelizedWmbus(float[] ctIq,double ctRateHz,float[] sIq,double sRateHz){
 			this(ctIq,ctRateHz,sIq,sRateHz,Collections.<IQDynamicChannelizer.Capture>emptyList());
 		}
 		ChannelizedWmbus(float[] ctIq,double ctRateHz,float[] sIq,double sRateHz,
 				List<IQDynamicChannelizer.Capture> dynamic){
+			this(ctIq,ctRateHz,sIq,sRateHz,dynamic,false);
+		}
+		ChannelizedWmbus(float[] ctIq,double ctRateHz,float[] sIq,double sRateHz,
+				List<IQDynamicChannelizer.Capture> dynamic,boolean exhaustive){
 			this.ctIq=ctIq==null?new float[0]:ctIq;this.ctRateHz=ctRateHz;
 			this.sIq=sIq==null?new float[0]:sIq;this.sRateHz=sRateHz;
 			this.dynamic=dynamic==null?Collections.<IQDynamicChannelizer.Capture>emptyList():dynamic;
+			this.exhaustive=exhaustive;
 		}
 	}
 
@@ -168,6 +174,19 @@ final class Ism868SignalAnalyzer {
 		if(dispatch.decoderEligible){
 			boolean confirmed=false,routedLoRa="LoRa".equals(dispatch.decoder);
 			double captureSeconds=capture.iq.length/2d/capture.sampleRateHz;
+			/* This fallback is intentionally narrow and one-shot.  It exists for the
+			 * LSE waveform whose clock is about 6.75 kppm high and whose PFB-edge
+			 * image profiles as half-rate CSS.  Running it on growing or ordinary
+			 * FSK captures starves the normal C/T/S receiver. */
+			if("W-MBus S clock-drift".equals(dispatch.decoder)&&capture.complete
+					&&captureSeconds>=.03d&&captureSeconds<=.45d){
+				float[] centered=recenter(capture.iq,capture.sampleRateHz,
+						capture.frequencyHz-capture.iqCenterFrequencyHz);
+				for(WmbusPhyDecoder.Decoded decoded:wmbusDecoder.decodeSBasebandAllClockTolerant(centered,
+						centered.length/2,capture.sampleRateHz)){
+					confirmWmbus(observations,decoded,capture.frequencyHz,captureMillis);confirmed=true;}
+				if(confirmed)return;
+			}
 			boolean suspiciousWideFsk="FSK".equals(dispatch.profile.modulation)&&captureSeconds>=.25d
 					&&capture.snrDb>=10d&&dispatch.profile.occupiedBandwidthHz>capture.bandwidthHz*1.05d;
 			if(routedLoRa||suspiciousWideFsk){long lockKey=Math.round(capture.iqCenterFrequencyHz/25_000d);
@@ -222,6 +241,23 @@ final class Ism868SignalAnalyzer {
 			long tolerance=Math.max(25_000L,Math.max(old.bandwidthHz,capture.bandwidthHz)/2L);
 			if(next<=tolerance&&next<distance){best=n;distance=next;}}
 		if(best<0)observations.add(streamed);else observations.set(best,streamed);
+	}
+
+	private static float[] recenter(float[] iq,double sampleRateHz,double offsetHz){
+		if(iq==null||iq.length<2||sampleRateHz<=0d||Math.abs(offsetHz)<1d)return iq;
+		float[] shifted=new float[iq.length];double angle=-2d*Math.PI*offsetHz/sampleRateHz;
+		double stepCos=Math.cos(angle),stepSin=Math.sin(angle),oscillatorCos=1d,oscillatorSin=0d;
+		for(int sample=0;sample<iq.length/2;sample++){
+			double sourceI=iq[sample*2],sourceQ=iq[sample*2+1];
+			shifted[sample*2]=(float)(sourceI*oscillatorCos-sourceQ*oscillatorSin);
+			shifted[sample*2+1]=(float)(sourceI*oscillatorSin+sourceQ*oscillatorCos);
+			double nextCos=oscillatorCos*stepCos-oscillatorSin*stepSin;
+			oscillatorSin=oscillatorSin*stepCos+oscillatorCos*stepSin;oscillatorCos=nextCos;
+			if((sample&0x3fff)==0){double magnitude=Math.sqrt(oscillatorCos*oscillatorCos
+					+oscillatorSin*oscillatorSin);if(magnitude>0d){oscillatorCos/=magnitude;
+					oscillatorSin/=magnitude;}}
+		}
+		return shifted;
 	}
 
 	private static boolean hasLoraCandidate(List<Observation> observations){

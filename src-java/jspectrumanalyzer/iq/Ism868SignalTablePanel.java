@@ -43,19 +43,24 @@ import javax.swing.table.TableColumn;
 
 /** Session-scoped list of RF activity and CRC-verified packets in ISM 868. */
 final class Ism868SignalTablePanel extends JPanel {
-	private static final String TRACKING_HELP="Highlight a row to track it; its updates play a chime.";
+	private static final String TRACKING_HELP="Tracking: right-click a row to enable its chime; right-click it again to disable tracking.";
 	private static final long UPDATE_FLASH_MILLIS=300L;
 	private static final Color UPDATE_FLASH_COLOR=new Color(0x777777);
 	private static final Color TRACKED_BACKGROUND=new Color(0xeeeeee);
+	private static final Color HEADER_BG=new Color(0x202020),HEADER_FG=Color.WHITE,HEADER_BORDER=new Color(0x555555);
+	private static final Color[] SORT_HEADER_BACKGROUNDS={new Color(0x17627d),new Color(0x4b557c),new Color(0x685076)};
 	private static final File DEFAULT_SETTINGS_FILE=new File("hackrf-iq-analyzer.ini");
 	private static final String LAYOUT_PREFIX="ism868.table.";
+	private static final int AC_PERIOD_COLUMN=33;
+	private static final int LEGACY_COLUMN_COUNT=35;
 	private static final String[] COLUMNS = {
 			"Frequency", "Meter ID", "Manufacturer", "Protocol / mode", "Device / medium",
 			"Version", "C", "CI", "AC", "Frame", "Security", "Driver",
 			"Current reading", "Current date", "Previous reading", "Previous date",
 			"Room temp", "Radiator temp", "Temperature", "Humidity", "Wind avg",
 			"Wind gust", "Wind dir", "Rain", "UV / UVI", "Light", "Battery",
-			"Decoded values", "RSSI", "SNR", "Received", "Missed", "Tx period", "CRC", "Last seen"
+			"Decoded values", "RSSI", "SNR", "Received", "Missed", "Tx period", "AC period",
+			"CRC", "Last seen"
 	};
 	private final List<Signal> signals = new ArrayList<Signal>();
 	private final List<Long> displayedRowKeys=new ArrayList<Long>();
@@ -64,20 +69,22 @@ final class Ism868SignalTablePanel extends JPanel {
 		@Override public Class<?> getColumnClass(int column) {
 			switch (column) {
 			case 0: return Long.class;
-			case 28: case 29: case 32: return Double.class;
-			case 30: case 31: case 34: return Long.class;
+			case 28: case 29: case 32: case 33: return Double.class;
+			case 30: case 31: case 35: return Long.class;
 			default: return String.class;
 			}
 		}
 	};
 	private final JTable table = new JTable(model);
 	private final JLabel status = new JLabel("Waiting for 863-870 MHz IQ samples...");
+	private final JLabel sortHint=new JLabel("Sort: click a column to add/prioritize; right-click a sorted column to remove it; right-click an unsorted column to clear sorting.");
 	private final JLabel trackingHelp=new JLabel(TRACKING_HELP);
 	private volatile Set<Long> selectedSignalKeys=Collections.emptySet();
 	private final ConcurrentHashMap<Long,Long> flashUntil=new ConcurrentHashMap<Long,Long>();
 	private final File tableSettingsFile;
 	private final Timer layoutSaveTimer;
 	private boolean rebuildingTable;
+	private boolean headerPopupHandled,rowPopupHandled;
 	private boolean layoutPersistenceInstalled,restoringTableLayout;
 	private volatile boolean audibleNotifications=true;
 	private long notificationCount,updateFlashCount,nextSignalKey=1L;
@@ -92,36 +99,27 @@ final class Ism868SignalTablePanel extends JPanel {
 		table.setRowHeight(23); table.setFillsViewportHeight(true); table.setBackground(Color.BLACK);
 		table.setForeground(Color.WHITE); table.setGridColor(new Color(0x333333));
 		table.setSelectionBackground(new Color(0x244b66)); table.setSelectionForeground(Color.WHITE);
-		DefaultTableCellRenderer header = new DefaultTableCellRenderer();
-		header.setHorizontalAlignment(SwingConstants.CENTER); header.setOpaque(true);
-		header.setBackground(new Color(0x202020)); header.setForeground(Color.WHITE);
-		header.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 1, new Color(0x555555)));
-		table.getTableHeader().setDefaultRenderer(header);
+		table.getTableHeader().setDefaultRenderer(new SortHeaderRenderer());
+		table.getRowSorter().addRowSorterListener(event->table.getTableHeader().repaint());
+		table.getTableHeader().addMouseListener(new MouseAdapter(){@Override public void mousePressed(MouseEvent event){headerPopupHandled=handleHeaderPopup(event);}
+			@Override public void mouseReleased(MouseEvent event){if(!headerPopupHandled)handleHeaderPopup(event);headerPopupHandled=false;}});
 		int[] widths = {105,105,92,125,145,68,62,62,58,75,150,125,105,92,105,92,82,92,
-				92,78,92,92,78,88,92,92,72,240,86,74,72,62,72,55,82};
+				92,78,92,92,78,88,92,92,72,240,86,74,72,62,72,72,55,82};
 		for (int n=0;n<widths.length;n++) table.getColumnModel().getColumn(n).setPreferredWidth(widths[n]);
 		ValueRenderer renderer = new ValueRenderer();
 		for (int n=0;n<COLUMNS.length;n++) table.getColumnModel().getColumn(n).setCellRenderer(renderer);
-		table.addMouseListener(new MouseAdapter(){
-			@Override public void mousePressed(MouseEvent event){
-				int viewRow=table.rowAtPoint(event.getPoint());if(viewRow<0)return;
-				int modelRow=table.convertRowIndexToModel(viewRow);
-				if(modelRow>=0&&modelRow<displayedRowKeys.size()){
-					selectedSignalKeys=Collections.singleton(displayedRowKeys.get(modelRow));table.repaint();}
-			}
-		});
-		table.getSelectionModel().addListSelectionListener(event->{
-			if(!event.getValueIsAdjusting()&&!rebuildingTable)updateTrackedSignalKeys();
-		});
+		table.addMouseListener(new MouseAdapter(){@Override public void mousePressed(MouseEvent event){rowPopupHandled=handleRowPopup(event);}
+			@Override public void mouseReleased(MouseEvent event){if(!rowPopupHandled)handleRowPopup(event);rowPopupHandled=false;}});
 		status.setBorder(BorderFactory.createEmptyBorder(4,7,1,7)); status.setForeground(new Color(0xdddddd));
 		status.setBackground(Color.BLACK); status.setOpaque(true);
+		sortHint.setBorder(BorderFactory.createEmptyBorder(3,7,0,7));sortHint.setForeground(new Color(0x999999));sortHint.setBackground(Color.BLACK);sortHint.setOpaque(true);
 		trackingHelp.setBorder(BorderFactory.createEmptyBorder(1,7,4,7));
 		trackingHelp.setForeground(new Color(0x9fd7ff));trackingHelp.setBackground(Color.BLACK);
 		trackingHelp.setOpaque(true);
 		JScrollPane scroll = new JScrollPane(table); scroll.getViewport().setBackground(Color.BLACK);
 		scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
 		scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_ALWAYS);
-		JPanel footer=new JPanel(new GridLayout(2,1));footer.add(status);footer.add(trackingHelp);
+		JPanel footer=new JPanel(new GridLayout(3,1));footer.setBackground(Color.BLACK);footer.add(sortHint);footer.add(trackingHelp);footer.add(status);
 		scroll.setPreferredSize(new Dimension(1050, 330)); add(scroll, BorderLayout.CENTER); add(footer, BorderLayout.SOUTH);
 		setDefaultSort();
 	}
@@ -139,6 +137,12 @@ final class Ism868SignalTablePanel extends JPanel {
 
 	private void setDefaultSort(){table.getRowSorter().setSortKeys(Collections.singletonList(
 			new RowSorter.SortKey(0,SortOrder.ASCENDING)));}
+	private boolean handleHeaderPopup(MouseEvent event){if(!event.isPopupTrigger())return false;int viewColumn=table.getTableHeader().columnAtPoint(event.getPoint());if(viewColumn<0)return false;
+		event.consume();int modelColumn=table.convertColumnIndexToModel(viewColumn);List<RowSorter.SortKey> retained=new ArrayList<RowSorter.SortKey>();boolean removed=false;
+		for(RowSorter.SortKey key:table.getRowSorter().getSortKeys())if(key.getColumn()==modelColumn&&key.getSortOrder()!=SortOrder.UNSORTED)removed=true;else retained.add(key);
+		table.getRowSorter().setSortKeys(removed?retained:Collections.<RowSorter.SortKey>emptyList());return true;}
+	private boolean handleRowPopup(MouseEvent event){if(!event.isPopupTrigger())return false;int viewRow=table.rowAtPoint(event.getPoint());if(viewRow<0)return false;int modelRow=table.convertRowIndexToModel(viewRow);
+		if(modelRow<0||modelRow>=displayedRowKeys.size())return false;event.consume();Long key=displayedRowKeys.get(modelRow);selectedSignalKeys=selectedSignalKeys.contains(key)?Collections.<Long>emptySet():Collections.singleton(key);table.repaint();return true;}
 
 	private void installLayoutPersistence(){
 		table.getColumnModel().addColumnModelListener(new TableColumnModelListener(){
@@ -162,19 +166,27 @@ final class Ism868SignalTablePanel extends JPanel {
 		if(tableSettingsFile==null||!tableSettingsFile.isFile())return;
 		Properties properties=loadTableProperties();restoringTableLayout=true;
 		try{
-			int[] order=parseIntList(properties.getProperty(LAYOUT_PREFIX+"columnOrder"),COLUMNS.length);
+			String savedOrder=properties.getProperty(LAYOUT_PREFIX+"columnOrder");
+			int[] order=parseIntList(savedOrder,COLUMNS.length);boolean legacyLayout=false;
+			if(order==null){int[] legacy=parseIntList(savedOrder,LEGACY_COLUMN_COUNT);
+				if(validColumnOrder(legacy,LEGACY_COLUMN_COUNT)){order=upgradeLegacyOrder(legacy);
+					legacyLayout=true;}}
 			if(validColumnOrder(order))for(int target=0;target<order.length;target++){
 				int current=table.convertColumnIndexToView(order[target]);
 				if(current>=0&&current!=target)table.moveColumn(current,target);
 			}
-			int[] widths=parseIntList(properties.getProperty(LAYOUT_PREFIX+"columnWidths"),COLUMNS.length);
+			String savedWidths=properties.getProperty(LAYOUT_PREFIX+"columnWidths");
+			int[] widths=parseIntList(savedWidths,COLUMNS.length);
+			if(widths==null){int[] legacy=parseIntList(savedWidths,LEGACY_COLUMN_COUNT);
+				if(legacy!=null){widths=upgradeLegacyWidths(legacy);legacyLayout=true;}}
 			if(widths!=null)for(int modelColumn=0;modelColumn<widths.length;modelColumn++){
 				int viewColumn=table.convertColumnIndexToView(modelColumn);if(viewColumn<0)continue;
 				TableColumn column=table.getColumnModel().getColumn(viewColumn);
 				int width=Math.max(35,Math.min(2000,widths[modelColumn]));
 				column.setPreferredWidth(width);column.setWidth(width);
 			}
-			List<RowSorter.SortKey> sortKeys=parseSortKeys(properties.getProperty(LAYOUT_PREFIX+"sortKeys"));
+			List<RowSorter.SortKey> sortKeys=parseSortKeys(properties.getProperty(LAYOUT_PREFIX+"sortKeys"),
+					legacyLayout);
 			if(sortKeys!=null)table.getRowSorter().setSortKeys(sortKeys);else setDefaultSort();
 		}catch(RuntimeException ignored){setDefaultSort();}
 		finally{restoringTableLayout=false;}
@@ -216,17 +228,32 @@ final class Ism868SignalTablePanel extends JPanel {
 		catch(NumberFormatException invalid){return null;}return parsed;
 	}
 
-	private static boolean validColumnOrder(int[] order){
-		if(order==null||order.length!=COLUMNS.length)return false;boolean[] seen=new boolean[COLUMNS.length];
+	private static boolean validColumnOrder(int[] order){return validColumnOrder(order,COLUMNS.length);}
+	private static boolean validColumnOrder(int[] order,int count){
+		if(order==null||order.length!=count)return false;boolean[] seen=new boolean[count];
 		for(int modelColumn:order){if(modelColumn<0||modelColumn>=seen.length||seen[modelColumn])return false;
 			seen[modelColumn]=true;}return true;
 	}
 
-	private static List<RowSorter.SortKey> parseSortKeys(String value){
+	private static int[] upgradeLegacyOrder(int[] legacy){int[] upgraded=new int[COLUMNS.length];int at=0;
+		for(int modelColumn:legacy){upgraded[at++]=modelColumn>=AC_PERIOD_COLUMN?modelColumn+1:modelColumn;
+			if(modelColumn==AC_PERIOD_COLUMN-1)upgraded[at++]=AC_PERIOD_COLUMN;}
+		return upgraded;
+	}
+
+	private static int[] upgradeLegacyWidths(int[] legacy){int[] upgraded=new int[COLUMNS.length];
+		System.arraycopy(legacy,0,upgraded,0,AC_PERIOD_COLUMN);upgraded[AC_PERIOD_COLUMN]=72;
+		System.arraycopy(legacy,AC_PERIOD_COLUMN,upgraded,AC_PERIOD_COLUMN+1,
+				legacy.length-AC_PERIOD_COLUMN);return upgraded;
+	}
+
+	private static List<RowSorter.SortKey> parseSortKeys(String value,boolean legacyLayout){
 		if(value==null)return null;if(value.length()==0)return Collections.emptyList();
 		List<RowSorter.SortKey> keys=new ArrayList<RowSorter.SortKey>();String[] parts=value.split(";");
 		try{for(String part:parts){String[] fields=part.split(":",-1);if(fields.length!=2)return null;
-			int column=Integer.parseInt(fields[0]);if(column<0||column>=COLUMNS.length)return null;
+			int column=Integer.parseInt(fields[0]);
+			if(legacyLayout&&column>=AC_PERIOD_COLUMN)column++;
+			if(column<0||column>=COLUMNS.length)return null;
 			SortOrder order="D".equals(fields[1])?SortOrder.DESCENDING:
 					("A".equals(fields[1])?SortOrder.ASCENDING:null);if(order==null)return null;
 			keys.add(new RowSorter.SortKey(column,order));}}
@@ -242,11 +269,21 @@ final class Ism868SignalTablePanel extends JPanel {
 		long arrivalMillis=System.currentTimeMillis();
 		for (Ism868SignalAnalyzer.Observation observation : result.observations) {
 			if(isRedundantLoRaCandidate(observation))continue;
+			removeConfirmedWmbusCandidateAliases(observation);
 			Signal signal = matching(observation);
 			if (signal == null) { signal = new Signal(nextSignalKey++,observation,arrivalNanos,
 					arrivalMillis); signals.add(signal); }
 			else if(signal.update(observation,arrivalNanos,arrivalMillis))
 				flashUpdatedSignal(signal.rowKey,selectedSignalKeys.contains(Long.valueOf(signal.rowKey)));
+		}
+	}
+	private void removeConfirmedWmbusCandidateAliases(Ism868SignalAnalyzer.Observation observation){
+		if(!observation.checksumValid||!observation.protocol.startsWith("W-MBus"))return;
+		for(int n=signals.size()-1;n>=0;n--){Signal signal=signals.get(n);
+			if(signal.meterId.length()==0&&signal.protocol.startsWith("W-MBus")
+					&&Math.abs(signal.frequencyHz-observation.frequencyHz)<250_000L){
+				signals.remove(n);Long key=Long.valueOf(signal.rowKey);flashUntil.remove(key);
+				if(selectedSignalKeys.contains(key))selectedSignalKeys=Collections.emptySet();}
 		}
 	}
 	private boolean isRedundantLoRaCandidate(Ism868SignalAnalyzer.Observation observation){
@@ -274,11 +311,16 @@ final class Ism868SignalTablePanel extends JPanel {
 	}
 	synchronized double periodForMeterForTest(String manufacturer,String meterId) {
 		for(Signal signal:signals)if(signal.manufacturer.equals(manufacturer)
-				&&signal.meterId.equals(meterId))return signal.periodSeconds();
+				&&signal.meterId.equals(meterId))return signal.txPeriodSeconds();
+		return Double.NaN;
+	}
+	synchronized double acPeriodForMeterForTest(String manufacturer,String meterId) {
+		for(Signal signal:signals)if(signal.manufacturer.equals(manufacturer)
+				&&signal.meterId.equals(meterId))return signal.acPeriodSeconds();
 		return Double.NaN;
 	}
 	synchronized double periodForProtocolForTest(String protocol) {
-		for(Signal signal:signals)if(signal.protocol.equals(protocol))return signal.periodSeconds();
+		for(Signal signal:signals)if(signal.protocol.equals(protocol))return signal.txPeriodSeconds();
 		return Double.NaN;
 	}
 	synchronized long lastSeenForProtocolForTest(String protocol) {
@@ -360,7 +402,7 @@ final class Ism868SignalTablePanel extends JPanel {
 	void refresh(Ism868SignalAnalyzer.Result result) {
 		List<Signal> copy = new ArrayList<Signal>();
 		synchronized (this) { for (Signal signal : signals) copy.add(new Signal(signal)); }
-		Set<Long> selectedBefore=selectedSignalKeys;
+		Set<Long> selectedBefore=selectedRowKeys();
 		rebuildingTable=true;
 		model.setRowCount(0);displayedRowKeys.clear();table.setRowHeight(23);
 		for (Signal signal : copy) { displayedRowKeys.add(Long.valueOf(signal.rowKey));model.addRow(new Object[] {
@@ -383,7 +425,8 @@ final class Ism868SignalTablePanel extends JPanel {
 				weatherBattery(signal.weather),decodedValues(signal),
 				Double.valueOf(signal.levelDbfs),Double.valueOf(signal.snrDb),
 				Long.valueOf(signal.received),Long.valueOf(signal.missed),
-				Double.valueOf(signal.periodSeconds()),signal.checksumValid ? "OK" : "--",
+				Double.valueOf(signal.txPeriodSeconds()),Double.valueOf(signal.acPeriodSeconds()),
+				signal.checksumValid ? "OK" : "--",
 				Long.valueOf(signal.lastSeenMillis)
 		});}
 		for(int modelRow=0;modelRow<displayedRowKeys.size();modelRow++)
@@ -391,7 +434,7 @@ final class Ism868SignalTablePanel extends JPanel {
 			int viewRow=table.convertRowIndexToView(modelRow);
 			if(viewRow>=0)table.addRowSelectionInterval(viewRow,viewRow);
 		}
-		applyRowHeights();rebuildingTable=false;updateTrackedSignalKeys();
+		applyRowHeights();rebuildingTable=false;
 		if (result == null) { status.setText("Waiting for 863-870 MHz IQ samples..."); return; }
 		double coveredStart = Math.max(Ism868SignalAnalyzer.BAND_START_HZ, result.visibleStartHz);
 		double coveredEnd = Math.min(Ism868SignalAnalyzer.BAND_END_HZ, result.visibleEndHz);
@@ -416,15 +459,12 @@ final class Ism868SignalTablePanel extends JPanel {
 
 	private static int lineCount(String value){int lines=1;
 		for(int n=0;n<value.length();n++)if(value.charAt(n)=='\n')lines++;return lines;}
-	private void updateTrackedSignalKeys(){Set<Long> selected=new HashSet<Long>();
+	private Set<Long> selectedRowKeys(){Set<Long> selected=new HashSet<Long>();
 		for(int viewRow:table.getSelectedRows()){
 			int modelRow=table.convertRowIndexToModel(viewRow);
 			if(modelRow>=0&&modelRow<displayedRowKeys.size())selected.add(displayedRowKeys.get(modelRow));
 		}
-		/* Rebuilding and sorter notifications may briefly clear JTable selection.
-		 * Keep the last explicit highlight so monitoring does not disappear. */
-		if(selected.isEmpty()&&!selectedSignalKeys.isEmpty())return;
-		selectedSignalKeys=Collections.unmodifiableSet(selected);
+		return selected;
 	}
 	private void flashUpdatedSignal(final long key,final boolean chime){
 		final Long boxedKey=Long.valueOf(key);final long until=System.currentTimeMillis()+UPDATE_FLASH_MILLIS;
@@ -466,6 +506,8 @@ final class Ism868SignalTablePanel extends JPanel {
 		for(int row=0;row<model.getRowCount();row++)if(protocol.equals(model.getValueAt(row,3))){
 			int view=table.convertRowIndexToView(row);table.setRowSelectionInterval(view,view);return;}
 	}
+	void rightClickMeterForTest(String meterId){for(int row=0;row<model.getRowCount();row++)if(meterId.equals(model.getValueAt(row,1))){Long key=displayedRowKeys.get(row);selectedSignalKeys=selectedSignalKeys.contains(key)?Collections.<Long>emptySet():Collections.singleton(key);return;}}
+	void rightClickProtocolForTest(String protocol){for(int row=0;row<model.getRowCount();row++)if(protocol.equals(model.getValueAt(row,3))){Long key=displayedRowKeys.get(row);selectedSignalKeys=selectedSignalKeys.contains(key)?Collections.<Long>emptySet():Collections.singleton(key);return;}}
 	String statusTextForTest(){return status.getText()+" | "+trackingHelp.getText();}
 	boolean protocolTrackedForTest(String protocol){
 		for(int row=0;row<model.getRowCount();row++)if(protocol.equals(model.getValueAt(row,3))
@@ -531,8 +573,9 @@ final class Ism868SignalTablePanel extends JPanel {
 	private static final class Signal {
 		final long rowKey;
 		long frequencyHz, bandwidthHz, received, missed, lastSeenMillis;
-		long rateStartMillis,lastRateEventMillis,periodClockMillis,lastPeriodSourceMillis;
-		long lastObservationNanos,accessSteps,rateReceived;
+		long txStartMillis,lastTxEventMillis,txReceived;
+		long acStartMillis,lastAcEventMillis,accessSteps;
+		long periodClockMillis,lastPeriodSourceMillis,lastObservationNanos;
 		double levelDbfs, snrDb, confidence;
 		String protocol, modulation, details, payload, manufacturer, meterId;
 		String deviceTypeName, frameFormat, security;
@@ -549,17 +592,20 @@ final class Ism868SignalTablePanel extends JPanel {
 			deviceTypeName=o.deviceTypeName;meterVersion=o.meterVersion;controlField=o.controlField;
 			ciField=o.ciField;lastAccessNumber=o.accessNumber;frameFormat=o.frameFormat;
 			security=o.security;application=o.application;weather=o.weather;tpms=o.tpms;checksumValid=o.checksumValid;
-			received=1;rateReceived=1;rateStartMillis=o.captureMillis;lastRateEventMillis=o.captureMillis;
+			received=1;txReceived=1;txStartMillis=o.captureMillis;lastTxEventMillis=o.captureMillis;
+			acStartMillis=o.captureMillis;lastAcEventMillis=o.captureMillis;
 			periodClockMillis=o.captureMillis;lastPeriodSourceMillis=o.captureMillis;
 			lastObservationNanos=arrivalNanos;lastSeenMillis=arrivalMillis;
 		}
 		Signal(Signal o) {
 			rowKey=o.rowKey;
 			frequencyHz=o.frequencyHz;bandwidthHz=o.bandwidthHz;received=o.received;missed=o.missed;
-			lastSeenMillis=o.lastSeenMillis;rateStartMillis=o.rateStartMillis;
-			lastRateEventMillis=o.lastRateEventMillis;periodClockMillis=o.periodClockMillis;
+			lastSeenMillis=o.lastSeenMillis;txStartMillis=o.txStartMillis;
+			lastTxEventMillis=o.lastTxEventMillis;txReceived=o.txReceived;
+			acStartMillis=o.acStartMillis;lastAcEventMillis=o.lastAcEventMillis;
+			periodClockMillis=o.periodClockMillis;
 			lastPeriodSourceMillis=o.lastPeriodSourceMillis;lastObservationNanos=o.lastObservationNanos;
-			accessSteps=o.accessSteps;rateReceived=o.rateReceived;
+			accessSteps=o.accessSteps;
 			levelDbfs=o.levelDbfs;snrDb=o.snrDb;confidence=o.confidence;protocol=o.protocol;
 			modulation=o.modulation;details=o.details;payload=o.payload;manufacturer=o.manufacturer;
 			meterId=o.meterId;deviceTypeName=o.deviceTypeName;meterVersion=o.meterVersion;
@@ -569,15 +615,22 @@ final class Ism868SignalTablePanel extends JPanel {
 		}
 		boolean update(Ism868SignalAnalyzer.Observation o,long arrivalNanos,long arrivalMillis) {
 			long eventMillis=advancePeriodClock(o.captureMillis,arrivalNanos);
-			boolean unique=true,resetRate=false;
+			boolean unique=true,resetAccessPeriod=false;
 			if(meterId.length()>0){
 				if(o.accessNumber>=0&&lastAccessNumber>=0){
 					int delta=(o.accessNumber-lastAccessNumber)&255;
-					if(delta==0)unique=false;
-					else if(delta<=127){accessSteps+=delta;missed+=Math.max(0,delta-1);}
-					else resetRate=true;
+					if(delta==0){
+						/* Overlapping analyzer windows can report the same physical packet.
+						 * A later packet may legitimately repeat AC and still belongs to Tx period. */
+						if(payload.length()>0&&payload.equals(o.payloadHex)
+								&&eventMillis-lastTxEventMillis<750L)unique=false;
+					}else if(delta<=127){accessSteps+=delta;missed+=Math.max(0,delta-1);
+						lastAcEventMillis=eventMillis;
+					}else resetAccessPeriod=true;
+				}else if(o.accessNumber>=0){
+					acStartMillis=eventMillis;lastAcEventMillis=eventMillis;accessSteps=0;
 				}else if(o.accessNumber<0&&payload.length()>0&&payload.equals(o.payloadHex)
-						&&eventMillis-lastRateEventMillis<750L)unique=false;
+						&&eventMillis-lastTxEventMillis<750L)unique=false;
 			}
 			frequencyHz=Math.round(frequencyHz*.65d+o.frequencyHz*.35d);
 			bandwidthHz=Math.round(bandwidthHz*.65d+o.bandwidthHz*.35d);
@@ -594,9 +647,8 @@ final class Ism868SignalTablePanel extends JPanel {
 				if(o.weather!=null)weather=o.weather;if(o.tpms!=null)tpms=o.tpms;}
 			if(o.checksumValid)checksumValid=true;
 			if(!unique)return false;
-			if(resetRate){rateStartMillis=eventMillis;accessSteps=0;rateReceived=1;}
-			else rateReceived++;
-			received++;lastRateEventMillis=eventMillis;
+			if(resetAccessPeriod){acStartMillis=eventMillis;lastAcEventMillis=eventMillis;accessSteps=0;}
+			txReceived++;received++;lastTxEventMillis=eventMillis;
 			lastSeenMillis=arrivalMillis;return true;
 		}
 		private long advancePeriodClock(long sourceMillis,long arrivalNanos){
@@ -606,14 +658,26 @@ final class Ism868SignalTablePanel extends JPanel {
 			periodClockMillis+=increment;lastPeriodSourceMillis=sourceMillis;
 			lastObservationNanos=arrivalNanos;return periodClockMillis;
 		}
-		double periodSeconds(){
-			long elapsed=lastRateEventMillis-rateStartMillis;
+		double txPeriodSeconds(){
+			long elapsed=lastTxEventMillis-txStartMillis;
 			if(elapsed<=0)return Double.NaN;
-			long intervals=accessSteps>0?accessSteps:Math.max(0L,rateReceived-1L);
+			long intervals=Math.max(0L,txReceived-1L);
 			return intervals<=0?Double.NaN:elapsed/(1000d*intervals);
+		}
+		double acPeriodSeconds(){
+			long elapsed=lastAcEventMillis-acStartMillis;
+			return elapsed<=0||accessSteps<=0?Double.NaN:elapsed/(1000d*accessSteps);
 		}
 	}
 
+	private static final class SortHeaderRenderer extends DefaultTableCellRenderer {
+		SortHeaderRenderer(){setHorizontalAlignment(SwingConstants.CENTER);setOpaque(true);setBorder(BorderFactory.createMatteBorder(0,0,1,1,HEADER_BORDER));}
+		@Override public Component getTableCellRendererComponent(JTable table,Object value,boolean selected,boolean focus,int row,int column){super.getTableCellRendererComponent(table,value,selected,focus,row,column);
+			int modelColumn=table.convertColumnIndexToModel(column),priority=-1;SortOrder order=SortOrder.UNSORTED;int index=0;for(RowSorter.SortKey key:table.getRowSorter().getSortKeys()){
+				if(key.getSortOrder()==SortOrder.UNSORTED)continue;if(key.getColumn()==modelColumn){priority=index;order=key.getSortOrder();break;}index++;}
+			setBackground(priority<0?HEADER_BG:SORT_HEADER_BACKGROUNDS[priority%SORT_HEADER_BACKGROUNDS.length]);setForeground(HEADER_FG);String text=String.valueOf(value);
+			setText(priority<0?text:text+" "+(order==SortOrder.ASCENDING?"\u25B2":"\u25BC")+(table.getRowSorter().getSortKeys().size()>1?Integer.toString(priority+1):""));return this;}
+	}
 	private final class ValueRenderer extends DefaultTableCellRenderer {
 		private int column;
 		ValueRenderer() { setHorizontalAlignment(SwingConstants.CENTER); }
@@ -621,13 +685,13 @@ final class Ism868SignalTablePanel extends JPanel {
 			if(value instanceof Long) {
 				long n=((Long)value).longValue();
 				if(column==0)value=String.format(Locale.US,"%.6f MHz",n/1e6);
-				else if(column==34){long age=Math.max(0L,System.currentTimeMillis()-n);value=age<1000?age+" ms":String.format(Locale.US,"%.1f s",age/1000d);}
+				else if(column==35){long age=Math.max(0L,System.currentTimeMillis()-n);value=age<1000?age+" ms":String.format(Locale.US,"%.1f s",age/1000d);}
 			} else if(value instanceof Double) {
 				double n=((Double)value).doubleValue();
 				if(Double.isNaN(n))value="--";
 				else if(column==28)value=String.format(Locale.US,"%.1f dBFS",n);
 				else if(column==29)value=String.format(Locale.US,"%.1f dB",n);
-				else if(column==32)value=formatPeriod(n);
+				else if(column==32||column==33)value=formatPeriod(n);
 			}
 			if(value instanceof String&&((String)value).indexOf('\n')>=0)
 				value="<html><div style='text-align:center'>"+html((String)value)+"</div></html>";
@@ -642,6 +706,7 @@ final class Ism868SignalTablePanel extends JPanel {
 			Long until=rowKey==null?null:flashUntil.get(rowKey);
 			boolean tracked=rowKey!=null&&selectedSignalKeys.contains(rowKey);
 			if(tracked){c.setBackground(TRACKED_BACKGROUND);c.setForeground(Color.BLACK);
+			}else if(selected){c.setBackground(table.getSelectionBackground());c.setForeground(table.getSelectionForeground());
 			}else if(until!=null&&System.currentTimeMillis()<until.longValue()){
 				c.setBackground(UPDATE_FLASH_COLOR);c.setForeground(Color.WHITE);
 			}else{String manufacturer=String.valueOf(model.getValueAt(modelRow,2));
