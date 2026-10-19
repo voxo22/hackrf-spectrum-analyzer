@@ -28,13 +28,17 @@ final class FskPcmDecoderSupport {
 		for(int n=1;n<=samples;n++){boolean active=n<samples&&power[n]>=gate;
 			if(active){if(start<0)start=n;last=n;}
 			if(start>=0&&n-last>bridge){if(last-start+1>=minimum)
-				decodeBurst(frequency,power,start,last,sampleRateHz,bitMicros,minimumBits,decoder,found);
+				decodeBurst(frequency,power,start,last,sampleRateHz,bitMicros,minimumBits,noise,decoder,found);
 				start=-1;last=-bridge-1;}}
 		return new ArrayList<T>(found.values());
 	}
 
 	private static <T> void decodeBurst(double[] frequency,double[] power,int first,int last,double rate,
-			double bitMicros,int minimumBits,FrameDecoder<T> decoder,Map<String,T> found){
+			double bitMicros,int minimumBits,double noisePower,FrameDecoder<T> decoder,Map<String,T> found){
+		double levelPower=0d;for(int n=first;n<=last;n++)levelPower+=power[n];
+		levelPower/=Math.max(1,last-first+1);
+		double levelDbfs=10d*Math.log10(Math.max(1e-15,levelPower));
+		double snrDb=10d*Math.log10(Math.max(1e-15,levelPower)/Math.max(1e-15,noisePower));
 		first=Math.max(1,first-(int)Math.round(rate*.003d));
 		last=Math.min(frequency.length-1,last+(int)Math.round(rate*.003d));
 		double[] burstPower=new double[last-first+1];for(int n=first;n<=last;n++)burstPower[n-first]=power[n];
@@ -57,7 +61,8 @@ final class FskPcmDecoderSupport {
 					for(int n=from;n<=to;n++){double w=Math.sqrt(Math.max(0d,power[n]));sum+=(frequency[n]-threshold)*w;weight+=w;}
 					bits[bit]=weight>0d&&sum>=0d;}
 				for(int polarity=0;polarity<2;polarity++){boolean[] candidate=polarity==0?bits:invert(bits);
-					T decoded=decoder.decode(candidate,new Metrics(threshold,high-low,width/rate*1e6d));
+					T decoded=decoder.decode(candidate,new Metrics(threshold,high-low,width/rate*1e6d,
+							levelDbfs,snrDb));
 					if(decoded!=null){found.put(decoder.key(decoded),decoded);return;}}
 			}
 		}
@@ -75,7 +80,8 @@ final class FskPcmDecoderSupport {
 	private static double percentile(double[] sorted,int length,double fraction){return length==0?0d:
 			sorted[Math.max(0,Math.min(length-1,(int)Math.round((length-1)*fraction)))];}
 
-	static final class Metrics{final double carrierOffsetHz,deviationHz,bitMicros;
-		Metrics(double carrierOffsetHz,double deviationHz,double bitMicros){this.carrierOffsetHz=carrierOffsetHz;
-			this.deviationHz=deviationHz;this.bitMicros=bitMicros;}}
+	static final class Metrics{final double carrierOffsetHz,deviationHz,bitMicros,levelDbfs,snrDb;
+		Metrics(double carrierOffsetHz,double deviationHz,double bitMicros,double levelDbfs,double snrDb){
+			this.carrierOffsetHz=carrierOffsetHz;this.deviationHz=deviationHz;this.bitMicros=bitMicros;
+			this.levelDbfs=levelDbfs;this.snrDb=snrDb;}}
 }

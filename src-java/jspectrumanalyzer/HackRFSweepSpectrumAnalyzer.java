@@ -3140,6 +3140,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					long seek = takePlaybackSeekRequest();
 					if (seek >= 0) {
 						iqFile.seekMillis(seek);
+						for (IQReplayAnalyzerFeed analyzer : playbackIqAnalyzers) analyzer.analyzer.signalStreamDiscontinuity();
 						if (txFeed != null) {
 							txFeed.seekMillis(seek);
 						}
@@ -3202,6 +3203,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					}
 					if (iqFile.canReadSignedBlockWithoutLoop(frameBytes) && iqFile.wouldLoopOnNextRead(frameBytes)) {
 						iqFile.seekMillis(0);
+						for (IQReplayAnalyzerFeed analyzer : playbackIqAnalyzers) analyzer.analyzer.signalStreamDiscontinuity();
 						if (txFeed != null) {
 							txFeed.seekMillis(0);
 						}
@@ -4880,6 +4882,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		int lnaGain = parameterGainLNA.getValue();
 		int vgaGain = 32;
 		boolean rfAmp = parameterAntennaLNA.getValue();
+		boolean biasT = parameterAntPower.getValue();
 		IQReplayFile iqReplay = playbackIqFile;
 		if (iqReplay != null && isIqReplayActive()) {
 			long sourceCenterHz = iqReplay.getCenterFrequencyHz();
@@ -4913,7 +4916,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		new Thread(() -> {
 			stopHackrfSweep();
 			SwingUtilities.invokeLater(() -> {
-				IQAnalyzerApp analyzer = createIQAnalyzerApp();
+				IQAnalyzerApp analyzer = createIQAnalyzerApp().withLiveBiasT(biasT);
 				registerOpenIqAnalyzer(analyzer);
 				analyzer.show(centerHz, sampleRateHz, lnaGain, vgaGain, rfAmp, 0, bandwidthHz, () -> {
 					unregisterOpenIqAnalyzer(analyzer);

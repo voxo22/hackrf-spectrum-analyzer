@@ -25,6 +25,12 @@ public class HackRFIQNativeBridge {
 
 	public static synchronized int start(HackRFIQDataCallback dataCallback, long centerFreqHz, int sampleRateHz,
 			int basebandFilterHz, int lnaGain, int vgaGain, boolean ampEnable) {
+		return start(dataCallback, centerFreqHz, sampleRateHz, basebandFilterHz, lnaGain, vgaGain, ampEnable, null);
+	}
+
+	/** A non-null bias setting is used only for the live spectrum handoff. */
+	public static synchronized int start(HackRFIQDataCallback dataCallback, long centerFreqHz, int sampleRateHz,
+			int basebandFilterHz, int lnaGain, int vgaGain, boolean ampEnable, Boolean biasEnable) {
 		hackrf_iq_callback callback = new hackrf_iq_callback() {
 			@Override
 			public void apply(long callbackCenterFreqHz, int callbackSampleRateHz, int validLength, Pointer iqData) {
@@ -37,6 +43,12 @@ public class HackRFIQNativeBridge {
 		};
 		Native.setCallbackThreadInitializer(callback, new CallbackThreadInitializer(true));
 
+		if (biasEnable != null) {
+			return JNA_NATIVE_LIB.getFunction("hackrf_iq_lib_start_with_bias").invokeInt(new Object[] { callback,
+					Long.valueOf(centerFreqHz), Integer.valueOf(sampleRateHz), Integer.valueOf(basebandFilterHz),
+					Integer.valueOf(lnaGain), Integer.valueOf(vgaGain), Integer.valueOf(ampEnable ? 1 : 0),
+					Integer.valueOf(biasEnable.booleanValue() ? 1 : 0) });
+		}
 		return HackRFIQLibrary.hackrf_iq_lib_start(callback, centerFreqHz, sampleRateHz, basebandFilterHz, lnaGain,
 				vgaGain, ampEnable ? 1 : 0);
 	}

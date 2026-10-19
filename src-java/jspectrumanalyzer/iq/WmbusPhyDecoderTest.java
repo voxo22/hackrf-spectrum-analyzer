@@ -46,6 +46,7 @@ public final class WmbusPhyDecoderTest {
 		testStructuredApplicationColumns();
 		testAccessCounterRate();
 		testGenericSignalRateAndFlash();
+		testDistinctJablotronCandidates();
 		testSelectedMeterNotification();
 		System.out.println("WmbusPhyDecoderTest OK: S/C/T PHY, CRC, streaming/PFB channelizers and Tx-period tracking");
 	}
@@ -497,12 +498,12 @@ public final class WmbusPhyDecoderTest {
 				||defaults.primarySortOrderForTest()!=javax.swing.SortOrder.ASCENDING)
 			throw new AssertionError("default table sort is not ascending frequency");
 		defaults.moveColumnForTest("RSSI",0);defaults.setColumnWidthForTest("RSSI",177);
-		defaults.sortByColumnForTest("Received",javax.swing.SortOrder.DESCENDING);
+		defaults.sortByColumnForTest("Frames",javax.swing.SortOrder.DESCENDING);
 		defaults.saveTableLayoutForTest();
 		Ism868SignalTablePanel restored=new Ism868SignalTablePanel(settings);restored.restoreTableLayoutForTest();
 		if(restored.viewColumnForTest("RSSI")!=0||restored.columnWidthForTest("RSSI")!=177)
 			throw new AssertionError("868 table column layout was not restored");
-		if(!"Received".equals(restored.primarySortColumnForTest())
+		if(!"Frames".equals(restored.primarySortColumnForTest())
 				||restored.primarySortOrderForTest()!=javax.swing.SortOrder.DESCENDING)
 			throw new AssertionError("868 table sorting was not restored");
 		settings.delete();
@@ -564,8 +565,8 @@ public final class WmbusPhyDecoderTest {
 	private static void testGenericSignalRateAndFlash(){
 		Ism868SignalTablePanel panel=new Ism868SignalTablePanel();panel.setAudibleNotificationsForTest(false);
 		Ism868SignalAnalyzer.Observation candidate=new Ism868SignalAnalyzer.Observation(
-				866_120_000L,35_000,-45d,14d,70d,"SRD / rtl_433 candidate","narrow FSK/OOK",
-				"candidate","",false,5_000L,"","");
+				866_120_000L,35_000,-45d,14d,70d,"SRD / rtl_433 candidate","2-FSK / GFSK",
+				"candidate","",false,5_000L,"","",40_000d,8.6d,34_000d,87d);
 		Ism868SignalAnalyzer.Result result=result(candidate);long before=System.currentTimeMillis();
 		panel.observeAtForTest(result,1_000_000_000L);panel.observeAtForTest(result,5_000_000_000L);
 		if(panel.receivedForProtocolForTest("SRD / rtl_433 candidate")!=2L)
@@ -578,6 +579,12 @@ public final class WmbusPhyDecoderTest {
 			throw new AssertionError("868 last-seen used recording timestamp instead of table arrival");
 		panel.refresh(result);panel.rightClickProtocolForTest("SRD / rtl_433 candidate");
 		panel.refresh(result);
+		equal("2-FSK / GFSK",panel.cellForMeterForTest("--","Modulation"),"generic modulation column");
+		equal("40.0 ksym/s",panel.renderedCellForMeterForTest("--","Symbol rate"),"generic symbol rate column");
+		equal("35.0 kHz",panel.renderedCellForMeterForTest("--","Occupied BW"),"generic bandwidth column");
+		equal("8.60 ms",panel.renderedCellForMeterForTest("--","Burst"),"generic burst column");
+		equal("34.0 kHz",panel.renderedCellForMeterForTest("--","Tone spacing"),"generic tone spacing column");
+		equal("87 %",panel.renderedCellForMeterForTest("--","PHY confidence"),"generic PHY confidence column");
 		if(!panel.protocolTrackedForTest("SRD / rtl_433 candidate"))
 			throw new AssertionError("tracked row highlight did not survive table refresh");
 		panel.observeAtForTest(result,9_000_000_000L);
@@ -588,6 +595,27 @@ public final class WmbusPhyDecoderTest {
 			throw new AssertionError("update flash obscured the tracked-row highlight");
 		if(panel.statusTextForTest().indexOf("right-click a row")<0)
 			throw new AssertionError("tracking/chime help is missing from status line");
+	}
+
+	private static void testDistinctJablotronCandidates(){
+		Ism868SignalAnalyzer.Observation first=new Ism868SignalAnalyzer.Observation(
+				868_096_700L,44_000,-24d,20d,90d,"Jablotron JA-100 candidate",
+				"GFSK candidate, 40 kbit/s","candidate","",false,1_000L,"Jablotron?","",
+				40_000d,8.6d,34_000d,90d);
+		Ism868SignalAnalyzer.Observation second=new Ism868SignalAnalyzer.Observation(
+				868_118_300L,49_000,-22d,19d,92d,"Jablotron JA-100 candidate",
+				"GFSK candidate, 40 kbit/s","candidate","",false,1_000L,"Jablotron?","",
+				40_000d,12d,40_000d,92d);
+		Ism868SignalTablePanel panel=new Ism868SignalTablePanel();panel.setAudibleNotificationsForTest(false);
+		Ism868SignalAnalyzer.Observation alias=new Ism868SignalAnalyzer.Observation(
+				868_100_000L,125_000,-30d,15d,70d,"LoRa candidate","CSS",
+				"spectral candidate","",false,500L,"","",Double.NaN,Double.NaN,Double.NaN,50d);
+		panel.observe(result(alias));
+		panel.observe(new Ism868SignalAnalyzer.Result(868_100_000L,500_000,867_850_000d,
+				868_350_000d,-60d,Arrays.asList(first,second),"test"));
+		if(panel.signalCountForTest()!=2)throw new AssertionError("distinct Jablotron RF traces were merged");
+		panel.observe(result(alias));
+		if(panel.signalCountForTest()!=2)throw new AssertionError("generic LoRa alias survived JA-100 fingerprint");
 	}
 
 	private static void testStructuredApplicationColumns(){

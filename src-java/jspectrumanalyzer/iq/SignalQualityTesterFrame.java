@@ -28,6 +28,7 @@ import javax.swing.Timer;
 import javax.swing.border.EmptyBorder;
 
 final class SignalQualityTesterFrame extends JFrame {
+	static final String GPS_MODE = "GPS L1";
 	private static final int MAX_SAMPLES = 4096;
 	private static final int SPECTRUM_SIZE = 1024;
 	private static final int DAB_BANDWIDTH_HZ = 1_536_000;
@@ -78,12 +79,14 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final JLabel umtsParameterLabel = new JLabel();
 	private final JLabel wifiParameterLabel = new JLabel();
 	private final JLabel bluetoothParameterLabel = new JLabel();
+	private final JLabel gpsParameterLabel = new JLabel();
 	private final LteCellTablePanel lteCellTablePanel = new LteCellTablePanel();
 	private final NrCellTablePanel nrCellTablePanel = new NrCellTablePanel();
 	private final UmtsCellTablePanel umtsCellTablePanel = new UmtsCellTablePanel();
 	private final WifiNetworkTablePanel wifiNetworkTablePanel = new WifiNetworkTablePanel();
 	private final BluetoothDeviceTablePanel bluetoothDeviceTablePanel = new BluetoothDeviceTablePanel();
 	private final Ism868SignalTablePanel ism868SignalTablePanel = new Ism868SignalTablePanel();
+	private final GpsL1SatelliteTablePanel gpsSatelliteTablePanel = new GpsL1SatelliteTablePanel();
 	private final LteConstellationPanel lteConstellationPanel = new LteConstellationPanel();
 	private final JLabel titleLabel;
 	private final JLabel statsLabel = new JLabel("Waiting for IQ samples...");
@@ -102,6 +105,7 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final boolean wifiMode;
 	private final boolean bluetoothMode;
 	private final boolean ism868Mode;
+	private final boolean gpsMode;
 	private final LongSupplier captureTimeMillisSupplier;
 	private final DvbtSignalAnalyzer dvbtAnalyzer = new DvbtSignalAnalyzer();
 	private DabFicDecoder dabFicDecoder = new DabFicDecoder();
@@ -115,6 +119,8 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final WifiDsssAnalyzer wifiDsssAnalyzer = new WifiDsssAnalyzer();
 	private final BluetoothSignalAnalyzer bluetoothAnalyzer = new BluetoothSignalAnalyzer();
 	private final Ism868SignalAnalyzer ism868Analyzer = new Ism868SignalAnalyzer();
+	private volatile GpsL1SignalAnalyzer.Result latestGpsResult;
+	private GpsL1Worker gpsWorker;
 	private volatile Ism868SignalAnalyzer.Result latestIsm868Result;
 	private volatile boolean ism868AnalysisRunning;
 	private byte[] ism868History = new byte[0];
@@ -236,6 +242,8 @@ final class SignalQualityTesterFrame extends JFrame {
 		wifiMode = mode.startsWith("Wi-Fi");
 		bluetoothMode = mode.startsWith("Bluetooth");
 		ism868Mode = mode.startsWith("ISM 868");
+		gpsMode = mode.startsWith(GPS_MODE);
+		if (gpsMode) setTitle(GPS_MODE + " signal analyzer");
 		if (gsmMode) {
 			latestGsmResult = GsmSignalAnalyzer.Result.empty("collecting GSM channel IQ");
 			prepareParameterLabel(gsmParameterLabel);
@@ -275,6 +283,11 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (ism868Mode)
 			latestIsm868Result = Ism868SignalAnalyzer.Result.empty(0L, 0,
 					"Waiting for 863-870 MHz IQ samples");
+		if (gpsMode) {
+			latestGpsResult = GpsL1SignalAnalyzer.Result.empty(0L, 0, "Waiting for GPS L1 IQ samples");
+			prepareParameterLabel(gpsParameterLabel);
+			gpsParameterLabel.setFont(gpsParameterLabel.getFont().deriveFont(12f));
+		}
 		if (dvbtMode) dvbtTpsCapture = new byte[DVBT_TPS_CAPTURE_BYTES];
 		if (dvbt2Mode) {
 			latestDvbt2Result = Dvbt2SignalAnalyzer.Result.empty("collecting DVB-T2 IQ");
@@ -348,7 +361,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		spectrumPanel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
 		dabConstellationPanel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
 		dvbt2P2Panel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
-		JPanel plots = new JPanel(dabMode || ism868Mode ? new BorderLayout(0, 7) : new GridLayout(1, 2, 6, 0));
+		JPanel plots = new JPanel(dabMode || ism868Mode || gpsMode ? new BorderLayout(0, 7) : new GridLayout(1, 2, 6, 0));
 		plots.setBackground(PANEL_BG);
 		plots.setBorder(new EmptyBorder(0, 8, 0, 8));
 		if (dvbt2Mode) {
@@ -408,6 +421,16 @@ final class SignalQualityTesterFrame extends JFrame {
 			bluetoothColumn.add(bluetoothParameterLabel, BorderLayout.NORTH);
 			bluetoothColumn.add(bluetoothDeviceTablePanel, BorderLayout.CENTER);
 			plots.add(bluetoothColumn);
+		} else if (gpsMode) {
+			gpsParameterLabel.setBorder(BorderFactory.createCompoundBorder(
+					BorderFactory.createLineBorder(Color.DARK_GRAY), new EmptyBorder(5, 10, 5, 10)));
+			gpsParameterLabel.setPreferredSize(new Dimension(100, 190));
+			gpsParameterLabel.setToolTipText("GPS time is not UTC. GPS and UTC dates use the computer date to resolve the 1024-week rollover; altitude is WGS84 ellipsoidal height.");
+			JPanel gpsColumn = new JPanel(new BorderLayout(0, 6));
+			gpsColumn.setBackground(PANEL_BG);
+			gpsColumn.add(gpsParameterLabel, BorderLayout.NORTH);
+			gpsColumn.add(gpsSatelliteTablePanel, BorderLayout.CENTER);
+			plots.add(gpsColumn, BorderLayout.CENTER);
 		} else if (ism868Mode) {
 			plots.add(ism868SignalTablePanel, BorderLayout.CENTER);
 		} else if (dabMode) {
@@ -426,8 +449,8 @@ final class SignalQualityTesterFrame extends JFrame {
 		add(header, BorderLayout.NORTH);
 		add(plots, BorderLayout.CENTER);
 		add(footer, BorderLayout.SOUTH);
-		setSize(bluetoothMode ? 900 : dvbt2Mode || ism868Mode ? 1100 : 760,
-				dvbt2Mode ? 650 : bluetoothMode ? 680 : ism868Mode ? 560 : dabMode || wifiMode || lteMode ? 570 : nrMode || umtsMode ? 500
+		setSize(bluetoothMode || gpsMode ? 900 : dvbt2Mode || ism868Mode ? 1100 : 760,
+				dvbt2Mode ? 650 : bluetoothMode ? 680 : gpsMode ? 630 : ism868Mode ? 560 : dabMode || wifiMode || lteMode ? 570 : nrMode || umtsMode ? 500
 						: gsmMode || rdsMode ? 445 : 420);
 
 		repaintTimer = new Timer(100, e -> updateView());
@@ -438,6 +461,7 @@ final class SignalQualityTesterFrame extends JFrame {
 				repaintTimer.stop();
 				stopWifiWorker();
 				stopBluetoothWorker();
+				stopGpsWorker();
 				stopIsm868DynamicWorker();
 				if (gsmPagingFrame != null) gsmPagingFrame.dispose();
 				if (gsmBcchFrame != null) gsmBcchFrame.dispose();
@@ -453,6 +477,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		});
 		if (wifiMode) startWifiWorker();
 		if (bluetoothMode) startBluetoothWorker();
+		if (gpsMode) startGpsWorker();
 		if (ism868Mode&&ISM868_POLYPHASE_ENABLED) startIsm868DynamicWorker();
 	}
 
@@ -712,6 +737,22 @@ final class SignalQualityTesterFrame extends JFrame {
 		}
 	}
 
+	private void startGpsWorker() {
+		gpsWorker = new GpsL1Worker(result -> latestGpsResult = result);
+	}
+
+	private void stopGpsWorker() {
+		GpsL1Worker worker = gpsWorker; if (worker != null) worker.close();
+	}
+
+	void signalStreamDiscontinuity() {
+		GpsL1Worker worker = gpsWorker; if (worker != null) worker.discontinuity();
+	}
+
+	private void offerGpsAnalysis(long centerFreqHz, int sampleRateHz, byte[] iqData, int length) {
+		GpsL1Worker worker = gpsWorker; if (worker != null) worker.offer(centerFreqHz, sampleRateHz, iqData, length);
+	}
+
 	private void offerWifiAnalysis(long centerFreqHz, int sampleRateHz, byte[] iqData, int length) {
 		boolean dsssBand = centerFreqHz >= 2_400_000_000L && centerFreqHz < 2_500_000_000L;
 		long captureMillis = System.currentTimeMillis();
@@ -773,6 +814,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		}
 		if (wifiMode) offerWifiAnalysis(centerFreqHz, sampleRateHz, iqData, evenLength);
 		if (bluetoothMode) offerBluetoothAnalysis(centerFreqHz, sampleRateHz, iqData, evenLength);
+		if (gpsMode) offerGpsAnalysis(centerFreqHz, sampleRateHz, iqData, evenLength);
 		if (dvbtMode) offerDvbtTpsCapture(sampleRateHz, iqData, evenLength);
 		if (dvbt2Mode) offerDvbt2SignallingCapture(sampleRateHz, iqData, evenLength);
 		if (nrMode) appendNrHistory(iqData, evenLength, sampleRateHz);
@@ -853,9 +895,10 @@ final class SignalQualityTesterFrame extends JFrame {
 		UmtsSignalAnalyzer.Result umtsResult = umtsMode ? latestUmtsResult : null;
 		WifiSignalAnalyzer.Result wifiResult = wifiMode ? latestWifiResult : null;
 		WifiDsssAnalyzer.Result wifiDsssResult = wifiMode ? latestWifiDsssResult : null;
+		GpsL1SignalAnalyzer.Result gpsResult = gpsMode ? latestGpsResult : null;
 		snapshot = new Snapshot(centerFreqHz, sampleRateHz, samples, sampleCount, dbfs, peak, dcPercent,
 				clippingPercent, stabilityDb, quality, spectrum, dabMetrics, dvbtResult, dvbt2Result,
-				gsmResult, rdsResult, lteResult, nrResult, umtsResult, wifiResult, wifiDsssResult,
+				gsmResult, rdsResult, lteResult, nrResult, umtsResult, wifiResult, wifiDsssResult, gpsResult,
 				System.currentTimeMillis());
 	}
 
@@ -1895,6 +1938,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (wifiMode) wifiNetworkTablePanel.refresh();
 		if (bluetoothMode) bluetoothDeviceTablePanel.refresh();
 		if (ism868Mode) ism868SignalTablePanel.refresh(latestIsm868Result);
+		if (gpsMode) gpsSatelliteTablePanel.refresh(latestGpsResult);
 		qualityPanel.setSnapshot(active);
 		dabLockPanel.setSnapshot(active);
 		refreshDvbt2CrcPanel();
@@ -1920,6 +1964,8 @@ final class SignalQualityTesterFrame extends JFrame {
 					"Waiting for Wi-Fi IQ samples..."));
 			if (bluetoothMode) bluetoothParameterLabel.setText(parameterTable("BLUETOOTH / BLE", "",
 					"Waiting for Bluetooth-band IQ samples..."));
+			if (gpsMode) gpsParameterLabel.setText(parameterTable("GPS L1 C/A ACQUISITION", "",
+					"Waiting for GPS L1 IQ samples..."));
 			if (ism868Mode) detailLabel.setText("Waiting for an IQ window that overlaps 863-870 MHz");
 			return;
 		}
@@ -2116,6 +2162,15 @@ final class SignalQualityTesterFrame extends JFrame {
 					active.centerFreqHz / 1e6, active.sampleRateHz / 1e6, umts.cfoHz,
 					umts.iqOrientation > 0 ? "normal" : "conjugated");
 			umtsParameterLabel.setText(parameterTable("UMTS/WCDMA DOWNLINK ACQUISITION", details, umts.state));
+		} else if (gpsMode) {
+			GpsL1SignalAnalyzer.Result gps = latestGpsResult;
+			if (gps == null) gps = GpsL1SignalAnalyzer.Result.empty(active.centerFreqHz, active.sampleRateHz,
+					"Waiting for GPS L1 acquisition");
+			String details = gpsParameterDetails(gps, active.centerFreqHz, active.sampleRateHz,
+					gpsWorker == null ? 0L : gpsWorker.overflowCount());
+			gpsParameterLabel.setText(parameterTable("GPS L1 C/A ACQUISITION", details, gps.state));
+			detailLabel.setText(String.format(Locale.US, "%s   PRNs acquired %d   strongest candidates are listed below",
+					gps.state, gps.acquiredCount));
 		} else if (bluetoothMode) {
 			BluetoothSignalAnalyzer.Result bluetooth = latestBluetoothResult;
 			if (bluetooth == null) bluetooth = BluetoothSignalAnalyzer.Result.empty("Waiting for Bluetooth analysis");
@@ -2245,7 +2300,38 @@ final class SignalQualityTesterFrame extends JFrame {
 		return "Searching";
 	}
 
-	private String parameterTable(String title, String details, String waiting) {
+	static String gpsParameterDetails(GpsL1SignalAnalyzer.Result gps, long centerFreqHz, int sampleRateHz, long resets) {
+		GpsL1PositionSolver.Solution position = gps.position;
+		String coordinates = position.plausible ? String.format(Locale.US, "%.6f°, %.6f°", position.latitude, position.longitude) : "--";
+		String altitude = position.plausible ? String.format(Locale.US, "%.1f m (WGS84)", position.altitude) : "--";
+		String gpsTow = position.plausible ? String.format(Locale.US, "%.3f s", (position.receiverTow % 604800d + 604800d) % 604800d) : "--";
+		String dop = position.plausible ? String.format(Locale.US, "%.1f / %.1f / %.1f", position.pdop, position.hdop, position.vdop) : "-- / -- / --";
+		String residual = !position.plausible ? "--" : position.usedPrns.size() < 5 ? "-- (no redundancy)"
+				: String.format(Locale.US, "%.1f m", position.residualRms);
+		String fix = position.state.replace("Position (4 satellites; no redundancy)", "4 sats (no redundancy)")
+				.replace("Waiting for 4 timed ephemerides", "Waiting for ephemerides")
+				.replace("Rejected: implausible position or geometry", "Rejected: position / geometry")
+				.replace("Satellite orbit or ephemeris unavailable", "Orbit / ephemeris unavailable")
+				.replace("Position solution did not converge", "Position did not converge")
+				.replace("Satellite geometry is singular", "Singular satellite geometry");
+		String[] channel = gps.state.replace("IQ window must cover GPS L1 at 1575.420 MHz (at least 2.2 MS/s)",
+				"IQ must cover 1575.420 MHz; min 2.2 MS/s").split(";\\s*", 3);
+		String channelFirst = channel[0].replace("GPS L1 C/A acquisition needs at least", "GPS needs at least")
+				.replace("Sample rate is too high for the GPS acquisition window", "Sample rate too high for GPS")
+				.replace("Collecting a complete 1 ms GPS C/A interval", "Collecting GPS C/A interval");
+		String utc = gps.utc.replace("Waiting for LNAV UTC parameters", "Waiting for UTC data")
+				.replace("UTC parameters unavailable or leap change pending", "UTC data unavailable / leap pending");
+		return String.format(Locale.US,
+				"Fix|%s\nPosition|%s\nAltitude|%s\nUTC|%s\nGPS time|%s\nGPS TOW|%s\n"
+				+ "Locked / used|%d / %d\nDOP (P / H / V)|%s\nRange RMS|%s\n"
+				+ "Channel|%s\n|%s\n|%s\nIQ resets|%d\nL1 / center|%.3f / %.6f MHz\nRate|%.3f MS/s\n"
+				+ "C/A interval|%d samples / 1 ms\nDoppler search|±5 kHz / 500 Hz step",
+				fix, coordinates, altitude, utc, gps.gpsTime, gpsTow, gps.trackedCount, position.plausible ? position.usedPrns.size() : 0,
+				dop, residual, channelFirst, channel.length > 1 ? channel[1] : "--", channel.length > 2 ? channel[2] : "--",
+				resets, GpsL1SignalAnalyzer.L1_FREQUENCY_HZ / 1e6, centerFreqHz / 1e6, sampleRateHz / 1e6, gps.samplesPerMs);
+	}
+
+	static String parameterTable(String title, String details, String waiting) {
 		StringBuilder html = new StringBuilder(1024);
 		html.append("<html><table cellspacing='0' cellpadding='1' width='100%'>")
 				.append("<tr><td colspan='5'><b>").append(title).append("</b></td></tr>");
@@ -2637,6 +2723,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		final UmtsSignalAnalyzer.Result umtsResult;
 		final WifiSignalAnalyzer.Result wifiResult;
 		final WifiDsssAnalyzer.Result wifiDsssResult;
+		final GpsL1SignalAnalyzer.Result gpsResult;
 		final long createdMillis;
 
 		Snapshot(long centerFreqHz, int sampleRateHz, byte[] samples, int sampleCount, double dbfs, int peak,
@@ -2646,6 +2733,7 @@ final class SignalQualityTesterFrame extends JFrame {
 				RdsSignalAnalyzer.Result rdsResult, LteSignalAnalyzer.Result lteResult,
 				NrSignalAnalyzer.Result nrResult, UmtsSignalAnalyzer.Result umtsResult,
 				WifiSignalAnalyzer.Result wifiResult, WifiDsssAnalyzer.Result wifiDsssResult,
+				GpsL1SignalAnalyzer.Result gpsResult,
 				long createdMillis) {
 			this.centerFreqHz = centerFreqHz;
 			this.sampleRateHz = sampleRateHz;
@@ -2668,6 +2756,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			this.umtsResult = umtsResult;
 			this.wifiResult = wifiResult;
 			this.wifiDsssResult = wifiDsssResult;
+			this.gpsResult = gpsResult;
 			this.createdMillis = createdMillis;
 		}
 	}
@@ -2758,7 +2847,7 @@ final class SignalQualityTesterFrame extends JFrame {
 				String label = active != null && (active.dabMetrics != null || active.dvbtResult != null
 						|| active.dvbt2Result != null || active.gsmResult != null || active.rdsResult != null
 						|| active.lteResult != null || active.nrResult != null || active.umtsResult != null
-						|| active.wifiResult != null || active.wifiDsssResult != null) ? "INPUT" : "RAW";
+						|| active.wifiResult != null || active.wifiDsssResult != null || active.gpsResult != null) ? "INPUT" : "RAW";
 				g.drawString(active == null ? label + " --%" : String.format(Locale.US, "%s %.0f%%", label, quality), 4, 17);
 				g.setColor(GRID);
 				g.fillRect(barX, barY, barW, barH);

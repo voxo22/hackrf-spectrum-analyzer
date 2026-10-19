@@ -164,6 +164,7 @@ public class IQAnalyzerApp {
 	private volatile int activeLnaGain = DEFAULT_LNA_GAIN;
 	private volatile int activeVgaGain = DEFAULT_VGA_GAIN;
 	private volatile boolean activeRfAmp = false;
+	private Boolean liveBiasT;
 	private volatile boolean externalSource = false;
 	private volatile long externalCenterFreqHz = DEFAULT_CENTER_FREQ_HZ;
 	private volatile int externalSampleRateHz = DEFAULT_SAMPLE_RATE_HZ;
@@ -171,7 +172,7 @@ public class IQAnalyzerApp {
 	private volatile LongSupplier recordingTimeMillisSupplier;
 	private volatile VideoRecordingSettings videoRecordingSettings = new VideoRecordingSettings("GIF", 540, 15);
 	private volatile float lineThickness = 1f;
-	private SignalQualityTesterFrame signalTestFrame;
+	private volatile SignalQualityTesterFrame signalTestFrame;
 	private boolean singleTriggerArmed = false;
 	private Long spectrumDragBaseOffsetHz = null;
 	private boolean updatingDcOffsetControls = false;
@@ -203,6 +204,12 @@ public class IQAnalyzerApp {
 
 	public IQAnalyzerApp withLineThickness(float lineThickness) {
 		setLineThickness(lineThickness);
+		return this;
+	}
+
+	/** Apply the spectrum analyzer's BiasT only for a live HackRF handoff. */
+	public IQAnalyzerApp withLiveBiasT(boolean enabled) {
+		this.liveBiasT = Boolean.valueOf(enabled);
 		return this;
 	}
 
@@ -315,6 +322,12 @@ public class IQAnalyzerApp {
 			return;
 		}
 		acceptIQBlock(externalCenterFreqHz, externalSampleRateHz, signedIqData, length & ~1, false);
+	}
+
+	/** Prevent continuous GPS timing from spanning a replay seek or loop. */
+	public void signalStreamDiscontinuity() {
+		SignalQualityTesterFrame tester = signalTestFrame;
+		if (tester != null) tester.signalStreamDiscontinuity();
 	}
 
 	public void acceptExternalIQOwned(byte[] signedIqData, int length) {
@@ -658,6 +671,7 @@ public class IQAnalyzerApp {
 				new SignalTestOption("UMTS 3G"),
 				new SignalTestOption("LTE 4G"),
 				new SignalTestOption("NR 5G"),
+				new SignalTestOption(SignalQualityTesterFrame.GPS_MODE),
 				new SignalTestOption("Bluetooth"),
 				new SignalTestOption("Wi-Fi")
 		});
@@ -1199,7 +1213,7 @@ public class IQAnalyzerApp {
 		SignalTestOption option = signalTestCombo == null ? null
 				: (SignalTestOption) signalTestCombo.getSelectedItem();
 		if (option == null) return;
-		if (option.label.startsWith("Wi-Fi") || option.label.startsWith("Bluetooth")) {
+		if (option.label.startsWith("Wi-Fi") || option.label.startsWith("Bluetooth") || option.label.startsWith(SignalQualityTesterFrame.GPS_MODE)) {
 			if (dcOffsetEnableCheck != null) dcOffsetEnableCheck.setSelected(false);
 			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
 			return;
@@ -1668,12 +1682,23 @@ public class IQAnalyzerApp {
 		setStatus(lowIfShiftHz == 0 ? "Starting" : "Starting Low-IF", false);
 
 		iqThread = new Thread(() -> {
-			int result = HackRFIQNativeBridge.start((callbackCenterFreqHz, callbackSampleRateHz, iqData) -> {
-				if (streamId != streamGeneration) {
-					return;
-				}
-				acceptIQBlock(centerFreqHz, callbackSampleRateHz, iqData, iqData.length, false);
-			}, hardwareCenterFreqHz, sampleRateHz, DEFAULT_BASEBAND_FILTER_HZ, lnaGain, vgaGain, rfAmp);
+			int result;
+			try {
+				result = HackRFIQNativeBridge.start((callbackCenterFreqHz, callbackSampleRateHz, iqData) -> {
+					if (streamId != streamGeneration) {
+						return;
+					}
+					acceptIQBlock(centerFreqHz, callbackSampleRateHz, iqData, iqData.length, false);
+				}, hardwareCenterFreqHz, sampleRateHz, DEFAULT_BASEBAND_FILTER_HZ, lnaGain, vgaGain, rfAmp, liveBiasT);
+			} catch (UnsatisfiedLinkError error) {
+				SwingUtilities.invokeLater(() -> {
+					if (streamId != streamGeneration) return;
+					streaming = false; iqThread = null; updateButtons();
+					setStatus(liveBiasT == null ? "IQ native library could not be loaded"
+							: "IQ library missing BiasT support; rebuild hackrf-iq", true);
+				});
+				return;
+			}
 
 			SwingUtilities.invokeLater(() -> {
 				if (streamId != streamGeneration) {

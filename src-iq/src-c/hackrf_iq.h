@@ -38,6 +38,18 @@ IQAPI int IQCALL hackrf_iq_lib_start(
 	unsigned int vga_gain,
 	unsigned int amp_enable);
 
+/* Live spectrum handoff: explicitly apply the requested antenna bias setting.
+ * The original entry point is retained for callers that do not manage BiasT. */
+IQAPI int IQCALL hackrf_iq_lib_start_with_bias(
+	hackrf_iq_callback callback,
+	uint64_t center_freq_hz,
+	uint32_t sample_rate_hz,
+	uint32_t baseband_filter_hz,
+	unsigned int lna_gain,
+	unsigned int vga_gain,
+	unsigned int amp_enable,
+	unsigned int bias_enable);
+
 IQAPI void IQCALL hackrf_iq_lib_stop(void);
 
 IQAPI int IQCALL hackrf_iq_lib_start_tx(

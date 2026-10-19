@@ -150,9 +150,22 @@ public final class Ism868BatchProbe {
 		Inventory(long recordingStart){this.recordingStart=recordingStart;}
 		void add(Ism868SignalAnalyzer.Result result){
 			for(Ism868SignalAnalyzer.Observation observation:result.observations){
+				if(redundantLoRaAlias(observation))continue;removeJablotronAliases(observation);
 				Finding match=matching(observation);if(match==null){match=new Finding(observation,recordingStart);
 					findings.add(match);}else match.update(observation,recordingStart);
 			}
+		}
+		private boolean redundantLoRaAlias(Ism868SignalAnalyzer.Observation observation){
+			if(!"LoRa candidate".equals(observation.protocol)||identified(observation))return false;
+			for(Finding finding:findings)if(finding.protocol.startsWith("Jablotron")
+					&&Math.abs(finding.frequencyHz-observation.frequencyHz)<=80_000L)return true;
+			return false;
+		}
+		private void removeJablotronAliases(Ism868SignalAnalyzer.Observation observation){
+			if(!observation.protocol.startsWith("Jablotron"))return;
+			for(int n=findings.size()-1;n>=0;n--){Finding finding=findings.get(n);
+				if("LoRa candidate".equals(finding.protocol)&&!finding.identified
+						&&Math.abs(finding.frequencyHz-observation.frequencyHz)<=80_000L)findings.remove(n);}
 		}
 		private Finding matching(Ism868SignalAnalyzer.Observation observation){
 			boolean identified=identified(observation);
@@ -165,7 +178,8 @@ public final class Ism868BatchProbe {
 				if(identified&&!finding.driver.equals(driver(observation)))continue;
 				if(!identified&&(!finding.protocol.equals(observation.protocol)
 						||!finding.modulation.equals(observation.modulation)))continue;
-				long tolerance=Math.max(35_000L,Math.max(finding.bandwidthHz,observation.bandwidthHz)/2L);
+				long tolerance=observation.protocol.startsWith("Jablotron")?12_000L:
+						Math.max(35_000L,Math.max(finding.bandwidthHz,observation.bandwidthHz)/2L);
 				if(Math.abs(finding.frequencyHz-observation.frequencyHz)<=tolerance)return finding;
 			}
 			return null;
@@ -221,6 +235,7 @@ public final class Ism868BatchProbe {
 					"  [%s] %.6f MHz, BW %.0f kHz, %s, %s, seen %d, %.2f-%.2f s",
 					evidence,frequencyHz/1e6,bandwidthHz/1000d,modulation,protocol,count,
 					firstMillis/1000d,lastMillis/1000d));
+			if(!Double.isNaN(levelDbfs))out.append(String.format(Locale.US,", max RSSI %.1f dBFS",levelDbfs));
 			if(!Double.isNaN(snrDb))out.append(String.format(Locale.US,", max SNR %.1f dB",snrDb));
 			if(manufacturer.length()>0)out.append(" | maker ").append(manufacturer);
 			if(meterId.length()>0)out.append(" | ID ").append(meterId);

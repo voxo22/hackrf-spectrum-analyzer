@@ -10,7 +10,12 @@ raw IQ capture for time-domain analysis and later demodulation.
 `src-c/hackrf_iq.h` exports:
 
 - `hackrf_iq_lib_start(...)`
+- `hackrf_iq_lib_start_with_bias(...)` (live spectrum handoff; explicitly sets antenna power)
 - `hackrf_iq_lib_stop()`
+
+The original RX entry point leaves antenna power unchanged. The live handoff
+uses the separate BiasT-aware entry point, so an older native library fails
+visibly instead of silently accepting the setting without applying it.
 
 The callback receives interleaved signed 8-bit IQ bytes:
 

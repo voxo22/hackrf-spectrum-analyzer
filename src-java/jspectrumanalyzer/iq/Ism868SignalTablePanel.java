@@ -52,6 +52,7 @@ final class Ism868SignalTablePanel extends JPanel {
 	private static final File DEFAULT_SETTINGS_FILE=new File("hackrf-iq-analyzer.ini");
 	private static final String LAYOUT_PREFIX="ism868.table.";
 	private static final int AC_PERIOD_COLUMN=33;
+	private static final int PREVIOUS_COLUMN_COUNT=36;
 	private static final int LEGACY_COLUMN_COUNT=35;
 	private static final String[] COLUMNS = {
 			"Frequency", "Meter ID", "Manufacturer", "Protocol / mode", "Device / medium",
@@ -59,9 +60,13 @@ final class Ism868SignalTablePanel extends JPanel {
 			"Current reading", "Current date", "Previous reading", "Previous date",
 			"Room temp", "Radiator temp", "Temperature", "Humidity", "Wind avg",
 			"Wind gust", "Wind dir", "Rain", "UV / UVI", "Light", "Battery",
-			"Decoded values", "RSSI", "SNR", "Received", "Missed", "Tx period", "AC period",
-			"CRC", "Last seen"
+			"Decoded values", "RSSI", "SNR", "Frames", "Missed", "Tx period", "AC period",
+			"CRC", "Last seen", "Modulation", "Symbol rate", "Occupied BW", "Burst",
+			"Tone spacing", "PHY confidence"
 	};
+	private static final int[] COLUMN_WIDTHS={105,105,92,125,145,68,62,62,58,75,150,125,
+			105,92,105,92,82,92,92,78,92,92,78,88,92,92,72,240,86,74,72,62,72,72,55,82,
+			125,100,100,90,105,105};
 	private final List<Signal> signals = new ArrayList<Signal>();
 	private final List<Long> displayedRowKeys=new ArrayList<Long>();
 	private final DefaultTableModel model = new DefaultTableModel(COLUMNS, 0) {
@@ -69,7 +74,8 @@ final class Ism868SignalTablePanel extends JPanel {
 		@Override public Class<?> getColumnClass(int column) {
 			switch (column) {
 			case 0: return Long.class;
-			case 28: case 29: case 32: case 33: return Double.class;
+			case 28: case 29: case 32: case 33: case 37: case 38: case 39: case 40: case 41:
+				return Double.class;
 			case 30: case 31: case 35: return Long.class;
 			default: return String.class;
 			}
@@ -103,9 +109,8 @@ final class Ism868SignalTablePanel extends JPanel {
 		table.getRowSorter().addRowSorterListener(event->table.getTableHeader().repaint());
 		table.getTableHeader().addMouseListener(new MouseAdapter(){@Override public void mousePressed(MouseEvent event){headerPopupHandled=handleHeaderPopup(event);}
 			@Override public void mouseReleased(MouseEvent event){if(!headerPopupHandled)handleHeaderPopup(event);headerPopupHandled=false;}});
-		int[] widths = {105,105,92,125,145,68,62,62,58,75,150,125,105,92,105,92,82,92,
-				92,78,92,92,78,88,92,92,72,240,86,74,72,62,72,72,55,82};
-		for (int n=0;n<widths.length;n++) table.getColumnModel().getColumn(n).setPreferredWidth(widths[n]);
+		for (int n=0;n<COLUMN_WIDTHS.length;n++)
+			table.getColumnModel().getColumn(n).setPreferredWidth(COLUMN_WIDTHS[n]);
 		ValueRenderer renderer = new ValueRenderer();
 		for (int n=0;n<COLUMNS.length;n++) table.getColumnModel().getColumn(n).setCellRenderer(renderer);
 		table.addMouseListener(new MouseAdapter(){@Override public void mousePressed(MouseEvent event){rowPopupHandled=handleRowPopup(event);}
@@ -168,8 +173,10 @@ final class Ism868SignalTablePanel extends JPanel {
 		try{
 			String savedOrder=properties.getProperty(LAYOUT_PREFIX+"columnOrder");
 			int[] order=parseIntList(savedOrder,COLUMNS.length);boolean legacyLayout=false;
+			if(order==null){int[] previous=parseIntList(savedOrder,PREVIOUS_COLUMN_COUNT);
+				if(validColumnOrder(previous,PREVIOUS_COLUMN_COUNT))order=appendNewColumns(previous);}
 			if(order==null){int[] legacy=parseIntList(savedOrder,LEGACY_COLUMN_COUNT);
-				if(validColumnOrder(legacy,LEGACY_COLUMN_COUNT)){order=upgradeLegacyOrder(legacy);
+				if(validColumnOrder(legacy,LEGACY_COLUMN_COUNT)){order=appendNewColumns(upgradeLegacyOrder(legacy));
 					legacyLayout=true;}}
 			if(validColumnOrder(order))for(int target=0;target<order.length;target++){
 				int current=table.convertColumnIndexToView(order[target]);
@@ -177,8 +184,10 @@ final class Ism868SignalTablePanel extends JPanel {
 			}
 			String savedWidths=properties.getProperty(LAYOUT_PREFIX+"columnWidths");
 			int[] widths=parseIntList(savedWidths,COLUMNS.length);
+			if(widths==null){int[] previous=parseIntList(savedWidths,PREVIOUS_COLUMN_COUNT);
+				if(previous!=null)widths=appendNewWidths(previous);}
 			if(widths==null){int[] legacy=parseIntList(savedWidths,LEGACY_COLUMN_COUNT);
-				if(legacy!=null){widths=upgradeLegacyWidths(legacy);legacyLayout=true;}}
+				if(legacy!=null){widths=appendNewWidths(upgradeLegacyWidths(legacy));legacyLayout=true;}}
 			if(widths!=null)for(int modelColumn=0;modelColumn<widths.length;modelColumn++){
 				int viewColumn=table.convertColumnIndexToView(modelColumn);if(viewColumn<0)continue;
 				TableColumn column=table.getColumnModel().getColumn(viewColumn);
@@ -235,17 +244,22 @@ final class Ism868SignalTablePanel extends JPanel {
 			seen[modelColumn]=true;}return true;
 	}
 
-	private static int[] upgradeLegacyOrder(int[] legacy){int[] upgraded=new int[COLUMNS.length];int at=0;
+	private static int[] upgradeLegacyOrder(int[] legacy){int[] upgraded=new int[PREVIOUS_COLUMN_COUNT];int at=0;
 		for(int modelColumn:legacy){upgraded[at++]=modelColumn>=AC_PERIOD_COLUMN?modelColumn+1:modelColumn;
 			if(modelColumn==AC_PERIOD_COLUMN-1)upgraded[at++]=AC_PERIOD_COLUMN;}
 		return upgraded;
 	}
 
-	private static int[] upgradeLegacyWidths(int[] legacy){int[] upgraded=new int[COLUMNS.length];
+	private static int[] upgradeLegacyWidths(int[] legacy){int[] upgraded=new int[PREVIOUS_COLUMN_COUNT];
 		System.arraycopy(legacy,0,upgraded,0,AC_PERIOD_COLUMN);upgraded[AC_PERIOD_COLUMN]=72;
 		System.arraycopy(legacy,AC_PERIOD_COLUMN,upgraded,AC_PERIOD_COLUMN+1,
 				legacy.length-AC_PERIOD_COLUMN);return upgraded;
 	}
+	private static int[] appendNewColumns(int[] previous){int[] upgraded=new int[COLUMNS.length];
+		System.arraycopy(previous,0,upgraded,0,previous.length);
+		for(int n=previous.length;n<upgraded.length;n++)upgraded[n]=n;return upgraded;}
+	private static int[] appendNewWidths(int[] previous){int[] upgraded=COLUMN_WIDTHS.clone();
+		System.arraycopy(previous,0,upgraded,0,Math.min(previous.length,upgraded.length));return upgraded;}
 
 	private static List<RowSorter.SortKey> parseSortKeys(String value,boolean legacyLayout){
 		if(value==null)return null;if(value.length()==0)return Collections.emptyList();
@@ -270,6 +284,8 @@ final class Ism868SignalTablePanel extends JPanel {
 		for (Ism868SignalAnalyzer.Observation observation : result.observations) {
 			if(isRedundantLoRaCandidate(observation))continue;
 			removeConfirmedWmbusCandidateAliases(observation);
+			removeJablotronCandidateAliases(observation);
+			remove8685CandidateAliases(observation);
 			Signal signal = matching(observation);
 			if (signal == null) { signal = new Signal(nextSignalKey++,observation,arrivalNanos,
 					arrivalMillis); signals.add(signal); }
@@ -290,7 +306,32 @@ final class Ism868SignalTablePanel extends JPanel {
 		if(!"LoRa candidate".equals(observation.protocol)||observation.meterId.length()>0)return false;
 		for(Signal signal:signals)if(signal.meterId.length()>0&&signal.protocol.startsWith("LoRa")
 				&&Math.abs(signal.frequencyHz-observation.frequencyHz)<=150_000L)return true;
+		for(Signal signal:signals)if(signal.protocol.startsWith("Jablotron")
+				&&Math.abs(signal.frequencyHz-observation.frequencyHz)<=80_000L)return true;
+		for(Signal signal:signals)if((signal.protocol.startsWith("Wavenis")
+				||signal.protocol.startsWith("868.5 proprietary"))
+				&&Math.abs(signal.frequencyHz-observation.frequencyHz)<=80_000L)return true;
 		return false;
+	}
+	private void remove8685CandidateAliases(Ism868SignalAnalyzer.Observation observation){
+		if(!observation.protocol.startsWith("Wavenis")
+				&&!observation.protocol.startsWith("868.5 proprietary"))return;
+		for(int n=signals.size()-1;n>=0;n--){Signal signal=signals.get(n);
+			if(("LoRa candidate".equals(signal.protocol)||"SRD / rtl_433 candidate".equals(signal.protocol))
+					&&signal.application.driver.length()==0
+					&&Math.abs(signal.frequencyHz-observation.frequencyHz)<=80_000L){
+				signals.remove(n);Long key=Long.valueOf(signal.rowKey);flashUntil.remove(key);
+				if(selectedSignalKeys.contains(key))selectedSignalKeys=Collections.emptySet();}
+		}
+	}
+	private void removeJablotronCandidateAliases(Ism868SignalAnalyzer.Observation observation){
+		if(!observation.protocol.startsWith("Jablotron"))return;
+		for(int n=signals.size()-1;n>=0;n--){Signal signal=signals.get(n);
+			if("LoRa candidate".equals(signal.protocol)&&signal.application.driver.length()==0
+					&&Math.abs(signal.frequencyHz-observation.frequencyHz)<=80_000L){
+				signals.remove(n);Long key=Long.valueOf(signal.rowKey);flashUntil.remove(key);
+				if(selectedSignalKeys.contains(key))selectedSignalKeys=Collections.emptySet();}
+		}
 	}
 	void observeAtForTest(Ism868SignalAnalyzer.Result result,long arrivalNanos){observeAt(result,arrivalNanos);}
 
@@ -391,8 +432,9 @@ final class Ism868SignalTablePanel extends JPanel {
 					||(signal.protocol.startsWith("W-MBus")&&observation.protocol.startsWith("W-MBus"));
 			if (!sameFamily) continue;
 			long distance = Math.abs(signal.frequencyHz - observation.frequencyHz);
-			long tolerance = Math.max(18_000L, Math.min(100_000L,
-					Math.max(signal.bandwidthHz, observation.bandwidthHz) / 2L));
+			long tolerance=observation.protocol.startsWith("Jablotron")?12_000L:
+					Math.max(18_000L,Math.min(100_000L,
+					Math.max(signal.bandwidthHz,observation.bandwidthHz)/2L));
 			if (distance <= tolerance && distance < bestDistance) { best=signal; bestDistance=distance; }
 		}
 		return best;
@@ -427,7 +469,10 @@ final class Ism868SignalTablePanel extends JPanel {
 				Long.valueOf(signal.received),Long.valueOf(signal.missed),
 				Double.valueOf(signal.txPeriodSeconds()),Double.valueOf(signal.acPeriodSeconds()),
 				signal.checksumValid ? "OK" : "--",
-				Long.valueOf(signal.lastSeenMillis)
+				Long.valueOf(signal.lastSeenMillis),signal.modulation,
+				Double.valueOf(signal.symbolRate),Double.valueOf(signal.bandwidthHz),
+				Double.valueOf(signal.burstMillis),Double.valueOf(signal.toneSeparationHz),
+				Double.valueOf(signal.phyConfidence)
 		});}
 		for(int modelRow=0;modelRow<displayedRowKeys.size();modelRow++)
 			if(selectedBefore.contains(displayedRowKeys.get(modelRow))){
@@ -577,6 +622,7 @@ final class Ism868SignalTablePanel extends JPanel {
 		long acStartMillis,lastAcEventMillis,accessSteps;
 		long periodClockMillis,lastPeriodSourceMillis,lastObservationNanos;
 		double levelDbfs, snrDb, confidence;
+		double symbolRate,burstMillis,toneSeparationHz,phyConfidence;
 		String protocol, modulation, details, payload, manufacturer, meterId;
 		String deviceTypeName, frameFormat, security;
 		WmbusApplicationDecoder.Result application;
@@ -587,6 +633,8 @@ final class Ism868SignalTablePanel extends JPanel {
 		Signal(long rowKey,Ism868SignalAnalyzer.Observation o,long arrivalNanos,long arrivalMillis) {
 			this.rowKey=rowKey;
 			frequencyHz=o.frequencyHz; bandwidthHz=o.bandwidthHz; levelDbfs=o.levelDbfs; snrDb=o.snrDb;
+			symbolRate=o.symbolRate;burstMillis=o.burstMillis;toneSeparationHz=o.toneSeparationHz;
+			phyConfidence=o.phyConfidence;
 			confidence=o.confidence; protocol=o.protocol; modulation=o.modulation; details=o.details;
 			payload=o.payloadHex; manufacturer=o.manufacturer; meterId=o.meterId;
 			deviceTypeName=o.deviceTypeName;meterVersion=o.meterVersion;controlField=o.controlField;
@@ -607,6 +655,8 @@ final class Ism868SignalTablePanel extends JPanel {
 			lastPeriodSourceMillis=o.lastPeriodSourceMillis;lastObservationNanos=o.lastObservationNanos;
 			accessSteps=o.accessSteps;
 			levelDbfs=o.levelDbfs;snrDb=o.snrDb;confidence=o.confidence;protocol=o.protocol;
+			symbolRate=o.symbolRate;burstMillis=o.burstMillis;toneSeparationHz=o.toneSeparationHz;
+			phyConfidence=o.phyConfidence;
 			modulation=o.modulation;details=o.details;payload=o.payload;manufacturer=o.manufacturer;
 			meterId=o.meterId;deviceTypeName=o.deviceTypeName;meterVersion=o.meterVersion;
 			controlField=o.controlField;ciField=o.ciField;lastAccessNumber=o.lastAccessNumber;
@@ -637,6 +687,10 @@ final class Ism868SignalTablePanel extends JPanel {
 			if(!Double.isNaN(o.levelDbfs))levelDbfs=Double.isNaN(levelDbfs)?o.levelDbfs
 					:levelDbfs*.7d+o.levelDbfs*.3d;
 			if(!Double.isNaN(o.snrDb))snrDb=Double.isNaN(snrDb)?o.snrDb:snrDb*.7d+o.snrDb*.3d;
+			if(!Double.isNaN(o.symbolRate))symbolRate=smoothed(symbolRate,o.symbolRate);
+			if(!Double.isNaN(o.burstMillis))burstMillis=smoothed(burstMillis,o.burstMillis);
+			if(!Double.isNaN(o.toneSeparationHz))toneSeparationHz=smoothed(toneSeparationHz,o.toneSeparationHz);
+			if(!Double.isNaN(o.phyConfidence))phyConfidence=smoothed(phyConfidence,o.phyConfidence);
 			confidence=Math.max(confidence*.95d,o.confidence);protocol=o.protocol;modulation=o.modulation;details=o.details;
 			if(o.payloadHex.length()>0)payload=o.payloadHex;
 			if(o.meterId.length()>0){manufacturer=o.manufacturer;meterId=o.meterId;
@@ -668,6 +722,7 @@ final class Ism868SignalTablePanel extends JPanel {
 			long elapsed=lastAcEventMillis-acStartMillis;
 			return elapsed<=0||accessSteps<=0?Double.NaN:elapsed/(1000d*accessSteps);
 		}
+		private static double smoothed(double old,double next){return Double.isNaN(old)?next:old*.7d+next*.3d;}
 	}
 
 	private static final class SortHeaderRenderer extends DefaultTableCellRenderer {
@@ -692,6 +747,11 @@ final class Ism868SignalTablePanel extends JPanel {
 				else if(column==28)value=String.format(Locale.US,"%.1f dBFS",n);
 				else if(column==29)value=String.format(Locale.US,"%.1f dB",n);
 				else if(column==32||column==33)value=formatPeriod(n);
+				else if(column==37)value=n>=1000d?String.format(Locale.US,"%.1f ksym/s",n/1000d)
+						:String.format(Locale.US,"%.0f sym/s",n);
+				else if(column==38||column==40)value=String.format(Locale.US,"%.1f kHz",n/1000d);
+				else if(column==39)value=String.format(Locale.US,"%.2f ms",n);
+				else if(column==41)value=String.format(Locale.US,"%.0f %%",n);
 			}
 			if(value instanceof String&&((String)value).indexOf('\n')>=0)
 				value="<html><div style='text-align:center'>"+html((String)value)+"</div></html>";

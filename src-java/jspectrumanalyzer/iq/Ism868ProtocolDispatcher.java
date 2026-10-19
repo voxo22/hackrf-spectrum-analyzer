@@ -96,7 +96,7 @@ final class Ism868ProtocolDispatcher {
 		else{protocol="Unclassified ISM burst";decoder="signal probe";}
 		double known="signal probe".equals(decoder)?0d:18d;
 		double priority=Math.max(0d,Math.min(100d,25d+capture.snrDb*2d+profile.confidence*.35d+known));
-		StringBuilder details=new StringBuilder("streaming channel PFB | ").append(profile.modulation);
+		StringBuilder details=new StringBuilder("streaming channel PFB | ").append(profile.displayModulation);
 		if(profile.occupiedBandwidthHz>0)details.append(String.format(Locale.US,", BW ~%.0f kHz",profile.occupiedBandwidthHz/1000d));
 		if(profile.symbolRate>0d)details.append(String.format(Locale.US,", rate ~%.0f sym/s",profile.symbolRate));
 		if(profile.burstMillis>0d)details.append(String.format(Locale.US,", active span %.0f ms",profile.burstMillis));
@@ -108,7 +108,7 @@ final class Ism868ProtocolDispatcher {
 
 	private static Profile profile(IQDynamicChannelizer.Capture capture){
 		float[] iq=capture.iq;int available=iq==null?0:iq.length/2;
-		if(available<32||capture.sampleRateHz<=0d)return new Profile("unknown",0d,
+		if(available<32||capture.sampleRateHz<=0d)return new Profile("unknown","Unknown",0d,
 				capture.bandwidthHz,0d,5d);
 		int samples=Math.min(available,MAX_PROFILE_SAMPLES),first=available-samples;
 		double[] amplitude=new double[samples];
@@ -137,19 +137,19 @@ final class Ism868ProtocolDispatcher {
 			frequency[frequencyCount++]=Math.atan2(cq*pi-ci*pq,ci*pi+cq*pq)*scale;
 		}
 		if(frequencyCount<24){double rate=ook?symbolRate(amplitude,activeThreshold,capture.sampleRateHz):0d;
-			return new Profile(ook?"OOK":"unknown",rate,ook?ookBandwidth(rate,capture.bandwidthHz):capture.bandwidthHz,
-				burstMillis,ook?75d:10d);}
+			return new Profile(ook?"OOK":"unknown",ook?"ASK/OOK":"Unknown",rate,
+				ook?ookBandwidth(rate,capture.bandwidthHz):capture.bandwidthHz,burstMillis,ook?75d:10d);}
 		double[] sortedFrequency=Arrays.copyOf(frequency,frequencyCount);Arrays.sort(sortedFrequency);
-		double f05=percentile(sortedFrequency,.05d),f25=percentile(sortedFrequency,.25d);
+		double f01=percentile(sortedFrequency,.01d),f05=percentile(sortedFrequency,.05d),f25=percentile(sortedFrequency,.25d);
 		double f50=percentile(sortedFrequency,.50d),f75=percentile(sortedFrequency,.75d);
-		double f95=percentile(sortedFrequency,.95d),spread=f95-f05;
+		double f95=percentile(sortedFrequency,.95d),f99=percentile(sortedFrequency,.99d),spread=f95-f05;
 		Chirp chirp=chirp(frequency,frequencyCount,capture.sampleRateHz,spread);
 		/* The PFB deliberately keeps pre-trigger and post-trigger silence.  Its
 		 * amplitude depth therefore says nothing about whether the active signal
 		 * is constant-envelope CSS; the interior OOK test above is the guard. */
 		if(!ook&&spread>=45_000d&&chirp.valid){
 			int bandwidth=snapLoraBandwidth(spread);
-			return new Profile("CSS",chirp.rate,bandwidth,burstMillis,92d);
+			return new Profile("CSS","CSS / chirp",chirp.rate,bandwidth,burstMillis,92d);
 		}
 		double threshold=(f25+f75)/2d,lowSum=0d,highSum=0d;int lowCount=0,highCount=0;
 		for(int n=0;n<frequencyCount;n++)if(frequency[n]<threshold){lowSum+=frequency[n];lowCount++;}
@@ -163,15 +163,35 @@ final class Ism868ProtocolDispatcher {
 				&&separation>=4_000d&&separation>within*2.2d;
 		if(fsk){double rate=symbolRate(frequency,threshold,capture.sampleRateHz);
 			int bandwidth=(int)Math.round(Math.max(5_000d,separation+Math.max(0d,rate)*2d));
-			return new Profile("FSK",rate,Math.min(1_500_000,bandwidth),burstMillis,
-					Math.min(90d,60d+separation/Math.max(1d,within)*4d));}
+			return new Profile("FSK","2-FSK / GFSK",rate,Math.min(1_500_000,bandwidth),burstMillis,
+					Math.min(90d,60d+separation/Math.max(1d,within)*4d),separation);}
 		/* Deep fading can make a constant-envelope FSK burst look amplitude keyed.
 		 * Prefer two statistically separated frequency states; a real OOK carrier
 		 * has only one gated frequency cluster and therefore cannot pass this test. */
 		if(ook){double rate=symbolRate(amplitude,activeThreshold,capture.sampleRateHz);
-			return new Profile("OOK",rate,ookBandwidth(rate,capture.bandwidthHz),burstMillis,82d);}
-		return new Profile(spread<2_500d?"CW":"unknown",0d,
+			return new Profile("OOK","ASK/OOK",rate,ookBandwidth(rate,capture.bandwidthHz),burstMillis,82d);}
+		double pskRate=pskSymbolRate(frequency,frequencyCount,f50,f75-f25,capture.sampleRateHz);
+		double pskSpread=f99-f01;
+		if(!ook&&amplitudeDepth<7d&&pskSpread>=18_000d&&pskRate>0d)
+			return new Profile("PSK","PSK candidate",pskRate,
+					(int)Math.round(Math.max(5_000d,Math.min(capture.bandwidthHz,pskSpread))),burstMillis,58d);
+		String family=spread<2_500d?"CW":"unknown";
+		return new Profile(family,"CW".equals(family)?"CW":"Unknown",0d,
 				(int)Math.round(Math.max(2_000d,Math.min(capture.bandwidthHz,spread))),burstMillis,25d);
+	}
+
+	private static double pskSymbolRate(double[] frequency,int count,double center,double centralWidth,
+			double sampleRate){
+		double threshold=Math.max(15_000d,Math.max(2_000d,centralWidth)*5d);
+		List<Integer> edges=new ArrayList<Integer>();boolean inEdge=false;
+		for(int n=0;n<count;n++){boolean edge=Math.abs(frequency[n]-center)>=threshold;
+			if(edge&&!inEdge)edges.add(Integer.valueOf(n));inEdge=edge;}
+		if(edges.size()<4||edges.size()>count/4)return 0d;
+		double[] intervals=new double[edges.size()-1];for(int n=1;n<edges.size();n++)
+			intervals[n-1]=edges.get(n).intValue()-edges.get(n-1).intValue();
+		Arrays.sort(intervals);double samplesPerSymbol=percentile(intervals,.18d);
+		if(samplesPerSymbol<3d)return 0d;double rate=sampleRate/samplesPerSymbol;
+		return rate>=100d&&rate<=250_000d?rate:0d;
 	}
 
 	private static Chirp chirp(double[] frequency,int count,double sampleRate,double spread){
@@ -212,11 +232,16 @@ final class Ism868ProtocolDispatcher {
 	private static String key(long frequency,String modulation){return Math.round(frequency/25_000d)+":"+modulation;}
 
 	static final class Profile{
-		final String modulation;final double symbolRate;final int occupiedBandwidthHz;
-		final double burstMillis,confidence;
-		Profile(String modulation,double symbolRate,int occupiedBandwidthHz,double burstMillis,double confidence){
-			this.modulation=modulation;this.symbolRate=symbolRate;this.occupiedBandwidthHz=occupiedBandwidthHz;
-			this.burstMillis=burstMillis;this.confidence=confidence;}
+		final String modulation,displayModulation;final double symbolRate;final int occupiedBandwidthHz;
+		final double burstMillis,confidence,toneSeparationHz;
+		Profile(String modulation,String displayModulation,double symbolRate,int occupiedBandwidthHz,
+				double burstMillis,double confidence){this(modulation,displayModulation,symbolRate,
+				occupiedBandwidthHz,burstMillis,confidence,Double.NaN);}
+		Profile(String modulation,String displayModulation,double symbolRate,int occupiedBandwidthHz,
+				double burstMillis,double confidence,double toneSeparationHz){
+			this.modulation=modulation;this.displayModulation=displayModulation;this.symbolRate=symbolRate;
+			this.occupiedBandwidthHz=occupiedBandwidthHz;this.burstMillis=burstMillis;
+			this.confidence=confidence;this.toneSeparationHz=toneSeparationHz;}
 	}
 	static final class Dispatch{
 		final IQDynamicChannelizer.Capture capture;final Profile profile;

@@ -7,7 +7,7 @@ import java.util.List;
 /** Synthetic PHY and analyzer regressions for imported rtl_433 protocols. */
 public final class IsmRtl433DecoderTest {
 	private IsmRtl433DecoderTest(){ }
-	public static void main(String[] args){testRenault();
+	public static void main(String[] args){testRenault();testTapo(false);testTapo(true);
 		System.out.println("IsmRtl433DecoderTest: OK");}
 
 	private static void testRenault(){byte[] payload=new byte[9];int pressureRaw=320,flags=0x12;
@@ -30,6 +30,31 @@ public final class IsmRtl433DecoderTest {
 		check("25 C".equals(panel.cellForMeterForTest("123abc","Temperature")),"Renault table temperature");
 	}
 
+	private static void testTapo(boolean manchester){byte[] frame=hex(manchester
+			?"2AE9F0A73187A160F0A731879B4E028010000D14E3A2AF51C949772E5B55980CE8AECE404732927878E5AA"
+			:"1000F0A73187A160030180107A0101C00F");int crc=TapoSubGDecoder.crc16X25(frame,frame.length-2);
+		check(crc==(((frame[frame.length-2]&255)<<8)|(frame[frame.length-1]&255)),"Tapo test CRC");
+		List<Boolean> bits=new ArrayList<Boolean>();
+		for(int n=0;n<4;n++)appendByte(bits,0xaa);appendByte(bits,0x66);appendByte(bits,0x59);
+		appendByte(bits,0x5a);appendByte(bits,0x99);
+		if(manchester)for(byte value:frame)for(int bit=7;bit>=0;bit--){boolean one=((value>>>bit)&1)!=0;
+			bits.add(Boolean.valueOf(one));bits.add(Boolean.valueOf(!one));}
+		else for(byte value:frame)appendByte(bits,value&255);
+		for(int n=0;n<24;n++)bits.add(Boolean.valueOf((n&1)!=0));float[] iq=modulate(bits,20d);
+		List<TapoSubGDecoder.Decoded> decoded=new TapoSubGDecoder().decodeAll(iq,500_000d);
+		check(decoded.size()==1,"Tapo "+(manchester?"Manchester":"NRZ")+" frame");
+		TapoSubGDecoder.Decoded value=decoded.get(0);check(value.manchester==manchester,"Tapo encoding");
+		check("F0:A7:31:87:A1:60".equals(value.firstAddress),"Tapo address");
+		check((manchester?"F0:A7:31:87:9B:4E":"").equals(value.secondAddress),"Tapo peer address");
+		near(20d*Math.log10(.8d),value.levelDbfs,.05d,"Tapo frame RSSI");
+		Ism868SignalAnalyzer.Result result=analyze(new IQDynamicChannelizer.Capture(
+				864_350_000L,200_000,-32d,28d,500_000d,iq));boolean found=false;
+		for(Ism868SignalAnalyzer.Observation observation:result.observations)
+			if("Tapo Sub-GHz".equals(observation.protocol)&&observation.checksumValid){found=true;
+				near(value.levelDbfs,observation.levelDbfs,.001d,"Tapo analyzer frame RSSI");}
+		check(found,"Tapo analyzer promotion");
+	}
+
 	private static Ism868SignalAnalyzer.Result analyze(IQDynamicChannelizer.Capture capture){
 		Ism868SignalAnalyzer.ChannelizedWmbus channels=new Ism868SignalAnalyzer.ChannelizedWmbus(
 				new float[0],0d,new float[0],0d,Collections.singletonList(capture));
@@ -43,6 +68,8 @@ public final class IsmRtl433DecoderTest {
 			iq[(lead+n)*2]=(float)(.8d*Math.cos(phase));iq[(lead+n)*2+1]=(float)(.8d*Math.sin(phase));}return iq;}
 	private static void appendByte(List<Boolean> bits,int value){for(int bit=7;bit>=0;bit--)
 		bits.add(Boolean.valueOf((value&(1<<bit))!=0));}
+	private static byte[] hex(String text){byte[] out=new byte[text.length()/2];for(int n=0;n<out.length;n++)
+		out[n]=(byte)Integer.parseInt(text.substring(n*2,n*2+2),16);return out;}
 	private static void near(double expected,double actual,double tolerance,String label){if(Math.abs(expected-actual)>tolerance)
 		throw new AssertionError(label+": expected "+expected+", got "+actual);}
 	private static void check(boolean value,String label){if(!value)throw new AssertionError(label);}

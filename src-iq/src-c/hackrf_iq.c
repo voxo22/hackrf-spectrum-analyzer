@@ -79,14 +79,16 @@ IQAPI void IQCALL hackrf_iq_lib_stop_tx(void)
 	do_exit = 1;
 }
 
-IQAPI int IQCALL hackrf_iq_lib_start(
+static int start_rx(
 	hackrf_iq_callback callback,
 	uint64_t center_freq_hz,
 	uint32_t sample_rate_hz,
 	uint32_t baseband_filter_hz,
 	unsigned int lna_gain,
 	unsigned int vga_gain,
-	unsigned int amp_enable)
+	unsigned int amp_enable,
+	int apply_bias,
+	unsigned int bias_enable)
 {
 	int result = HACKRF_SUCCESS;
 	uint32_t chosen_filter_hz = baseband_filter_hz;
@@ -123,6 +125,14 @@ IQAPI int IQCALL hackrf_iq_lib_start(
 	if (result != HACKRF_SUCCESS) {
 		fprintf(stderr, "hackrf_iq: hackrf_open() failed: %s (%d)\n", hackrf_error_name(result), result);
 		goto cleanup;
+	}
+
+	if (apply_bias) {
+		result = hackrf_set_antenna_enable(device, bias_enable ? 1 : 0);
+		if (result != HACKRF_SUCCESS) {
+			fprintf(stderr, "hackrf_iq: hackrf_set_antenna_enable() failed: %s (%d)\n", hackrf_error_name(result), result);
+			goto cleanup;
+		}
 	}
 
 	result = hackrf_set_sample_rate(device, (double) sample_rate_hz);
@@ -195,6 +205,20 @@ cleanup:
 	do_exit = 0;
 
 	return result;
+}
+
+IQAPI int IQCALL hackrf_iq_lib_start(
+	hackrf_iq_callback callback, uint64_t center_freq_hz, uint32_t sample_rate_hz,
+	uint32_t baseband_filter_hz, unsigned int lna_gain, unsigned int vga_gain, unsigned int amp_enable)
+{
+	return start_rx(callback, center_freq_hz, sample_rate_hz, baseband_filter_hz, lna_gain, vga_gain, amp_enable, 0, 0);
+}
+
+IQAPI int IQCALL hackrf_iq_lib_start_with_bias(
+	hackrf_iq_callback callback, uint64_t center_freq_hz, uint32_t sample_rate_hz,
+	uint32_t baseband_filter_hz, unsigned int lna_gain, unsigned int vga_gain, unsigned int amp_enable, unsigned int bias_enable)
+{
+	return start_rx(callback, center_freq_hz, sample_rate_hz, baseband_filter_hz, lna_gain, vga_gain, amp_enable, 1, bias_enable);
 }
 
 IQAPI int IQCALL hackrf_iq_lib_start_tx(

@@ -32,6 +32,9 @@ final class Ism868SignalAnalyzer {
 	private final WmbusPhyDecoder wmbusDecoder = new WmbusPhyDecoder();
 	private final FineOffsetWh65bDecoder fineOffsetDecoder=new FineOffsetWh65bDecoder();
 	private final RenaultTpmsDecoder renaultDecoder=new RenaultTpmsDecoder();
+	private final TapoSubGDecoder tapoDecoder=new TapoSubGDecoder();
+	private final JablotronJa100Classifier jablotronClassifier=new JablotronJa100Classifier();
+	private final Ism8685Classifier ism8685Classifier=new Ism8685Classifier();
 	private final LoRaPhyDecoder loraDecoder=new LoRaPhyDecoder();
 	private final AutomotiveKeyfobClassifier keyfobClassifier=new AutomotiveKeyfobClassifier();
 	private final Ism868ProtocolDispatcher protocolDispatcher=new Ism868ProtocolDispatcher();
@@ -102,6 +105,31 @@ final class Ism868SignalAnalyzer {
 		if(channelized!=null)for(Ism868ProtocolDispatcher.Dispatch dispatch:
 				protocolDispatcher.dispatch(channelized.dynamic,captureMillis,channelized.exhaustive))
 			mergeDynamicChannel(observations,dispatch,captureMillis);
+		/* The JA-100 waveform sits directly around 868.1 MHz, where a wide-IQ
+		 * centre/DC guard or PFB boundary can obscure its narrow GFSK tones. This
+		 * block-gated probe still requires a 40 ksym/s alternating-preamble PHY. */
+		if(visible(centerFrequencyHz,sampleRateHz,JablotronJa100Classifier.CHANNEL_HZ))
+			for(JablotronJa100Classifier.Candidate candidate:
+					jablotronClassifier.classify(iq,length,sampleRateHz))
+				mergeJablotronCandidate(observations,candidate,centerFrequencyHz,captureMillis);
+		if(visible(centerFrequencyHz,sampleRateHz,Ism8685Classifier.CHANNEL_HZ))
+			for(Ism8685Classifier.Candidate candidate:ism8685Classifier.classify(iq,length,sampleRateHz))
+				merge8685Candidate(observations,candidate,centerFrequencyHz,captureMillis);
+		/* A transmitter exactly at the wide-IQ centre straddles two PFB branches.
+		 * Decode the three fixed Tapo channels from the undivided window as a
+		 * fallback; the sync + length + CRC gate makes this non-speculative. */
+		long tapoChannel=visibleTapoChannel(centerFrequencyHz,sampleRateHz);
+		if(tapoChannel>0L&&hasCandidateNear(observations,tapoChannel,220_000L)
+				&&!hasProtocol(observations,"Tapo Sub-GHz")){
+			float[] tapoIq=new float[Math.min(length,iq.length)&~1];
+			for(int n=0;n<tapoIq.length;n++)tapoIq[n]=iq[n]/128f;
+			double level=Double.NaN,snr=Double.NaN;for(Observation candidate:observations)
+				if(Math.abs(candidate.frequencyHz-tapoChannel)<=220_000L){level=candidate.levelDbfs;snr=candidate.snrDb;break;}
+			IQDynamicChannelizer.Capture rawCapture=new IQDynamicChannelizer.Capture(tapoChannel,
+					tapoChannel,200_000,level,snr,sampleRateHz,tapoIq,true);
+			for(TapoSubGDecoder.Decoded decoded:tapoDecoder.decodeAll(tapoIq,sampleRateHz))
+				confirmTapo(observations,rawCapture,decoded,captureMillis);
+		}
 		/* Do not gate protocol acquisition on the FFT candidates. A short meter
 		 * burst can fall between the selected FFT windows, while a valid PHY sync
 		 * plus every EN 13757 CRC is already a much stronger detector. */
@@ -174,6 +202,14 @@ final class Ism868SignalAnalyzer {
 		if(dispatch.decoderEligible){
 			boolean confirmed=false,routedLoRa="LoRa".equals(dispatch.decoder);
 			double captureSeconds=capture.iq.length/2d/capture.sampleRateHz;
+			/* Tapo's short 200 kHz GFSK bursts can look CSS-like or unknown while
+			 * they are still growing.  Its 32-bit sync, declared length and X.25
+			 * CRC make a completed decode safe without trusting that profile. */
+			if(capture.complete&&captureSeconds<=.45d&&nearTapoChannel(capture.frequencyHz)){
+				for(TapoSubGDecoder.Decoded decoded:tapoDecoder.decodeAll(capture.iq,capture.sampleRateHz)){
+					confirmTapo(observations,capture,decoded,captureMillis);confirmed=true;}
+				if(confirmed)return;
+			}
 			/* This fallback is intentionally narrow and one-shot.  It exists for the
 			 * LSE waveform whose clock is about 6.75 kppm high and whose PFB-edge
 			 * image profiles as half-rate CSS.  Running it on growing or ordinary
@@ -234,7 +270,9 @@ final class Ism868SignalAnalyzer {
 				capture.sampleRateHz/1000d)+(dispatch.decoderEligible?"":" | decoder deferred by CPU budget");
 		Observation streamed=new Observation(capture.frequencyHz,dispatch.profile.occupiedBandwidthHz,
 				capture.levelDbfs,capture.snrDb,dispatch.priority,dispatch.protocol,
-				dispatch.profile.modulation,details,"",false,captureMillis,"","");
+				dispatch.profile.displayModulation,details,"",false,captureMillis,"","",
+				dispatch.profile.symbolRate,dispatch.profile.burstMillis,
+				dispatch.profile.toneSeparationHz,dispatch.profile.confidence);
 		int best=-1;long distance=Long.MAX_VALUE;
 		for(int n=0;n<observations.size();n++){Observation old=observations.get(n);if(isIdentified(old))continue;
 			long next=Math.abs(old.frequencyHz-capture.frequencyHz);
@@ -264,6 +302,14 @@ final class Ism868SignalAnalyzer {
 		for(Observation observation:observations)if(observation.protocol.startsWith("LoRa"))return true;
 		return false;
 	}
+	private static boolean hasProtocol(List<Observation> observations,String protocol){for(Observation value:observations)
+		if(protocol.equals(value.protocol))return true;return false;}
+	private static boolean hasCandidateNear(List<Observation> observations,long frequency,long tolerance){
+		for(Observation value:observations)if(Math.abs(value.frequencyHz-frequency)<=tolerance)return true;return false;}
+	private static boolean visible(long center,int rate,long frequency){return Math.abs(frequency-center)<rate/2d;}
+	private static long visibleTapoChannel(long center,int rate){long[] channels={863_350_000L,864_350_000L,868_350_000L};
+		long best=-1L,distance=Long.MAX_VALUE;for(long channel:channels){long next=Math.abs(channel-center);
+			if(next<=220_000L&&next<rate/2d&&next<distance){best=channel;distance=next;}}return best;}
 
 	private static void confirmLoRa(List<Observation> observations,IQDynamicChannelizer.Capture capture,
 			LoRaPhyDecoder.Decoded decoded,long fallbackFrequency,long captureMillis){
@@ -334,6 +380,28 @@ final class Ism868SignalAnalyzer {
 		mergeConfirmed(observations,confirmed,180_000L);
 	}
 
+	private static void confirmTapo(List<Observation> observations,IQDynamicChannelizer.Capture capture,
+			TapoSubGDecoder.Decoded decoded,long captureMillis){
+		long measured=decodedFrequency(capture,decoded.carrierOffsetHz);
+		long frequency=nearestTapoChannel(measured);
+		String encoding=decoded.manchester?"Manchester payload":"NRZ payload";
+		String details=String.format(Locale.US,
+				"TP-Link/Tapo Sub-GHz GFSK, %.2f us/bit, deviation %.1f kHz, offset %+.1f kHz, %s, type 0x%02X, sync errors %d | CRC-16/X-25 OK%s",
+				decoded.bitMicros,decoded.deviationHz/1000d,decoded.carrierOffsetHz/1000d,
+				encoding,decoded.type,decoded.syncErrors,
+				decoded.secondAddress.length()==0?"":" | link peer "+decoded.firstAddress);
+		String id=decoded.secondAddress.length()>0?decoded.secondAddress:decoded.firstAddress;
+		double level=Double.isNaN(decoded.levelDbfs)?capture.levelDbfs:decoded.levelDbfs;
+		double snr=Double.isNaN(decoded.snrDb)?capture.snrDb:decoded.snrDb;
+		Observation confirmed=new Observation(frequency,Math.max(capture.bandwidthHz,
+				(int)Math.round(decoded.deviationHz+50_000d)),level,snr,100d,
+				"Tapo Sub-GHz","GFSK, 50 kbit/s",details,decoded.payloadHex,true,captureMillis,
+				"TP-Link/Tapo",id,"Sub-GHz hub/device",-1,decoded.type,-1,-1,
+				encoding,"proprietary; application payload not interpreted",
+				WmbusApplicationDecoder.Result.identified("tapo_subg","TP-Link/Tapo Sub-GHz device"));
+		mergeConfirmed(observations,confirmed,180_000L);
+	}
+
 	private static void confirmAutomotiveKeyfob(List<Observation> observations,IQDynamicChannelizer.Capture capture,
 			AutomotiveKeyfobClassifier.Decoded decoded,long captureMillis){
 		long frequency=decodedFrequency(capture,decoded.carrierOffsetHz);
@@ -353,13 +421,62 @@ final class Ism868SignalAnalyzer {
 
 	private static long decodedFrequency(IQDynamicChannelizer.Capture capture,double offsetHz){return
 			capture.iqCenterFrequencyHz==capture.frequencyHz?Math.round(capture.frequencyHz+offsetHz):capture.frequencyHz;}
+	private static boolean nearTapoChannel(long frequencyHz){return Math.abs(frequencyHz-863_350_000L)<=180_000L
+			||Math.abs(frequencyHz-864_350_000L)<=180_000L||Math.abs(frequencyHz-868_350_000L)<=180_000L;}
+	private static long nearestTapoChannel(long frequencyHz){long[] channels={863_350_000L,864_350_000L,868_350_000L};
+		long best=channels[0],distance=Math.abs(frequencyHz-best);for(int n=1;n<channels.length;n++){
+			long next=Math.abs(frequencyHz-channels[n]);if(next<distance){best=channels[n];distance=next;}}
+		return distance<=220_000L?best:frequencyHz;}
+	private static void mergeJablotronCandidate(List<Observation> observations,
+			JablotronJa100Classifier.Candidate candidate,long centerFrequencyHz,long captureMillis){
+		long frequency=Math.round(centerFrequencyHz+candidate.carrierOffsetHz);
+		int bandwidth=(int)Math.round(Math.min(80_000d,
+				Math.max(35_000d,candidate.toneSeparationHz+8_000d)));
+		String details=String.format(Locale.US,
+				"868.1 MHz GFSK fingerprint | %.1f ksym/s, tone spacing %.1f kHz, burst %.2f ms, alternating preamble %d bit, frame ~%d bit%s | candidate only; payload format/CRC not confirmed",
+				candidate.symbolRate/1000d,candidate.toneSeparationHz/1000d,candidate.burstMillis,
+				candidate.preambleBits,candidate.frameBits,candidate.fingerprint.length()==0?"":
+				", post-preamble "+candidate.fingerprint);
+		Observation value=new Observation(frequency,bandwidth,candidate.levelDbfs,candidate.snrDb,
+				candidate.confidence,"Jablotron JA-100 candidate","GFSK candidate, 40 kbit/s",
+				details,"",false,captureMillis,"Jablotron?","",candidate.symbolRate,
+				candidate.burstMillis,candidate.toneSeparationHz,candidate.confidence);
+		int best=-1;long distance=Long.MAX_VALUE;for(int n=0;n<observations.size();n++){
+			Observation old=observations.get(n);if(isIdentified(old)||old.protocol.startsWith("Jablotron"))continue;
+			long next=Math.abs(old.frequencyHz-frequency);
+			if(next<=18_000L&&next<distance){best=n;distance=next;}}
+		if(best<0)observations.add(value);else observations.set(best,value);
+	}
+	private static void merge8685Candidate(List<Observation> observations,
+			Ism8685Classifier.Candidate candidate,long centerFrequencyHz,long captureMillis){
+		long frequency=Math.round(centerFrequencyHz+candidate.carrierOffsetHz);
+		int bandwidth=(int)Math.round(candidate.toneSeparationHz+10_000d);
+		boolean wavenis=candidate.family==Ism8685Classifier.Family.WAVENIS;
+		String protocol=wavenis?"Wavenis / Coronis candidate":"868.5 proprietary GFSK";
+		String modulation=String.format(Locale.US,"GFSK candidate, %.1f kbit/s",candidate.symbolRate/1000d);
+		String details=wavenis?String.format(Locale.US,
+				"868.5 MHz Wavenis PHY fingerprint | %.1f ksym/s, tone spacing %.1f kHz, burst %.2f ms, frame ~%d symbols | published Wavenis PHY uses GFSK 9.6 kb/s with interleaving and BCH(31,21); frame CRC/BCH not yet validated",
+				candidate.symbolRate/1000d,candidate.toneSeparationHz/1000d,candidate.burstMillis,candidate.frameBits):
+			String.format(Locale.US,
+				"868.5 MHz proprietary GFSK fingerprint | %.1f ksym/s, tone spacing %.1f kHz, burst %.2f ms, frame ~%d symbols | repeating AA/55 preamble; protocol and checksum unknown",
+				candidate.symbolRate/1000d,candidate.toneSeparationHz/1000d,candidate.burstMillis,candidate.frameBits);
+		Observation value=new Observation(frequency,bandwidth,candidate.levelDbfs,candidate.snrDb,
+				candidate.confidence,protocol,modulation,details,"",false,captureMillis,
+				wavenis?"Elster/Coronis?":"","",candidate.symbolRate,candidate.burstMillis,
+				candidate.toneSeparationHz,candidate.confidence);
+		int best=-1;long distance=Long.MAX_VALUE;for(int n=0;n<observations.size();n++){
+			Observation old=observations.get(n);if(isIdentified(old)||old.protocol.startsWith("Wavenis")
+					||old.protocol.startsWith("868.5 proprietary"))continue;
+			long next=Math.abs(old.frequencyHz-frequency);if(next<=25_000L&&next<distance){best=n;distance=next;}}
+		if(best<0)observations.add(value);else observations.set(best,value);
+	}
 	private static boolean isIdentified(Observation observation){return observation.checksumValid
 			||(observation.application!=null&&observation.application.driver.length()>0);}
 	private static void mergeConfirmed(List<Observation> observations,Observation confirmed,long tolerance){
 		int best=-1;long distance=Long.MAX_VALUE;for(int n=0;n<observations.size();n++){
 			Observation candidate=observations.get(n);if(candidate.checksumValid)continue;
 			long next=Math.abs(candidate.frequencyHz-confirmed.frequencyHz);if(next<tolerance&&next<distance){best=n;distance=next;}}
-		if(best<0)observations.add(confirmed);else observations.set(best,confirmed);
+		if(best<0)observations.add(confirmed);else observations.set(best,confirmed.withPhyFallback(observations.get(best)));
 	}
 
 	private static void confirmWmbus(List<Observation> observations, WmbusPhyDecoder.Decoded telegram,
@@ -561,6 +678,7 @@ final class Ism868SignalAnalyzer {
 		final long frequencyHz;
 		final int bandwidthHz;
 		final double levelDbfs, snrDb, confidence;
+		final double symbolRate,burstMillis,toneSeparationHz,phyConfidence;
 		final String protocol, modulation, details, payloadHex, manufacturer, meterId;
 		final String deviceTypeName,frameFormat,security;
 		final WmbusApplicationDecoder.Result application;
@@ -575,7 +693,18 @@ final class Ism868SignalAnalyzer {
 				String manufacturer, String meterId) {
 			this(frequencyHz,bandwidthHz,levelDbfs,snrDb,confidence,protocol,modulation,details,
 					payloadHex,checksumValid,captureMillis,manufacturer,meterId,"",-1,-1,-1,-1,"","",
-					WmbusApplicationDecoder.Result.NONE,null,null);
+					WmbusApplicationDecoder.Result.NONE,null,null,defaultSymbolRate(modulation),Double.NaN,
+					Double.NaN,checksumValid?100d:Double.NaN);
+		}
+		Observation(long frequencyHz, int bandwidthHz, double levelDbfs, double snrDb,
+				double confidence, String protocol, String modulation, String details,
+				String payloadHex, boolean checksumValid, long captureMillis,
+				String manufacturer, String meterId,double symbolRate,double burstMillis,
+				double toneSeparationHz,double phyConfidence) {
+			this(frequencyHz,bandwidthHz,levelDbfs,snrDb,confidence,protocol,modulation,details,
+					payloadHex,checksumValid,captureMillis,manufacturer,meterId,"",-1,-1,-1,-1,"","",
+					WmbusApplicationDecoder.Result.NONE,null,null,symbolRate,burstMillis,
+					toneSeparationHz,phyConfidence);
 		}
 		Observation(long frequencyHz, int bandwidthHz, double levelDbfs, double snrDb,
 				double confidence, String protocol, String modulation, String details,
@@ -585,7 +714,8 @@ final class Ism868SignalAnalyzer {
 				WmbusApplicationDecoder.Result application) {
 			this(frequencyHz,bandwidthHz,levelDbfs,snrDb,confidence,protocol,modulation,details,
 					payloadHex,checksumValid,captureMillis,manufacturer,meterId,deviceTypeName,meterVersion,
-					controlField,ciField,accessNumber,frameFormat,security,application,null,null);
+					controlField,ciField,accessNumber,frameFormat,security,application,null,null,
+					defaultSymbolRate(modulation),Double.NaN,Double.NaN,checksumValid?100d:Double.NaN);
 		}
 		Observation(long frequencyHz, int bandwidthHz, double levelDbfs, double snrDb,
 				double confidence, String protocol, String modulation, String details,
@@ -594,6 +724,19 @@ final class Ism868SignalAnalyzer {
 				int controlField, int ciField, int accessNumber, String frameFormat, String security,
 				WmbusApplicationDecoder.Result application,FineOffsetWh65bDecoder.Decoded weather,
 				RenaultTpmsDecoder.Decoded tpms) {
+			this(frequencyHz,bandwidthHz,levelDbfs,snrDb,confidence,protocol,modulation,details,
+					payloadHex,checksumValid,captureMillis,manufacturer,meterId,deviceTypeName,meterVersion,
+					controlField,ciField,accessNumber,frameFormat,security,application,weather,tpms,
+					defaultSymbolRate(modulation),Double.NaN,Double.NaN,checksumValid?100d:Double.NaN);
+		}
+		private Observation(long frequencyHz, int bandwidthHz, double levelDbfs, double snrDb,
+				double confidence, String protocol, String modulation, String details,
+				String payloadHex, boolean checksumValid, long captureMillis,
+				String manufacturer, String meterId, String deviceTypeName, int meterVersion,
+				int controlField, int ciField, int accessNumber, String frameFormat, String security,
+				WmbusApplicationDecoder.Result application,FineOffsetWh65bDecoder.Decoded weather,
+				RenaultTpmsDecoder.Decoded tpms,double symbolRate,double burstMillis,
+				double toneSeparationHz,double phyConfidence) {
 			this.frequencyHz=frequencyHz; this.bandwidthHz=bandwidthHz; this.levelDbfs=levelDbfs;
 			this.snrDb=snrDb; this.confidence=confidence; this.protocol=protocol;
 			this.modulation=modulation; this.details=details; this.payloadHex=payloadHex;
@@ -603,7 +746,26 @@ final class Ism868SignalAnalyzer {
 			this.controlField=controlField;this.ciField=ciField;this.accessNumber=accessNumber;
 			this.frameFormat=frameFormat;
 			this.security=security;this.application=application;this.weather=weather;
-			this.tpms=tpms;
+			this.tpms=tpms;this.symbolRate=symbolRate;this.burstMillis=burstMillis;
+			this.toneSeparationHz=toneSeparationHz;this.phyConfidence=phyConfidence;
+		}
+		private Observation withPhyFallback(Observation fallback){return new Observation(frequencyHz,
+				bandwidthHz,levelDbfs,snrDb,confidence,protocol,modulation,details,payloadHex,checksumValid,
+				captureMillis,manufacturer,meterId,deviceTypeName,meterVersion,controlField,ciField,
+				accessNumber,frameFormat,security,application,weather,tpms,
+				finite(symbolRate)?symbolRate:fallback.symbolRate,
+				finite(burstMillis)?burstMillis:fallback.burstMillis,
+				finite(toneSeparationHz)?toneSeparationHz:fallback.toneSeparationHz,
+				finite(phyConfidence)?phyConfidence:fallback.phyConfidence);}
+		private static boolean finite(double value){return !Double.isNaN(value)&&!Double.isInfinite(value);}
+		private static double defaultSymbolRate(String modulation){
+			if(modulation==null)return Double.NaN;
+			if(modulation.indexOf("100 kbit/s")>=0)return 100_000d;
+			if(modulation.indexOf("50 kbit/s")>=0)return 50_000d;
+			if(modulation.indexOf("32.768 kchip/s")>=0)return 32_768d;
+			if(modulation.indexOf("58 us/bit")>=0)return 1e6d/58d;
+			if(modulation.indexOf("52 us/bit")>=0)return 1e6d/52d;
+			return Double.NaN;
 		}
 	}
 
