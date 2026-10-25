@@ -23,7 +23,7 @@ See [Wiki](https://github.com/voxo22/hackrf-spectrum-analyzer/wiki)
 - Multi-range sweep support, automatic compression of X-axis (stitching ranges together)
 - Configurable screen recording to GIF or MP4, with optional MP4 audio
 - CSV statistics logging at configurable intervals  (minutes, seconds, fractions), including peak frequency, total power and peak power
-- Recording and replay of live spectrum-bin data in the binary HSR format, preserving original timestamps and supporting pause
+- Recording and replay of live spectrum-bin data in the binary HSR format, preserving original timestamps and supporting pause; new recordings use independently compressed, indexed chunks for fast opening, seeking, and recovery of complete chunks after a hard file cut, while legacy HSR files remain supported
 - Level triggers for real-time and peak traces, with audio alerts and CSV event logging
 - Data replay progress bar with click to seek function, quick search, infinite loop, automatic trigger-event search
 - Calibrated power-flux-density readout in µW/m2

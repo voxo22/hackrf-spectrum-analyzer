@@ -178,7 +178,8 @@ final class GpsL1SignalAnalyzer {
 			shown.set(index, satellite.withNavigation(streamTracker.navState(satellite.prn), streamTracker.navigation(satellite.prn)));
 		}
 		if (streamTracker.decodedCount() > 0) state += "; LNAV parity valid " + streamTracker.decodedCount();
-		return new Result(centerFreqHz, sampleRateHz, samplesPerMs, state, new ArrayList<Satellite>(shown), acquired.size(), trackedCount, position, utc, gpsTime);
+		return new Result(centerFreqHz, sampleRateHz, samplesPerMs, state, new ArrayList<Satellite>(shown),
+				acquired.size(), trackedCount, position, utc, gpsTime, new ArrayList<Satellite>(all), observations);
 	}
 
 	private static double correlationPower(double[] re, double[] im, int phase, int samplesPerMs) {
@@ -323,7 +324,9 @@ final class GpsL1SignalAnalyzer {
 				trackingLocked, value, navigation); }
 	}
 	static final class Result {
-		final long centerFreqHz; final int sampleRateHz, samplesPerMs, acquiredCount, trackedCount; final String state; final List<Satellite> satellites;
+		final long centerFreqHz; final int sampleRateHz, samplesPerMs, acquiredCount, trackedCount; final String state;
+		final List<Satellite> satellites, candidates;
+		final List<GpsL1StreamTracker.Observation> observations;
 		final GpsL1PositionSolver.Solution position;
 		final String utc, gpsTime;
 		Result(long centerFreqHz, int sampleRateHz, int samplesPerMs, String state, List<Satellite> satellites, int acquiredCount, int trackedCount) {
@@ -340,9 +343,28 @@ final class GpsL1SignalAnalyzer {
 		}
 		Result(long centerFreqHz, int sampleRateHz, int samplesPerMs, String state, List<Satellite> satellites, int acquiredCount, int trackedCount,
 				GpsL1PositionSolver.Solution position, String utc, String gpsTime) {
+			this(centerFreqHz, sampleRateHz, samplesPerMs, state, satellites, acquiredCount, trackedCount,
+					position, utc, gpsTime, satellites);
+		}
+		Result(long centerFreqHz, int sampleRateHz, int samplesPerMs, String state, List<Satellite> satellites, int acquiredCount, int trackedCount,
+				GpsL1PositionSolver.Solution position, String utc, String gpsTime, List<Satellite> candidates) {
+			this(centerFreqHz, sampleRateHz, samplesPerMs, state, satellites, acquiredCount, trackedCount,
+					position, utc, gpsTime, candidates, Collections.<GpsL1StreamTracker.Observation>emptyList());
+		}
+		Result(long centerFreqHz, int sampleRateHz, int samplesPerMs, String state, List<Satellite> satellites, int acquiredCount, int trackedCount,
+				GpsL1PositionSolver.Solution position, String utc, String gpsTime, List<Satellite> candidates,
+				List<GpsL1StreamTracker.Observation> observations) {
 			this.centerFreqHz = centerFreqHz; this.sampleRateHz = sampleRateHz; this.samplesPerMs = samplesPerMs;
-			this.state = state; this.satellites = Collections.unmodifiableList(satellites); this.acquiredCount = acquiredCount; this.trackedCount = trackedCount;
+			this.state = state; this.satellites = Collections.unmodifiableList(satellites);
+			this.candidates = Collections.unmodifiableList(candidates);
+			this.acquiredCount = acquiredCount; this.trackedCount = trackedCount;
 			this.position = position; this.utc = utc; this.gpsTime = gpsTime;
+			this.observations = Collections.unmodifiableList(new ArrayList<GpsL1StreamTracker.Observation>(observations));
+		}
+		Result withPosition(GpsL1PositionSolver.Solution value, String utcValue, String gpsTimeValue) {
+			return new Result(centerFreqHz, sampleRateHz, samplesPerMs, state, new ArrayList<Satellite>(satellites),
+					acquiredCount, trackedCount, value, utcValue, gpsTimeValue,
+					new ArrayList<Satellite>(candidates), new ArrayList<GpsL1StreamTracker.Observation>(observations));
 		}
 		static Result empty(long centerFreqHz, int sampleRateHz, String state) {
 			return new Result(centerFreqHz, sampleRateHz, 0, state, Collections.<Satellite>emptyList(), 0, 0);

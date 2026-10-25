@@ -25,6 +25,25 @@ public final class GpsL1WorkerTest {
 			worker.offer(1_500_000_000L, 2_600_000, oversized, oversized.length);
 			if (worker.overflowCount() != 1) throw new AssertionError("Oversized IQ must report a backlog reset");
 		}
+		latest.set(null);
+		try (GpsL1Worker worker = new GpsL1Worker(latest::set)) {
+			int rate = 5_000_000, prn = 7, dopplerHz = 1_500, samples = rate / 25;
+			int[] code = GpsL1SignalAnalyzer.caCode(prn);
+			byte[] wideIq = new byte[samples * 2];
+			for (int n = 0; n < samples; n++) {
+				int chip = (int) ((long) n * 1_023_000L / rate) % 1023;
+				double phase = 2d * Math.PI * dopplerHz * n / rate;
+				wideIq[2 * n] = (byte) Math.round(45d * code[chip] * Math.cos(phase));
+				wideIq[2 * n + 1] = (byte) Math.round(45d * code[chip] * Math.sin(phase));
+			}
+			worker.offer(GpsL1SignalAnalyzer.L1_FREQUENCY_HZ, rate, wideIq, wideIq.length);
+			long deadline = System.nanoTime() + 5_000_000_000L;
+			while ((latest.get() == null || latest.get().acquiredCount == 0) && System.nanoTime() < deadline) Thread.sleep(10);
+			GpsL1SignalAnalyzer.Result result = latest.get();
+			if (result == null || result.acquiredCount == 0 || result.sampleRateHz > 4_096_000)
+				throw new AssertionError("Wide GPS input was not channelized and acquired: "
+						+ (result == null ? "no result" : result.state + " at " + result.sampleRateHz));
+		}
 		System.out.println("GPS worker replay discontinuity and backlog reset tests passed");
 	}
 }

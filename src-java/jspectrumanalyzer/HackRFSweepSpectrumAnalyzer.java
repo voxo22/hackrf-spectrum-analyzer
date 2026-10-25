@@ -1123,7 +1123,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private ReentrantLock							lock								= new ReentrantLock();
 	private ModelValueBoolean						parameterAntennaLNA   				= new ModelValueBoolean("RF amp", false);
 	private ModelValueBoolean						parameterAntPower					= new ModelValueBoolean("Antenna Power", false);
-	private ModelValueInt							parameterFFTBinHz					= new ModelValueInt("RBW", 50);
+	private ModelValueInt							parameterFFTBinHz					= new ModelValueInt("RBW", 50, 1,
+			HackRFSettings.MIN_LIVE_RBW_KHZ, Integer.MAX_VALUE);
 	private ModelValueInt							parameterIqReplayRbwHz				= new ModelValueInt("IQ Replay RBW", 20_000);
 	private ModelValueBoolean						parameterFilterSpectrum				= new ModelValueBoolean("Filter", false);
 	private ModelValue<FrequencyRange>				parameterFrequency					= new ModelValue<>("Frequency Range", new FrequencyRange(920, 960));
@@ -1496,7 +1497,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					parameterFrequency.setValue(new FrequencyRange(pairs[0], pairs[pairs.length - 1]));
 				}
 			}
-			if (p.getProperty("FFTBinHz") != null) parameterFFTBinHz.setValue(Integer.parseInt(p.getProperty("FFTBinHz")));
+			if (p.getProperty("FFTBinHz") != null) parameterFFTBinHz.setValue(Math.max(
+					HackRFSettings.MIN_LIVE_RBW_KHZ, Integer.parseInt(p.getProperty("FFTBinHz"))));
 			if (p.getProperty("ReplayDirectory") != null) {
 				File replayDirectory = new File(p.getProperty("ReplayDirectory"));
 				if (replayDirectory.isDirectory())
@@ -3377,11 +3379,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			fireHardwareStateChanged(true);
 			ensureProcessingThreadRunning();
 
-			SpectrumRecording.Frame frame = null;
-			while (!stopSpectrumPlayback && (frame = reader.readFrame()) != null) {
-				if (frame.timeOffsetMillis >= startOffsetMillis)
-					break;
-			}
+			SpectrumRecording.Frame frame = stopSpectrumPlayback ? null : reader.seekToTime(startOffsetMillis);
 			if (frame == null)
 				return -1;
 
@@ -3454,6 +3452,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private long readSpectrumRecordingDuration(File file) {
 		long duration = 0;
 		try (SpectrumRecording.Reader reader = new SpectrumRecording.Reader(file)) {
+			long indexedDuration = reader.getDurationMillis();
+			if (indexedDuration >= 0)
+				return indexedDuration;
 			SpectrumRecording.Frame frame;
 			while ((frame = reader.readFrame()) != null) {
 				duration = frame.timeOffsetMillis;
@@ -6162,7 +6163,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						(parameterFreqRange.getValue().replace("-",":")):(getFreq().getStartMHz() + ":" + getFreq().getEndMHz());
 						System.out.println(FromTo);
 				HackRFSweepNativeBridge.start(this, /*getFreq().getStartMHz(), getFreq().getEndMHz(), */ FromTo,
-						parameterFFTBinHz.getValue()*1000, parameterSamples.getValue(), parameterGainLNA.getValue(),
+						Math.max(HackRFSettings.MIN_LIVE_RBW_KHZ, parameterFFTBinHz.getValue()) * 1000,
+						parameterSamples.getValue(), parameterGainLNA.getValue(),
 						parameterGainVGA.getValue(), parameterAntPower.getValue(), parameterAntennaLNA.getValue());
 				fireHardwareStateChanged(false);
 				if (forceStopSweep == false) {

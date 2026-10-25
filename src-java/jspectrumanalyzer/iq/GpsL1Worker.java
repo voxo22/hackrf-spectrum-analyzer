@@ -5,8 +5,11 @@ import java.util.function.Consumer;
 
 /** Bounded, ordered GPS IQ worker shared by the UI and real-time replay test. */
 final class GpsL1Worker implements AutoCloseable {
-	/* About three seconds at 2.6 MS/s: absorbs short acquisition/GC spikes,
-	 * while still flagging sustained overload instead of silently losing IQ. */
+	private static final int MAX_NATIVE_ANALYZER_RATE_HZ = 4_096_000;
+	private static final int CHANNELIZED_TARGET_RATE_HZ = 2_200_000;
+	private static final int GPS_OCCUPIED_BANDWIDTH_HZ = 2_100_000;
+	/* About three seconds at 2.6 MS/s; at wide input rates this primarily bounds
+	 * memory while channelization keeps the analyzer work rate low. */
 	private static final int MAX_QUEUED_BYTES = 16_000_000;
 	private final ArrayDeque<Chunk> queue = new ArrayDeque<Chunk>();
 	private final GpsL1SignalAnalyzer analyzer = new GpsL1SignalAnalyzer();
@@ -61,6 +64,7 @@ final class GpsL1Worker implements AutoCloseable {
 	private void run() {
 		byte[] history = new byte[0]; int historyLength = 0, historyRate = 0;
 		long historyCenter = Long.MIN_VALUE, samplesSinceAcquisition = 0L;
+		IQSubchannelExtractor.Stream channelizer = null;
 		boolean haveAcquisition = false;
 		while (!closed) {
 			Chunk chunk;
@@ -74,23 +78,52 @@ final class GpsL1Worker implements AutoCloseable {
 			if (chunk.reset || chunk.centerHz != historyCenter || chunk.rate != historyRate) {
 				analyzer.resetStream(); historyLength = 0; historyCenter = chunk.centerHz; historyRate = chunk.rate;
 				samplesSinceAcquisition = 0L; haveAcquisition = false;
+				channelizer = needsChannelizer(chunk.centerHz, chunk.rate)
+						? new IQSubchannelExtractor.Stream(chunk.rate,
+								GpsL1SignalAnalyzer.L1_FREQUENCY_HZ - chunk.centerHz,
+								GPS_OCCUPIED_BANDWIDTH_HZ, CHANNELIZED_TARGET_RATE_HZ)
+						: null;
+			}
+			byte[] analysisIq = chunk.iq;
+			long analysisCenter = chunk.centerHz;
+			int analysisRate = chunk.rate;
+			if (channelizer != null) {
+				IQSubchannelExtractor.Result extracted = channelizer.process(chunk.iq, chunk.iq.length);
+				analysisIq = quantize(extracted);
+				analysisCenter = GpsL1SignalAnalyzer.L1_FREQUENCY_HZ;
+				analysisRate = (int) Math.round(extracted.sampleRateHz);
 			}
 			long started = System.nanoTime();
-			analyzer.acceptStream(chunk.centerHz, chunk.rate, chunk.iq, chunk.iq.length);
+			analyzer.acceptStream(analysisCenter, analysisRate, analysisIq, analysisIq.length);
 			maximumStreamNanos = Math.max(maximumStreamNanos, System.nanoTime() - started);
-			samplesSinceAcquisition += chunk.iq.length / 2;
-			int wanted = Math.max(2, (int) Math.round(chunk.rate / 1000d) * 2 * 20);
+			samplesSinceAcquisition += analysisIq.length / 2;
+			int wanted = Math.max(2, (int) Math.round(analysisRate / 1000d) * 2 * 20);
 			if (history.length != wanted) { history = new byte[wanted]; historyLength = 0; }
-			historyLength = appendHistory(history, historyLength, chunk.iq);
-			long intervalSamples = Math.max(1, chunk.rate / 2);
+			historyLength = appendHistory(history, historyLength, analysisIq);
+			long intervalSamples = Math.max(1, analysisRate / 2);
 			if (historyLength == history.length && (!haveAcquisition || samplesSinceAcquisition >= intervalSamples)) {
 				started = System.nanoTime();
-				GpsL1SignalAnalyzer.Result result = analyzer.analyze(chunk.centerHz, chunk.rate, history, historyLength);
+				GpsL1SignalAnalyzer.Result result = analyzer.analyze(analysisCenter, analysisRate, history, historyLength);
 				maximumAnalyzeNanos = Math.max(maximumAnalyzeNanos, System.nanoTime() - started);
 				haveAcquisition = true; samplesSinceAcquisition = 0L;
 				synchronized (queue) { if (!closed && chunk.generation == generation) onResult.accept(result); }
 			}
 		}
+	}
+	private static boolean needsChannelizer(long centerHz, int rateHz) {
+		int decimation = rateHz / CHANNELIZED_TARGET_RATE_HZ;
+		return rateHz > MAX_NATIVE_ANALYZER_RATE_HZ
+				&& Math.abs(centerHz - GpsL1SignalAnalyzer.L1_FREQUENCY_HZ) + GPS_OCCUPIED_BANDWIDTH_HZ / 2d <= rateHz / 2d
+				&& decimation >= 2 && rateHz / decimation >= 2_200_000;
+	}
+	private static byte[] quantize(IQSubchannelExtractor.Result extracted) {
+		byte[] output = new byte[extracted.samples * 2];
+		double scale = 127d * Math.sqrt(extracted.decimation);
+		for (int index = 0; index < output.length; index++) {
+			int value = (int) Math.round(extracted.iq[index] * scale);
+			output[index] = (byte) Math.max(-127, Math.min(127, value));
+		}
+		return output;
 	}
 	private static int appendHistory(byte[] history, int historyLength, byte[] input) {
 		int length = input.length & ~1;

@@ -78,6 +78,7 @@ final class GpsL1StreamTracker {
 	/** Snapshot all code clocks at one common input sample epoch. */
 	synchronized List<Observation> observations() {
 		List<Observation> result = new ArrayList<Observation>();
+		double receptionSeconds = sampleRateHz <= 0 ? 0d : samplesSeen / (double) sampleRateHz;
 		for (Channel channel : channels.values()) {
 			GpsL1NavigationData.Snapshot navigation = channel.navigation.snapshot(channel.milliseconds);
 			if (navigation.ephemeris == null || navigation.healthCode != 0 || !channel.codeEpochAligned) continue;
@@ -90,22 +91,27 @@ final class GpsL1StreamTracker {
 			double elapsedCodeMs = channel.milliseconds + channel.rangeEpochAdjustment - channel.anchorEpoch[best]
 					+ channel.codePhaseChips / 1023d;
 			double satelliteTime = channel.anchorNav[best].timeOfWeekSeconds + elapsedCodeMs * .001d;
-			result.add(new Observation(channel.prn, satelliteTime, channel.bitQuality[best], best, navigation.ephemeris, navigation.utc));
+			result.add(new Observation(channel.prn, satelliteTime, receptionSeconds,
+					channel.bitQuality[best], best, navigation.ephemeris, navigation.utc));
 		}
 		return result;
 	}
 
 	static final class Observation {
 		final int prn, bitPhase;
-		final double satelliteTime, bitQuality;
+		final double satelliteTime, receptionSeconds, bitQuality;
 		final GpsL1NavigationData.Ephemeris ephemeris;
 		final GpsL1NavigationData.UtcModel utc;
 		Observation(int prn, double satelliteTime, double bitQuality, int bitPhase, GpsL1NavigationData.Ephemeris ephemeris) {
-			this(prn, satelliteTime, bitQuality, bitPhase, ephemeris, null);
+			this(prn, satelliteTime, 0d, bitQuality, bitPhase, ephemeris, null);
 		}
 		Observation(int prn, double satelliteTime, double bitQuality, int bitPhase, GpsL1NavigationData.Ephemeris ephemeris, GpsL1NavigationData.UtcModel utc) {
+			this(prn, satelliteTime, 0d, bitQuality, bitPhase, ephemeris, utc);
+		}
+		Observation(int prn, double satelliteTime, double receptionSeconds, double bitQuality, int bitPhase,
+				GpsL1NavigationData.Ephemeris ephemeris, GpsL1NavigationData.UtcModel utc) {
 			this.prn = prn; this.satelliteTime = satelliteTime; this.bitQuality = bitQuality;
-			this.bitPhase = bitPhase; this.ephemeris = ephemeris; this.utc = utc;
+			this.receptionSeconds = receptionSeconds; this.bitPhase = bitPhase; this.ephemeris = ephemeris; this.utc = utc;
 		}
 	}
 

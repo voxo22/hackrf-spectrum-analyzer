@@ -71,6 +71,11 @@ public class HackRFSweepSettingsUI extends JPanel
 	private static final Pattern FREQUENCY_RANGE_INTERVAL = Pattern.compile("\\s*(-?\\d+)\\s*-\\s*(-?\\d+)\\s*");
 	private static final int CONTEXT_HELP_HOVER_DELAY_MS = 650;
 	private static final int CONTEXT_HELP_AUTO_HIDE_MS = 9000;
+	private static final java.util.List<String> LIVE_RBW_VALUES = java.util.Arrays.asList(
+			"3", "10", "20", "50", "100", "200", "500", "1000", "2000");
+	private static final java.util.List<String> IQ_REPLAY_RBW_VALUES = java.util.Arrays.asList(
+			"0.05", "0.1", "0.2", "0.5", "1", "3", "10", "20", "50", "100", "200", "500",
+			"1000", "2000");
 	private FrequencyRange FrequencyRange;
 	private FrequencySelectorPanel frequencySelectorStart;
 	private FrequencySelectorPanel frequencySelectorEnd;
@@ -363,7 +368,7 @@ public class HackRFSweepSettingsUI extends JPanel
 		comboBoxFrequencyPresets = new JComboBox(presetValues);
 		comboBoxFrequencyPresets.addActionListener(e -> {
 			Preset preset = (Preset)comboBoxFrequencyPresets.getSelectedItem();
-			spinnerFFTBinHz.setValue(preset.getFFTBinWidth());
+			applyPresetRbw(preset.getFFTBinWidth());
 			spinner_FrequencyShift.setValue(preset.getFreqShift());
 			slider_AmplitudeOffset.setValue(preset.getAmplitudeOffset());
 			String presetRange = preset.getFreqRange();
@@ -577,9 +582,7 @@ public class HackRFSweepSettingsUI extends JPanel
 
 			spinnerFFTBinHz = new JSpinner();
 			spinnerFFTBinHz.setFont(new Font("Monospaced", Font.BOLD, 14));
-			spinnerModelFFTBinHz = new SpinnerListModel(new String[] { "0.05", "0.1", "0.2", "0.5", "1",
-					"3", "10", "20",
-					"50", "100", "200", "500", "1000", "2000" });
+			spinnerModelFFTBinHz = new SpinnerListModel(LIVE_RBW_VALUES);
 			spinnerFFTBinHz.setModel(spinnerModelFFTBinHz);
 			tab1.add(spinnerFFTBinHz, "flowx, cell 0 13,alignx right");
 			((ListEditor) spinnerFFTBinHz.getEditor()).getTextField().setHorizontalAlignment(JTextField.RIGHT);
@@ -1936,7 +1939,8 @@ public class HackRFSweepSettingsUI extends JPanel
 		if (isIqReplay()) {
 			hRF.getIqReplayRbwHz().setValue(Math.max(20, (int) Math.round(rbwKhz * 1000d)));
 		} else {
-			hRF.getFFTBinHz().setValue(Math.max(1, (int) Math.round(rbwKhz)));
+			hRF.getFFTBinHz().setValue(Math.max(HackRFSettings.MIN_LIVE_RBW_KHZ,
+					(int) Math.round(rbwKhz)));
 		}
 	}
 
@@ -1944,24 +1948,47 @@ public class HackRFSweepSettingsUI extends JPanel
 		if (spinnerFFTBinHz == null) {
 			return;
 		}
-		double rbwKhz = isIqReplay() ? hRF.getIqReplayRbwHz().getValue() / 1000d
+		boolean iqReplay = isIqReplay();
+		java.util.List<String> choices = iqReplay ? IQ_REPLAY_RBW_VALUES : LIVE_RBW_VALUES;
+		double rbwKhz = iqReplay ? hRF.getIqReplayRbwHz().getValue() / 1000d
 				: hRF.getFFTBinHz().getValue();
-		String value = formatRbwKhz(rbwKhz);
-		if (!spinnerModelFFTBinHz.getList().contains(value)) {
-			value = spinnerModelFFTBinHz.getList().get(spinnerModelFFTBinHz.getList().size() - 1).toString();
-			for (Object candidate : spinnerModelFFTBinHz.getList()) {
-				if (Double.parseDouble(candidate.toString()) >= rbwKhz) {
-					value = candidate.toString();
-					break;
-				}
-			}
-		}
+		String value = nearestRbwValue(rbwKhz, choices);
 		updatingRbwSpinner = true;
 		try {
+			if (!spinnerModelFFTBinHz.getList().equals(choices)) {
+				spinnerModelFFTBinHz.setList(choices);
+			}
 			spinnerFFTBinHz.setValue(value);
 		} finally {
 			updatingRbwSpinner = false;
 		}
+	}
+
+	private void applyPresetRbw(String value) {
+		try {
+			double rbwKhz = Double.parseDouble(value.trim());
+			boolean iqReplay = isIqReplay();
+			java.util.List<String> choices = iqReplay ? IQ_REPLAY_RBW_VALUES : LIVE_RBW_VALUES;
+			if (!iqReplay)
+				rbwKhz = Math.max(HackRFSettings.MIN_LIVE_RBW_KHZ, rbwKhz);
+			spinnerFFTBinHz.setValue(nearestRbwValue(rbwKhz, choices));
+		} catch (RuntimeException e) {
+			updateRbwSpinnerValue();
+		}
+	}
+
+	private String nearestRbwValue(double rbwKhz, java.util.List<String> choices) {
+		String exact = formatRbwKhz(rbwKhz);
+		if (choices.contains(exact))
+			return exact;
+		String value = choices.get(choices.size() - 1);
+		for (String candidate : choices) {
+			if (Double.parseDouble(candidate) >= rbwKhz) {
+				value = candidate;
+				break;
+			}
+		}
+		return value;
 	}
 
 	private boolean isIqReplay() {

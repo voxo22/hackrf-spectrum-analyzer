@@ -7,6 +7,8 @@ import shared.mvc.ModelValue.ModelValueBoolean;
 import shared.mvc.ModelValue.ModelValueInt;
 
 public interface HackRFSettings {
+	public static final int MIN_LIVE_RBW_KHZ = 3;
+
 	public static abstract class HackRFEventAdapter implements HackRFEventListener {
 		@Override
 		public void captureStateChanged(boolean isCapturing) {

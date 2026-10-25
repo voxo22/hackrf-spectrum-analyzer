@@ -57,7 +57,7 @@ public final class ContextHelpLibrary {
 		texts.put("capture.stats",
 				"Starts or stops CSV statistics logging for the current spectrum. The CSV file contains time, frequency, and level information for each sweep. The logging interval is configured on the Waterfall/REC tab.");
 		texts.put("capture.data",
-				"Starts or stops native HSR FULL SPECTRUM data recording. HSR can be replayed later with the REPLAY button as it was LIVE captured, including waterfall, spectrogram data and date/time information.\n- Note: Native HSR format does not contain any I/Q samples, so it cannot be used for zooming, time-domain analysis or demodulation. For this purpose, use I/Q recording in the time-domain analyzer window.");
+				"Starts or stops native HSR FULL SPECTRUM data recording. HSR can be replayed later with the REPLAY button as it was LIVE captured, including waterfall, spectrogram data and date/time information. New recordings use independently compressed chunks for fast opening and seeking; legacy HSR recordings remain supported.\n- Note: Native HSR format does not contain any I/Q samples, so it cannot be used for zooming, time-domain analysis or demodulation. For this purpose, use I/Q recording in the time-domain analyzer window.");
 
 		texts.put("sweep.gain",
 				"Overall receiver gain preset. It adjusts the HackRF gain distribution used for LIVE capture.");
@@ -86,7 +86,7 @@ public final class ContextHelpLibrary {
 		texts.put("marker.hold",
 				"Shows up to 5 simultaneous labels for maximum PEAK HOLD markers.");
 		texts.put("freq.rbw",
-				"Resolution bandwidth in kHz. Lower values give finer frequency detail. The RBW is applied to the LIVE spectrum and I/Q replay spectrum.");
+				"Resolution bandwidth in kHz. Lower values give finer frequency detail. LIVE capture is limited by the HackRF sweep hardware to a minimum of 3 kHz; finer values down to 0.05 kHz are available only during I/Q replay.");
 		texts.put("freq.shift",
 				"Frequency shift in MHz. Useful for SAT LNBs and upconverters. The chart, selectors, ranges, and filenames use shifted display frequencies, while HackRF tuning remains unshifted internally.");
 		texts.put("amplitude.offset",

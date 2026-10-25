@@ -19,7 +19,7 @@ public final class GpsL1ParameterLayoutTest {
 					Collections.<GpsL1SignalAnalyzer.Satellite>emptyList(), 11, 11, position, "2026-07-01 19:00:42.000 UTC",
 					"2026-07-01 19:01:00.000 GPS");
 			String details = SignalQualityTesterFrame.gpsParameterDetails(fix, 1575420000L, 2600000, 0);
-			if (!details.contains("UTC|2026-07-01 19:00:42.000 UTC") || !details.contains("GPS time|2026-07-01 19:01:00.000 GPS")
+			if (!details.contains("UTC|2026-07-01 19:00:42.000 UTC") || !details.contains("System time|2026-07-01 19:01:00.000 GPS")
 					|| !details.contains("Channel|11 GPS L1 C/A satellites acquired\n|prompt lock 11\n|LNAV parity valid 6"))
 				throw new AssertionError("GPS details or status lines missing");
 			checkHeight(details);
@@ -27,7 +27,7 @@ public final class GpsL1ParameterLayoutTest {
 					"GPS acquired", Collections.<GpsL1SignalAnalyzer.Satellite>emptyList(), 4, 4, position,
 					"Waiting for LNAV UTC parameters", "2026-07-01 19:01:00.000 GPS");
 			String gpsOnly = SignalQualityTesterFrame.gpsParameterDetails(gpsWithoutUtc, 1575420000L, 2600000, 0);
-			if (!gpsOnly.contains("UTC|Waiting for UTC data") || !gpsOnly.contains("GPS time|2026-07-01 19:01:00.000 GPS"))
+			if (!gpsOnly.contains("UTC|Waiting for UTC data") || !gpsOnly.contains("System time|2026-07-01 19:01:00.000 GPS"))
 				throw new AssertionError("GPS time must be visible even when UTC parameters are missing");
 			checkHeight(gpsOnly);
 			checkHeight(SignalQualityTesterFrame.gpsParameterDetails(GpsL1SignalAnalyzer.Result.empty(1575420000L, 2600000,

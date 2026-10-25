@@ -1213,7 +1213,13 @@ public class IQAnalyzerApp {
 		SignalTestOption option = signalTestCombo == null ? null
 				: (SignalTestOption) signalTestCombo.getSelectedItem();
 		if (option == null) return;
-		if (option.label.startsWith("Wi-Fi") || option.label.startsWith("Bluetooth") || option.label.startsWith(SignalQualityTesterFrame.GPS_MODE)) {
+		long automaticCenterHz = signalAnalyzerAutoCenterHz(option.label);
+		boolean gnssL1 = automaticCenterHz > 0L;
+		if (gnssL1 && !externalSource && centerField != null) {
+			centerField.setText(formatFrequency(automaticCenterHz));
+			applyRfSettingsLive();
+		}
+		if (option.label.startsWith("Wi-Fi") || option.label.startsWith("Bluetooth") || gnssL1) {
 			if (dcOffsetEnableCheck != null) dcOffsetEnableCheck.setSelected(false);
 			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
 			return;
@@ -1240,6 +1246,11 @@ public class IQAnalyzerApp {
 				return;
 			}
 		}
+	}
+
+	static long signalAnalyzerAutoCenterHz(String label) {
+		return label != null && label.startsWith(SignalQualityTesterFrame.GPS_MODE)
+				? GpsL1SignalAnalyzer.L1_FREQUENCY_HZ : 0L;
 	}
 
 	private void styleSignalTestButton() {
