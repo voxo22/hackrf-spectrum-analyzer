@@ -30,3 +30,4 @@ src-java/jspectrumanalyzer/iq/IQReplayFileTest.java
 src-java/jspectrumanalyzer/iq/PlmnDatabaseTest.java
 tools/Convert-WavToCellSearchBin.ps1
 github-wiki/
+analysis-data/

@@ -58,7 +58,7 @@ public class FrequencyAllocationTable {
 	public ArrayList<FrequencyBand> getFrequencyBands(long startHz, long endHz){
 		FrequencyBand startBand	= lookupBand(startHz);
 		ArrayList<FrequencyBand> bands	= new ArrayList<>();
-		SortedSet<FrequencyBand> entries = frequencyBands.tailSet(startBand);
+		SortedSet<FrequencyBand> entries = startBand == null ? frequencyBands : frequencyBands.tailSet(startBand);
 		for (FrequencyBand frequencyBand : entries) {
 			if (frequencyBand.getHzStartIncl() > endHz) {
 				break;
@@ -66,6 +66,21 @@ public class FrequencyAllocationTable {
 			bands.add(frequencyBand);
 		}
 		return bands;
+	}
+
+	/**
+	 * Returns the largest number of label lines used by a band which intersects
+	 * the requested frequency interval.  Multi-range displays use this value to
+	 * keep the separately rendered allocation-table fragments the same height.
+	 */
+	public int getMaximumLineCount(long startHz, long endHz) {
+		int maximum = 1;
+		for (FrequencyBand band : getFrequencyBands(startHz, endHz)) {
+			if (band.getHzStartIncl() < endHz && band.getHzEndExcl() > startHz) {
+				maximum = Math.max(maximum, band.getName().split("/", -1).length);
+			}
+		}
+		return maximum;
 	}
 	
 //----
@@ -100,6 +115,11 @@ public class FrequencyAllocationTable {
 	}
 	
 	public BufferedImage drawAllocationTable(int width, int height, float alpha, long freqStartHz, long freqEndHz, Color textColor, Color bgColor) {
+		return drawAllocationTable(width, height, alpha, freqStartHz, freqEndHz, textColor, bgColor, 1);
+	}
+
+	public BufferedImage drawAllocationTable(int width, int height, float alpha, long freqStartHz, long freqEndHz,
+			Color textColor, Color bgColor, int minimumVisibleLines) {
 		/*
 		 * draw the image scaled up and then resize it after rendering producing high quality image
 		 */
@@ -189,7 +209,7 @@ public class FrequencyAllocationTable {
 			shapes.add(new BandRectangle(band, listLines, x, y, w, lines[0], color));
 		}
 		
-		float maxVisibleLines	= 1;
+		float maxVisibleLines	= Math.max(1, minimumVisibleLines);
 		for (int j = 0; j < shapes.size(); j++) {
 			BandRectangle shape	= shapes.get(j);
 			/*

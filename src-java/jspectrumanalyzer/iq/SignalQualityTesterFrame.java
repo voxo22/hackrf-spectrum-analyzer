@@ -89,6 +89,8 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final UmtsCellTablePanel umtsCellTablePanel = new UmtsCellTablePanel();
 	private final WifiNetworkTablePanel wifiNetworkTablePanel = new WifiNetworkTablePanel();
 	private final BluetoothDeviceTablePanel bluetoothDeviceTablePanel = new BluetoothDeviceTablePanel();
+	private final TetraAnalyzerPanel tetraAnalyzerPanel;
+	private final TetraPid209BoardTablePanel tetraPid209BoardTablePanel;
 	private final Ism868SignalTablePanel ism868SignalTablePanel = new Ism868SignalTablePanel();
 	private volatile GnssL1System gnssSystem = GnssL1System.GPS;
 	private final GpsL1SatelliteTablePanel gpsSatelliteTablePanel = new GpsL1SatelliteTablePanel();
@@ -111,6 +113,7 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final boolean umtsMode;
 	private final boolean wifiMode;
 	private final boolean bluetoothMode;
+	private final boolean tetraMode;
 	private final boolean ism868Mode;
 	private final boolean gpsMode;
 	private final LongSupplier captureTimeMillisSupplier;
@@ -125,6 +128,9 @@ final class SignalQualityTesterFrame extends JFrame {
 	private final WifiSignalAnalyzer wifiAnalyzer = new WifiSignalAnalyzer();
 	private final WifiDsssAnalyzer wifiDsssAnalyzer = new WifiDsssAnalyzer();
 	private final BluetoothSignalAnalyzer bluetoothAnalyzer = new BluetoothSignalAnalyzer();
+	private final TetraDecoderCore tetraDecoder = new TetraDecoderCore();
+	private volatile TetraDecoderCore.Result latestTetraResult =
+			TetraDecoderCore.Result.empty("Waiting for TETRA IQ samples");
 	private final Ism868SignalAnalyzer ism868Analyzer = new Ism868SignalAnalyzer();
 	private volatile GpsL1SignalAnalyzer.Result latestGpsResult;
 	private GpsL1Worker gpsWorker;
@@ -197,6 +203,7 @@ final class SignalQualityTesterFrame extends JFrame {
 	private UmtsCellDetailsFrame umtsCellDetailsFrame;
 	private UmtsPagingStatsFrame umtsPagingFrame;
 	private WifiNetworkDetailsFrame wifiNetworkDetailsFrame;
+	private JFrame tetraPid209Frame;
 	private volatile boolean dvbt2AnalysisRunning;
 	private volatile Dvbt2SignalAnalyzer.Result latestDvbt2Result;
 	private static final int DVBT2_SIGNALLING_CAPTURE_BYTES = 6_000_000;
@@ -252,6 +259,10 @@ final class SignalQualityTesterFrame extends JFrame {
 		umtsMode = mode.startsWith("UMTS") || mode.startsWith("WCDMA");
 		wifiMode = mode.startsWith("Wi-Fi");
 		bluetoothMode = mode.startsWith("Bluetooth");
+		tetraMode = mode.startsWith("TETRA");
+		/* Do not construct TETRA-only Swing panels for unrelated analyzers. */
+		tetraAnalyzerPanel = tetraMode ? new TetraAnalyzerPanel() : null;
+		tetraPid209BoardTablePanel = tetraMode ? new TetraPid209BoardTablePanel() : null;
 		ism868Mode = mode.startsWith("ISM 868");
 		gpsMode = mode.startsWith(GNSS_MODE) || mode.startsWith(LEGACY_GPS_MODE);
 		if (gpsMode) setTitle(GNSS_MODE + " signal analyzer");
@@ -351,6 +362,11 @@ final class SignalQualityTesterFrame extends JFrame {
 			JButton detailsButton = new JButton("AP / CLIENT DETAILS");
 			detailsButton.addActionListener(e -> openWifiNetworkDetails());
 			headerRight.add(detailsButton);
+		} else if (tetraMode) {
+			headerRight.add(tetraAnalyzerPanel.createCellHeaderControls());
+			JButton boardsButton = new JButton("PID 209 BOARDS");
+			boardsButton.addActionListener(e -> openTetraPid209Boards());
+			headerRight.add(boardsButton);
 		}
 		headerRight.add(SignalTesterClipboard.createButton(getContentPane(), false));
 		header.add(headerRight, BorderLayout.EAST);
@@ -374,7 +390,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		spectrumPanel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
 		dabConstellationPanel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
 		dvbt2P2Panel.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY));
-		JPanel plots = new JPanel(dabMode || ism868Mode || gpsMode
+		JPanel plots = new JPanel(dabMode || ism868Mode || gpsMode || tetraMode
 				? new BorderLayout(0, 7) : new GridLayout(1, 2, 6, 0));
 		plots.setBackground(PANEL_BG);
 		plots.setBorder(new EmptyBorder(0, 8, 0, 8));
@@ -447,6 +463,8 @@ final class SignalQualityTesterFrame extends JFrame {
 			plots.add(gpsColumn, BorderLayout.CENTER);
 		} else if (ism868Mode) {
 			plots.add(ism868SignalTablePanel, BorderLayout.CENTER);
+		} else if (tetraMode) {
+			plots.add(tetraAnalyzerPanel, BorderLayout.CENTER);
 		} else if (dabMode) {
 			JPanel upper = new JPanel(new GridLayout(1, 2, 8, 0));
 			upper.setBackground(PANEL_BG);
@@ -463,8 +481,8 @@ final class SignalQualityTesterFrame extends JFrame {
 		add(header, BorderLayout.NORTH);
 		add(plots, BorderLayout.CENTER);
 		add(footer, BorderLayout.SOUTH);
-		setSize(gpsMode ? 1050 : bluetoothMode ? 900 : dvbt2Mode || ism868Mode ? 1100 : 760,
-				dvbt2Mode ? 650 : bluetoothMode ? 680 : gpsMode ? 665 : ism868Mode ? 560 : dabMode || wifiMode || lteMode ? 570 : nrMode || umtsMode ? 500
+		setSize(gpsMode ? 1050 : bluetoothMode ? 900 : dvbt2Mode || ism868Mode || tetraMode ? 1100 : 760,
+				dvbt2Mode ? 650 : bluetoothMode ? 680 : gpsMode ? 665 : ism868Mode ? 560 : dabMode || wifiMode || lteMode ? 570 : nrMode || umtsMode ? 500 : tetraMode ? 520
 						: gsmMode || rdsMode ? 445 : 420);
 
 		repaintTimer = new Timer(100, e -> updateView());
@@ -473,6 +491,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			@Override
 			public void windowClosed(WindowEvent e) {
 				repaintTimer.stop();
+				if (tetraAnalyzerPanel != null) tetraAnalyzerPanel.close();
 				stopWifiWorker();
 				stopBluetoothWorker();
 				stopGpsWorker();
@@ -486,6 +505,7 @@ final class SignalQualityTesterFrame extends JFrame {
 				if (umtsCellDetailsFrame != null) umtsCellDetailsFrame.dispose();
 				if (umtsPagingFrame != null) umtsPagingFrame.dispose();
 				if (wifiNetworkDetailsFrame != null) wifiNetworkDetailsFrame.dispose();
+				if (tetraPid209Frame != null) tetraPid209Frame.dispose();
 				if (closedCallback != null) {
 					closedCallback.run();
 				}
@@ -543,6 +563,18 @@ final class SignalQualityTesterFrame extends JFrame {
 		wifiNetworkDetailsFrame.setLocationRelativeTo(this);
 		wifiNetworkDetailsFrame.setVisible(true);
 		wifiNetworkDetailsFrame.toFront();
+	}
+
+	private void openTetraPid209Boards() {
+		if (tetraPid209Frame == null || !tetraPid209Frame.isDisplayable()) {
+			tetraPid209Frame = new JFrame("TETRA PID 209 boards");
+			tetraPid209Frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+			tetraPid209Frame.setContentPane(tetraPid209BoardTablePanel);
+			tetraPid209Frame.setSize(1500, 650);
+		}
+		tetraPid209Frame.setLocationRelativeTo(this);
+		tetraPid209Frame.setVisible(true);
+		tetraPid209Frame.toFront();
 	}
 
 	private void openLteCellDetails() {
@@ -799,6 +831,11 @@ final class SignalQualityTesterFrame extends JFrame {
 		GpsL1Worker worker = gpsWorker; if (worker != null) worker.discontinuity();
 		GalileoE1Worker galileo = galileoWorker; if (galileo != null) galileo.discontinuity();
 		BeiDouB1cWorker beidou = beidouWorker; if (beidou != null) beidou.discontinuity();
+		if (tetraMode) {
+			tetraDecoder.reset();
+			tetraAnalyzerPanel.clear();
+			tetraPid209BoardTablePanel.clear();
+		}
 	}
 
 	private void offerGpsAnalysis(long centerFreqHz, int sampleRateHz, byte[] iqData, int length) {
@@ -881,6 +918,12 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (wifiMode) offerWifiAnalysis(centerFreqHz, sampleRateHz, iqData, evenLength);
 		if (bluetoothMode) offerBluetoothAnalysis(centerFreqHz, sampleRateHz, iqData, evenLength);
 		if (gpsMode) offerSelectedGnssAnalysis(centerFreqHz, sampleRateHz, iqData, evenLength);
+		if (tetraMode) {
+			long captureMillis = System.currentTimeMillis();
+			LongSupplier supplier = captureTimeMillisSupplier;
+			if (supplier != null) { long supplied = supplier.getAsLong(); if (supplied > 0L) captureMillis = supplied; }
+			latestTetraResult = tetraDecoder.accept(centerFreqHz, sampleRateHz, iqData, evenLength, captureMillis);
+		}
 		if (dvbtMode) offerDvbtTpsCapture(sampleRateHz, iqData, evenLength);
 		if (dvbt2Mode) offerDvbt2SignallingCapture(sampleRateHz, iqData, evenLength);
 		if (nrMode) appendNrHistory(iqData, evenLength, sampleRateHz);
@@ -2004,6 +2047,13 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (wifiMode) wifiNetworkTablePanel.refresh();
 		if (bluetoothMode) bluetoothDeviceTablePanel.refresh();
 		if (ism868Mode) ism868SignalTablePanel.refresh(latestIsm868Result);
+		if (tetraMode) {
+			List<TetraDecoderCore.Burst> bursts = tetraDecoder.takeBursts();
+			List<TetraMacDecoder.TetraMessage> tetraEvents = tetraDecoder.takeMessages();
+			List<TetraMacDecoder.SdsMessage> sdsMessages = tetraDecoder.takeSdsMessages();
+			tetraAnalyzerPanel.refresh(latestTetraResult, bursts, sdsMessages, tetraEvents);
+			tetraPid209BoardTablePanel.accept(sdsMessages);
+		}
 		if (gpsMode && active != null) gnssL1OverviewPanel.refresh(latestGpsResult, latestGalileoResult,
 				latestBeidouResult, active.centerFreqHz, active.sampleRateHz);
 		qualityPanel.setSnapshot(active);
@@ -2036,11 +2086,15 @@ final class SignalQualityTesterFrame extends JFrame {
 							? "GALILEO E1 POSITION" : "BEIDOU B1C", "",
 					"Waiting for GNSS L1 IQ samples..."));
 			if (ism868Mode) detailLabel.setText("Waiting for an IQ window that overlaps 863-870 MHz");
+			if (tetraMode) detailLabel.setText("Waiting for one centered 25 kHz TETRA downlink channel");
 			return;
 		}
 		statsLabel.setText(String.format(Locale.US, "%.3f MHz   %.3f MS/s   RMS %.1f dBFS   peak %d",
 				active.centerFreqHz / 1_000_000d, active.sampleRateHz / 1_000_000d, active.dbfs, active.peak));
-		if (dabMode && active.dabMetrics != null) {
+		if (tetraMode) {
+			TetraDecoderCore.Result tetra = latestTetraResult;
+			detailLabel.setText(tetra == null ? "Waiting for TETRA IQ samples" : tetra.summary());
+		} else if (dabMode && active.dabMetrics != null) {
 			DabMetrics dab = active.dabMetrics;
 			DabConstellation constellation = dab.constellation;
 			DabFicDecoder.Result fic = latestDabFicResult;

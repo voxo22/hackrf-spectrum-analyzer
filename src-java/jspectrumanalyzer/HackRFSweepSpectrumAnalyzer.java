@@ -6202,6 +6202,13 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						Color.white, Color.green);
 			} else if (pairs != null && pairs.length > 2) {
 				double totalLen = totalRangesLength(pairs);
+				int allocationLineCount = 1;
+				for (int i = 0; i < pairs.length; i += 2) {
+					long rangeStartHz = ((long) (pairs[i] + activeShift)) * 1000000l;
+					long rangeEndHz = ((long) (pairs[i + 1] + activeShift)) * 1000000l;
+					allocationLineCount = Math.max(allocationLineCount,
+							activeTable.getMaximumLineCount(rangeStartHz, rangeEndHz));
+				}
 				BufferedImage out = GraphicsToolkit.createAcceleratedImageTransparent(width, height);
 				Graphics2D g = out.createGraphics();
 				int x = 0;
@@ -6218,7 +6225,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					BufferedImage part = activeTable.drawAllocationTable(partW, height, alphaFreqAllocationTableBandsImage,
 						((long) (s + activeShift)) * 1000000l,
 						((long) (e + activeShift)) * 1000000l,
-						Color.white, Color.green);
+						Color.white, Color.green, allocationLineCount);
 					g.drawImage(part, x, 0, null);
 					x += partW;
 				}

@@ -1,0 +1,15 @@
+# TETRA PID 209 confirmed mappings (UTF-8)
+#
+# Format:
+# BOARD;decimal DL SSI;stop name;direction
+# LINE;hex Field A;displayed line
+# DESTINATION;hex Field B;displayed destination
+#
+# Hex values may be entered with or without the 0x prefix.
+
+BOARD;3015400;China Town;Main train station
+BOARD;3015401;Times Sq;city center
+DESTINATION;07D1;Main train station
+DESTINATION;07D2;West blvd
+LINE;0001;100
+LINE;0002;101

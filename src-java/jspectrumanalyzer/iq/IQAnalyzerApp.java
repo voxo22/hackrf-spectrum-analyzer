@@ -666,6 +666,7 @@ public class IQAnalyzerApp {
 				new SignalTestOption("DAB"),
 				new SignalTestOption("DVB-T"),
 				new SignalTestOption("DVB-T2"),
+				new SignalTestOption("TETRA"),
 				new SignalTestOption("ISM 868"),
 				new SignalTestOption("GSM 2G"),
 				new SignalTestOption("UMTS 3G"),
@@ -1227,6 +1228,13 @@ public class IQAnalyzerApp {
 		if (option.label.startsWith("ISM 868")) {
 			if (dcOffsetEnableCheck != null) dcOffsetEnableCheck.setSelected(false);
 			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(0);
+			return;
+		}
+		if (option.label.startsWith("TETRA")) {
+			if (dcOffsetEnableCheck != null) dcOffsetEnableCheck.setSelected(false);
+			if (viewModeCombo != null) viewModeCombo.setSelectedIndex(1); // Narrowband
+			if (channelBandwidthCombo != null) channelBandwidthCombo.setSelectedIndex(1); // 25 kHz
+			if (outputRateCombo != null) outputRateCombo.setSelectedIndex(1); // 96 kS/s
 			return;
 		}
 		if (option.label.startsWith("LTE") || option.label.startsWith("NR") || option.label.startsWith("UMTS")) {
