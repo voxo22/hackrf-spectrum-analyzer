@@ -9,7 +9,7 @@
     <target name="compile">
         <mkdir dir="../bin"/>
     	<copy todir="../bin">
-	    <fileset dir="../src-java" includes="**/*.csv,**/*.gz" />
+	    <fileset dir="../src-java" includes="**/*.csv,**/*.gz,**/*.png" />
     	</copy>
         <javac srcdir="../src-java" destdir="../bin" source="1.8" target="1.8" includeantruntime="false">
         	<classpath>
@@ -31,6 +31,7 @@
             <manifest>
                 <attribute name="Main-Class" value="org.eclipse.jdt.internal.jarinjarloader.JarRsrcLoader"/>
                 <attribute name="Rsrc-Main-Class" value="jspectrumanalyzer.HackRFSweepSpectrumAnalyzer"/>
+                <attribute name="SplashScreen-Image" value="jspectrumanalyzer/resources/hackrf-spectrum-analyzer-splash.png"/>
                 <attribute name="Class-Path" value="."/>
                 <attribute name="Rsrc-Class-Path" value="./ miglayout15-swing.jar jcommon-1.0.17.jar jfreechart-1.0.14.jar jna-4.5.1.jar xuggle-xuggler-5.4.jar hackrf-sweep-jna.jar slf4j-api-1.6.4.jar logback-classic-1.0.0.jar logback-core-1.0.0.jar"/>
             </manifest>

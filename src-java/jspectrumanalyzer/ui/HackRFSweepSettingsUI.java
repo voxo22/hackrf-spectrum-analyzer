@@ -13,6 +13,8 @@ import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
@@ -51,6 +53,7 @@ import jspectrumanalyzer.core.FrequencyRange;
 import jspectrumanalyzer.core.HackRFSettings;
 import jspectrumanalyzer.core.Preset;
 import jspectrumanalyzer.core.Ranges;
+import jspectrumanalyzer.iq.IQAudioOutput;
 import net.miginfocom.swing.MigLayout;
 import shared.mvc.MVCController;
 import javax.swing.border.EmptyBorder;
@@ -647,9 +650,12 @@ public class HackRFSweepSettingsUI extends JPanel
 			checkBoxIqReplayAudio.setForeground(Color.WHITE);
 			checkBoxIqReplayAudio.setBackground(Color.BLACK);
 			checkBoxIqReplayAudio.setMargin(new java.awt.Insets(0, 0, 0, 0));
-			sliderIqReplayAudioVolume = new JSlider(0, 100, 80);
+			sliderIqReplayAudioVolume = new JSlider(0, IQAudioOutput.MAX_VOLUME_PERCENT,
+					IQAudioOutput.DEFAULT_VOLUME_PERCENT);
 			sliderIqReplayAudioVolume.setForeground(Color.WHITE);
 			sliderIqReplayAudioVolume.setBackground(Color.BLACK);
+			sliderIqReplayAudioVolume.addChangeListener(e -> updateIqReplayAudioVolumeTooltip());
+			updateIqReplayAudioVolumeTooltip();
 			compactSlider(sliderIqReplayAudioVolume, new Dimension(44, 16));
 			sliderIqReplayAudioVolume.setMinimumSize(new Dimension(32, 16));
 			sliderIqReplayAudioVolume.setMaximumSize(new Dimension(48, 16));
@@ -1704,6 +1710,13 @@ public class HackRFSweepSettingsUI extends JPanel
 		slider.setFocusable(false);
 	}
 
+	private void updateIqReplayAudioVolumeTooltip() {
+		if (sliderIqReplayAudioVolume != null) {
+			sliderIqReplayAudioVolume.setToolTipText("Audio volume: "
+					+ IQAudioOutput.formatVolumeDb(sliderIqReplayAudioVolume.getValue()));
+		}
+	}
+
 	private void bindViewToModel() {
 		spinnerFFTBinHz.addChangeListener(e -> applyRbwSpinnerValue());
 		hRF.getFFTBinHz().addListener(value -> SwingUtilities.invokeLater(this::updateRbwSpinnerValue));
@@ -1838,9 +1851,22 @@ public class HackRFSweepSettingsUI extends JPanel
 		new MVCController(sliderIqReplayAudioVolume, hRF.getIqReplayAudioVolume());
 		new MVCController(comboBoxIqReplayAudioMode, hRF.getIqReplayAudioMode());
 		new MVCController(checkBoxIqReplayBurstCapture, hRF.isIqReplayBurstCaptureEnabled());
-		new MVCController(checkBoxIqReplayTxCustomFrequency, hRF.isIqReplayTxCustomFrequencyEnabled());
-		new MVCController(checkBoxIqReplayTx, hRF.isIqReplayTxEnabled());
 		new MVCController(textFieldIqReplayTxCenter, hRF.getIqReplayTxCenter());
+		textFieldIqReplayTxCenter.addFocusListener(new FocusAdapter() {
+			@Override
+			public void focusLost(FocusEvent event) {
+				textFieldIqReplayTxCenter.postActionEvent();
+			}
+		});
+		new MVCController((valueChangedCall) -> checkBoxIqReplayTxCustomFrequency.addActionListener(event -> {
+			textFieldIqReplayTxCenter.postActionEvent();
+			valueChangedCall.accept(checkBoxIqReplayTxCustomFrequency.isSelected());
+		}), selected -> checkBoxIqReplayTxCustomFrequency.setSelected(selected),
+				hRF.isIqReplayTxCustomFrequencyEnabled());
+		new MVCController((valueChangedCall) -> checkBoxIqReplayTx.addActionListener(event -> {
+			textFieldIqReplayTxCenter.postActionEvent();
+			valueChangedCall.accept(checkBoxIqReplayTx.isSelected());
+		}), selected -> checkBoxIqReplayTx.setSelected(selected), hRF.isIqReplayTxEnabled());
 		new MVCController(sliderIqReplayTxPower, hRF.getIqReplayTxPower());
 		hRF.getIqReplayTxPower().addListener((power) -> SwingUtilities.invokeLater(() ->
 				labelIqReplayTxPower.setText(Integer.toString(power))));

@@ -211,6 +211,7 @@ final class TetraAnalyzerPanel extends JPanel {
 			cellDetailsFrame.setLocationRelativeTo(this);
 		}
 		cellDetailsFrame.refresh(latestResult);
+		cellDetailsFrame.setAlwaysOnTop(true);
 		cellDetailsFrame.setVisible(true);
 		cellDetailsFrame.toFront();
 	}

@@ -14,6 +14,7 @@ final class UmtsSignalAnalyzer {
 	private static final int PSCH_CHIPS = 256;
 	private static final int GOLD_PERIOD = (1 << 18) - 1;
 	private static final int CPICH_STRIDE = 8;
+	private static final double CONFIRMED_CPICH_CORRELATION = 0.065d;
 	private static final int[] FREQ_OFFSETS = {
 			0, -100_000, 100_000, -200_000, 200_000, -50_000, 50_000, -150_000, 150_000, -250_000, 250_000
 	};
@@ -79,7 +80,7 @@ final class UmtsSignalAnalyzer {
 		double quality = detected ? Math.min(100d, syncQuality * .35d + cpichQuality * .65d) : syncQuality * .35d;
 		String state = primary != null && primary.systemInformation.mibValid ? "UMTS MIB decoded"
 				: primary != null && primary.bch.valid ? "UMTS BCH decoded (CRC OK)"
-				: primary != null && primary.cpichCorrelation >= 0.065
+				: primary != null && primary.cpichCorrelation >= CONFIRMED_CPICH_CORRELATION
 				? "UMTS CPICH PSC locked" : detected ? "UMTS CPICH candidate"
 				: psch.correlation >= 0.16 ? "UMTS P-SCH slot timing locked" : "Possible UMTS P-SCH";
 		return new Result(detected, primary == null ? -1 : primary.psc, primary == null ? -1 : primary.codeGroup,
@@ -481,6 +482,9 @@ final class UmtsSignalAnalyzer {
 		Candidate withPaging(UmtsPchDecoder.Snapshot value) {
 			return new Candidate(psc, codeGroup, frameStartSample, frameSlotPhase, cpichCorrelation,
 					ecNoDb, rscpDbfs, iqOrientation, cfoHz, bch, systemInformation, load, value);
+		}
+		boolean isConfirmedCell() {
+			return bch.valid;
 		}
 	}
 

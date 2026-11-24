@@ -46,6 +46,29 @@ public class DatasetSpectrum implements Cloneable
 		this.freqShift = freqShift;
 		this.spectrumInitPower = spectrumInitPower;
 		int datapoints = (int) (Math.ceil(freqStopMHz - freqStartMHz) * 1000000d / fftBinSizeHz);
+		initializeSpectrum(datapoints);
+	}
+
+	/**
+	 * Creates a spectrum with an exact bin origin and count. This is used for
+	 * narrow IQ replay data, whose span must not be padded to whole MHz.
+	 */
+	protected DatasetSpectrum(float fftBinSizeHz, long freqStartHz, int datapoints,
+			float spectrumInitPower, int freqShift)
+	{
+		if (datapoints < 1)
+			throw new IllegalArgumentException("Spectrum must contain at least one point");
+		this.fftBinSizeHz = fftBinSizeHz;
+		this.freqStartHz = freqStartHz;
+		this.freqStartMHz = (int) Math.floor(freqStartHz / 1000000d);
+		this.freqStopMHz = (int) Math.ceil((freqStartHz + fftBinSizeHz * datapoints) / 1000000d);
+		this.freqShift = freqShift;
+		this.spectrumInitPower = spectrumInitPower;
+		initializeSpectrum(datapoints);
+	}
+
+	private void initializeSpectrum(int datapoints)
+	{
 		spectrum = new float[datapoints];
 		Arrays.fill(spectrum, spectrumInitPower);
 
@@ -53,12 +76,17 @@ public class DatasetSpectrum implements Cloneable
 			for (int j = 0; j < 5; j++) {
 				ArrayList<XYDataItem> list	= new ArrayList<>();
 				for (int i = 0; i < datapoints; i++) {
-					double freq = (freqStartHz + fftBinSizeHz * i) / 1000000;
+					double freq = (freqStartHz + (double) fftBinSizeHz * i) / 1000000d;
 					list.add(new XYDataItem(freq, 0));
 				}
 				cachedDataItems.add(list);
 			}
 		}
+	}
+
+	DatasetSpectrum createCompatibleDataset(float initialPower)
+	{
+		return new DatasetSpectrum(fftBinSizeHz, freqStartHz, spectrum.length, initialPower, freqShift);
 	}
 	
 	/**
@@ -114,12 +142,11 @@ public class DatasetSpectrum implements Cloneable
 	 * @return
 	 */
 	public XYSeriesImmutable createSpectrumDataset(String name) {
-		float[] xValues	= new float[spectrum.length];
+		double[] xValues = new double[spectrum.length];
 		float[] yValues	= spectrum;
 		for (int i = 0; i < spectrum.length; i++)
 		{
-			float freq = (freqStartHz + fftBinSizeHz * i) / 1000000f;
-			xValues[i]	= freq + freqShift;
+			xValues[i] = (freqStartHz + (double) fftBinSizeHz * i) / 1000000d + freqShift;
 		}
 		XYSeriesImmutable xySeriesF	= new XYSeriesImmutable(name, xValues, yValues);
 		return xySeriesF;
@@ -162,7 +189,7 @@ public class DatasetSpectrum implements Cloneable
 	 */
 	public double getFrequency(int index)
 	{
-		double freq = (freqStartHz + fftBinSizeHz * index);
+		double freq = freqStartHz + (double) fftBinSizeHz * index;
 		return freq;
 	}
 
@@ -190,7 +217,7 @@ public class DatasetSpectrum implements Cloneable
 		if (activeRangePairsMHz == null)
 			return true;
 
-		double freqMHz = (freqStartHz + fftBinSizeHz * index) / 1000000d;
+		double freqMHz = (freqStartHz + (double) fftBinSizeHz * index) / 1000000d;
 		for (int i = 0; i + 1 < activeRangePairsMHz.length; i += 2) {
 			if (freqMHz >= activeRangePairsMHz[i] && freqMHz < activeRangePairsMHz[i + 1])
 				return true;
@@ -225,7 +252,7 @@ public class DatasetSpectrum implements Cloneable
 		if (!useCached){
 			for (int i = 0; i < spectrum.length; i++)
 			{
-				double freq = (freqStartHz + fftBinSizeHz * i) / 1000000;
+				double freq = (freqStartHz + (double) fftBinSizeHz * i) / 1000000d;
 				series.add(freq, spectrum[i]);
 			}
 		}

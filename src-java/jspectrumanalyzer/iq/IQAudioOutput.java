@@ -27,11 +27,16 @@ public class IQAudioOutput {
 	}
 
 	public static final int TARGET_AUDIO_RATE_HZ = 48_000;
+	public static final int DEFAULT_VOLUME_PERCENT = 120;
+	public static final int UNITY_VOLUME_PERCENT = 150;
+	public static final int MAX_VOLUME_PERCENT = 200;
+	private static final double MAX_VOLUME_GAIN = 2d;
 	private static final int MAX_DEMOD_INPUT_RATE_HZ = 192_000;
 	private static final int MAX_QUEUE_BLOCKS = 48;
 	private static final double START_FADE_SECONDS = 0.35d;
 	private static final double AM_DC_CUTOFF_HZ = 3d;
 	private static final double AUDIO_DC_CUTOFF_HZ = 12d;
+	private static final double IQ_VECTOR_FULL_SCALE = Math.sqrt(2d * 128d * 128d);
 	public static final int MIN_TONE_CUTOFF_HZ = 3_000;
 	public static final int MAX_TONE_CUTOFF_HZ = 22_000;
 	public static final int DEFAULT_TONE_CUTOFF_HZ = 16_000;
@@ -54,7 +59,7 @@ public class IQAudioOutput {
 	private volatile double audioLowPassAlpha = 0.2d;
 	private double resampleAccumulator = 0;
 	private double audioSamplesPerInputSample = 1;
-	private volatile double volume = 0.8d;
+	private volatile double volume = volumeGainForPercent(DEFAULT_VOLUME_PERCENT);
 	private volatile int toneCutoffHz = DEFAULT_TONE_CUTOFF_HZ;
 	private int fadeSamplesRemaining = 0;
 	private int fadeTotalSamples = 1;
@@ -127,13 +132,37 @@ public class IQAudioOutput {
 	}
 
 	public void setVolumePercent(int volumePercent) {
-		int clamped = Math.max(0, Math.min(100, volumePercent));
+		volume = volumeGainForPercent(volumePercent);
+	}
+
+	static double volumeGainForPercent(int volumePercent) {
+		int clamped = Math.max(0, Math.min(MAX_VOLUME_PERCENT, volumePercent));
 		if (clamped == 0) {
-			volume = 0;
-			return;
+			return 0d;
 		}
-		double normalized = clamped / 100d;
-		volume = Math.pow(10d, (normalized - 1d) * 2d);
+		if (clamped <= UNITY_VOLUME_PERCENT) {
+			double normalized = clamped / (double) UNITY_VOLUME_PERCENT;
+			/* 100% = 0 dB, 50% = -20 dB. */
+			return Math.pow(10d, (normalized - 1d) * 2d);
+		}
+		/* Explicit logarithmic post-demodulation boost up to x2 (+6.02 dB),
+		 * applied only when the user asks for it. */
+		return Math.pow(MAX_VOLUME_GAIN, (clamped - UNITY_VOLUME_PERCENT)
+				/ (double) (MAX_VOLUME_PERCENT - UNITY_VOLUME_PERCENT));
+	}
+
+	public static double volumeDbForPercent(int volumePercent) {
+		double gain = volumeGainForPercent(volumePercent);
+		return gain <= 0d ? Double.NEGATIVE_INFINITY : 20d * Math.log10(gain);
+	}
+
+	public static String formatVolumeDb(int volumePercent) {
+		double db = volumeDbForPercent(volumePercent);
+		if (Double.isInfinite(db)) {
+			return "Mute";
+		}
+		long rounded = Math.round(db);
+		return (rounded > 0 ? "+" : "") + rounded + " dB";
 	}
 
 	public void setToneCutoffHz(int cutoffHz) {
@@ -200,9 +229,9 @@ public class IQAudioOutput {
 		for (int sample = 0; sample < samples; sample += demodInputStride) {
 			int i = iqData[sample * 2];
 			int q = iqData[sample * 2 + 1];
-			double magnitude = Math.sqrt(i * i + q * q) / 181d;
+			double magnitude = iqMagnitude(i, q);
 			amDc += (magnitude - amDc) * amDcAlpha;
-			double audio = (magnitude - amDc) * 6d;
+			double audio = demodulateAmSample(magnitude, amDc);
 			out = resampleAndWrite(pcm, out, audio);
 		}
 		return out;
@@ -217,10 +246,24 @@ public class IQAudioOutput {
 		for (int sample = 0; sample < samples; sample += demodInputStride) {
 			int i = iqData[sample * 2];
 			int q = iqData[sample * 2 + 1];
-			sum += Math.sqrt(i * i + q * q) / 181d;
+			sum += iqMagnitude(i, q);
 			count++;
 		}
 		return count == 0 ? 0 : sum / count;
+	}
+
+	private static double iqMagnitude(int i, int q) {
+		return Math.sqrt(i * i + q * q) / IQ_VECTOR_FULL_SCALE;
+	}
+
+	static double demodulateAmSample(double magnitude, double carrierLevel) {
+		return magnitude - carrierLevel;
+	}
+
+	static double demodulateFmSample(int previousI, int previousQ, int i, int q, int inputStride) {
+		double cross = previousI * q - previousQ * i;
+		double dot = previousI * i + previousQ * q;
+		return Math.atan2(cross, dot) / (Math.PI * Math.max(1, inputStride));
 	}
 
 	private int demodFm(byte[] iqData, int samples, byte[] pcm) {
@@ -229,9 +272,10 @@ public class IQAudioOutput {
 			int i = iqData[sample * 2];
 			int q = iqData[sample * 2 + 1];
 			if (hasPreviousFmSample) {
-				double cross = previousFmI * q - previousFmQ * i;
-				double dot = previousFmI * i + previousFmQ * q;
-				double audio = Math.atan2(cross, dot) / Math.PI * 1.8d;
+				/* The phase spans demodInputStride original IQ samples. Divide it
+				 * back to the natural per-input-sample deviation instead of making
+				 * FM volume depend on the internal performance decimation. */
+				double audio = demodulateFmSample(previousFmI, previousFmQ, i, q, demodInputStride);
 				out = resampleAndWrite(pcm, out, audio);
 			}
 			previousFmI = i;
@@ -281,7 +325,7 @@ public class IQAudioOutput {
 		} else if (audio < -1) {
 			audio = -1;
 		}
-		short value = (short) Math.round(audio * 28000d);
+		short value = (short) Math.round(audio * Short.MAX_VALUE);
 		pcm[out++] = (byte) (value & 0xff);
 		pcm[out++] = (byte) ((value >> 8) & 0xff);
 		pcm[out++] = (byte) (value & 0xff);

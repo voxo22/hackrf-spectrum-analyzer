@@ -440,7 +440,8 @@ public class IQAnalyzerApp {
 			}
 		}
 		if (audioVolumeSlider != null) {
-			audioVolumeSlider.setValue(parsePropertyInt(properties, "audio.volume", 80));
+			audioVolumeSlider.setValue(parsePropertyInt(properties, "audio.volume",
+					IQAudioOutput.DEFAULT_VOLUME_PERCENT));
 			audioOutput.setVolumePercent(audioVolumeSlider.getValue());
 		}
 		if (audioToneSlider != null) {
@@ -694,13 +695,17 @@ public class IQAnalyzerApp {
 		});
 		audioModeCombo.setSelectedItem(IQAudioOutput.Mode.AM);
 		audioModeCombo.addActionListener(e -> applyAudioSettingsLive());
-		audioVolumeSlider = new JSlider(0, 100, 80);
+		audioVolumeSlider = new JSlider(0, IQAudioOutput.MAX_VOLUME_PERCENT,
+				IQAudioOutput.DEFAULT_VOLUME_PERCENT);
 		audioVolumeSlider.setPreferredSize(new java.awt.Dimension(100, 34));
 		audioVolumeSlider.setMajorTickSpacing(50);
 		audioVolumeSlider.setPaintTicks(true);
-		audioVolumeSlider.setToolTipText("Audio output volume");
-		audioVolumeSlider.addChangeListener(e -> audioOutput.setVolumePercent(audioVolumeSlider.getValue()));
+		audioVolumeSlider.addChangeListener(e -> {
+			audioOutput.setVolumePercent(audioVolumeSlider.getValue());
+			updateAudioVolumeTooltip();
+		});
 		audioOutput.setVolumePercent(audioVolumeSlider.getValue());
+		updateAudioVolumeTooltip();
 		audioToneSlider = new JSlider(IQAudioOutput.MIN_TONE_CUTOFF_HZ, IQAudioOutput.MAX_TONE_CUTOFF_HZ,
 				IQAudioOutput.DEFAULT_TONE_CUTOFF_HZ);
 		audioToneSlider.setPreferredSize(new java.awt.Dimension(108, 30));
@@ -1083,6 +1088,13 @@ public class IQAnalyzerApp {
 		label.setHorizontalAlignment(JLabel.RIGHT);
 		label.setPreferredSize(new java.awt.Dimension(48, 22));
 		return label;
+	}
+
+	private void updateAudioVolumeTooltip() {
+		if (audioVolumeSlider != null) {
+			audioVolumeSlider.setToolTipText("Audio volume: "
+					+ IQAudioOutput.formatVolumeDb(audioVolumeSlider.getValue()));
+		}
 	}
 
 	private JPanel createAudioToneRow() {

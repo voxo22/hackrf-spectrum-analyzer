@@ -46,6 +46,18 @@ public final class IQSpectrumFrame {
 		return size;
 	}
 
+	/** Returns FFT-bin centre frequencies without losing precision in wide spans. */
+	public static double[] createFrequencyCenters(long centerFrequencyHz, int sampleRateHz, int fftSize) {
+		float binHz = sampleRateHz / (float) fftSize;
+		double firstBinHz = centerFrequencyHz - sampleRateHz / 2d + binHz * .5d;
+		double[] frequencies = new double[fftSize];
+		for (int i = 0; i < frequencies.length; i++) {
+			// The cast before multiplication is essential above a 2^24-Hz offset.
+			frequencies[i] = firstBinHz + (double) binHz * i;
+		}
+		return frequencies;
+	}
+
 	private static void fft(double[] real, double[] imaginary) {
 		int size = real.length;
 		for (int i = 1, j = 0; i < size; i++) {

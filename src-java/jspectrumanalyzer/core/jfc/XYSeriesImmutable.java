@@ -9,15 +9,27 @@ import org.jfree.data.xy.XYSeries;
  * No allocation of {@link XYDataItem} or any other objects.
  */
 public class XYSeriesImmutable extends XYSeries {
-	private float[] xValues;
+	private double[] xValues;
 	private float[] yValues;
 	
 	public XYSeriesImmutable(Comparable key, float[] xValues, float[] yValues) {
+		this(key, toDouble(xValues), yValues);
+	}
+
+	public XYSeriesImmutable(Comparable key, double[] xValues, float[] yValues) {
 		super(key, false, false);
 		if (xValues.length != yValues.length)
 			throw new IllegalArgumentException("x/y values are not of the same size");
 		this.xValues	= xValues.clone();
 		this.yValues	= yValues.clone();
+	}
+
+	private static double[] toDouble(float[] values) {
+		double[] converted = new double[values.length];
+		for (int i = 0; i < values.length; i++) {
+			converted[i] = values[i];
+		}
+		return converted;
 	}
 	
 	public double getXX(int item) {

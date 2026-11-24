@@ -93,8 +93,7 @@ public class PersistentDisplay {
 				long t = System.currentTimeMillis() - calibrationStarted;
 				if (t >= calibrationTime) {
 					updatesPerSecond = (float) incomingDataCounter / (t / 1000f);
-					int bins = (int) ((datasetSpectrum.getFreqStopMHz() - datasetSpectrum.getFreqStartMHz()) * 1000000l
-							/ datasetSpectrum.getFFTBinSizeHz());
+					int bins = datasetSpectrum.spectrumLength();
 					BufferedImage image = displayImage.getValue();
 					if (bins < image.getWidth()) {
 						setImageSize(bins, image.getHeight());
@@ -146,7 +145,7 @@ public class PersistentDisplay {
 			int x;
 			if (rangePairs != null && rangePairs.length > 2 && compressedTotalLength > 0) {
 				// compute original frequency in MHz (without shift)
-				double originalNoShiftMHz = (datasetSpectrum.getFreqStartMHz() + (datasetSpectrum.getFFTBinSizeHz() * i) / 1000000d);
+				double originalNoShiftMHz = datasetSpectrum.getFrequency(i) / 1000000d;
 				// check if in any selected range
 				boolean inRange = false;
 				for (int r = 0; r < rangePairs.length; r += 2) {
@@ -171,8 +170,7 @@ public class PersistentDisplay {
 				double percentage = mapped / compressedTotalLength;
 				x = (int) Math.round(percentage * width);
 			} else {
-				double frequencyMHz = datasetSpectrum.getFreqStartMHz()
-						+ datasetSpectrum.getFFTBinSizeHz() * i / 1000000d;
+				double frequencyMHz = datasetSpectrum.getFrequency(i) / 1000000d;
 				if (Double.isFinite(frequencyStartOverrideMHz) && Double.isFinite(frequencyStopOverrideMHz)) {
 					double percentage = (frequencyMHz - frequencyStartOverrideMHz)
 							/ Math.max(1e-12d, frequencyStopOverrideMHz - frequencyStartOverrideMHz);

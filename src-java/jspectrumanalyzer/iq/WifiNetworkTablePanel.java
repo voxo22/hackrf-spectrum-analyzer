@@ -39,7 +39,7 @@ final class WifiNetworkTablePanel extends JPanel {
 	private static final String[] COLUMNS = {
 			"SSID / requested SSID", "BSSID / client MAC", "RSSI", "Role", "PHY", "Standards",
 			"Max advertised PHY", "Channel", "Current width", "Width capability", "Security", "WPS",
-			"Channel util.", "Country", "Company (MAC)", "WPS manufacturer", "Model / device", "Latest frame",
+			"Channel util.", "Connected clients", "Country", "Company (MAC)", "WPS manufacturer", "Model / device", "Latest frame",
 			"Beacons", "Probe responses", "Probe requests", "Beacons/s", "Probe req./min",
 			"Seen", "Estimated BSS start", "Last seen"
 	};
@@ -56,9 +56,9 @@ final class WifiNetworkTablePanel extends JPanel {
 		@Override public boolean isCellEditable(int row, int column) { return false; }
 		@Override public Class<?> getColumnClass(int column) {
 			switch (column) {
-			case 2: case 12: case 21: case 22: return Double.class;
-			case 7: return Integer.class;
-			case 18: case 19: case 20: case 23: case 25: return Long.class;
+			case 2: case 12: case 22: case 23: return Double.class;
+			case 7: case 13: return Integer.class;
+			case 19: case 20: case 21: case 24: case 26: return Long.class;
 			default: return String.class;
 			}
 		}
@@ -82,7 +82,7 @@ final class WifiNetworkTablePanel extends JPanel {
 			@Override public void mouseReleased(MouseEvent event){if(!headerPopupHandled)handleHeaderPopup(event);headerPopupHandled=false;}});
 		table.addMouseListener(new MouseAdapter(){@Override public void mousePressed(MouseEvent event){rowPopupHandled=handleRowPopup(event);}
 			@Override public void mouseReleased(MouseEvent event){if(!rowPopupHandled)handleRowPopup(event);rowPopupHandled=false;}});
-		int[] widths = {170,132,78,66,92,112,135,62,92,160,118,112,92,62,145,145,145,135,
+		int[] widths = {170,132,78,66,92,112,135,62,92,160,118,112,92,112,62,145,145,145,135,
 				68,105,98,78,92,55,145,82};
 		for (int n = 0; n < widths.length; n++) table.getColumnModel().getColumn(n).setPreferredWidth(widths[n]);
 		DefaultTableCellRenderer centered = new ValueRenderer();
@@ -108,6 +108,7 @@ final class WifiNetworkTablePanel extends JPanel {
 	void setColumnWidthForTest(String name,int width){int view=table.convertColumnIndexToView(model.findColumn(name));table.getColumnModel().getColumn(view).setWidth(width);}
 	int viewColumnForTest(String name){return table.convertColumnIndexToView(model.findColumn(name));}
 	int columnWidthForTest(String name){return table.getColumnModel().getColumn(viewColumnForTest(name)).getWidth();}
+	Object valueForTest(String name,int row){return model.getValueAt(row,model.findColumn(name));}
 	void sortByColumnForTest(String name,SortOrder order){table.getRowSorter().setSortKeys(java.util.Collections.singletonList(new RowSorter.SortKey(model.findColumn(name),order)));}
 	String primarySortColumnForTest(){List<? extends RowSorter.SortKey> keys=table.getRowSorter().getSortKeys();return keys.isEmpty()?"":COLUMNS[keys.get(0).getColumn()];}
 	SortOrder primarySortOrderForTest(){List<? extends RowSorter.SortKey> keys=table.getRowSorter().getSortKeys();return keys.isEmpty()?SortOrder.UNSORTED:keys.get(0).getSortOrder();}
@@ -214,7 +215,9 @@ final class WifiNetworkTablePanel extends JPanel {
 			rowKeys.add(n.key);
 			model.addRow(new Object[]{n.displaySsid(), n.bssid, n.levelDbfs, n.role, n.phyText(), n.standards,
 				n.maxAdvertisedPhy, Integer.valueOf(n.channel), n.channelWidth, n.channelCapability,
-				n.security, n.wps, n.channelUtilizationPercent, n.country, n.macVendor, n.manufacturer,
+				n.security, n.wps, n.channelUtilizationPercent,
+				n.stationCount < 0 ? null : Integer.valueOf(n.stationCount),
+				n.country, n.macVendor, n.manufacturer,
 				n.modelDevice(), n.frameType, Long.valueOf(n.beacons), Long.valueOf(n.probeResponses),
 				Long.valueOf(n.probeRequests), n.beaconsPerSecond(now), n.probesPerMinute(now),
 				Long.valueOf(n.seen), n.estimatedStart(), Long.valueOf(n.lastSeenMillis)});
@@ -356,7 +359,8 @@ final class WifiNetworkTablePanel extends JPanel {
 		private boolean lastSeenColumn;
 		ValueRenderer() { setHorizontalAlignment(SwingConstants.CENTER); }
 		@Override protected void setValue(Object value) {
-			if(value instanceof Double){double n=((Double)value).doubleValue();if(column==2)value=Double.isNaN(n)?"--":String.format(Locale.US,"%.1f dBFS",n);else if(column==12)value=Double.isNaN(n)?"--":String.format(Locale.US,"%.1f %%",n);else if(column==21)value=String.format(Locale.US,"%.1f/s",n);else if(column==22)value=String.format(Locale.US,"%.1f/min",n);}
+			if(value==null)value="--";
+			else if(value instanceof Double){double n=((Double)value).doubleValue();if(column==2)value=Double.isNaN(n)?"--":String.format(Locale.US,"%.1f dBFS",n);else if(column==12)value=Double.isNaN(n)?"--":String.format(Locale.US,"%.1f %%",n);else if(column==22)value=String.format(Locale.US,"%.1f/s",n);else if(column==23)value=String.format(Locale.US,"%.1f/min",n);}
 			else if(value instanceof Integer&&column==7&&((Integer)value).intValue()<=0)value="--";
 			else if(value instanceof Long&&lastSeenColumn){long age=Math.max(0L,System.currentTimeMillis()-((Long)value).longValue());value=age<1000?age+" ms":String.format(Locale.US,"%.1f s",age/1000d);}super.setValue(value);
 		}

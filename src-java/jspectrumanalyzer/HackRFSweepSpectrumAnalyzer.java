@@ -619,7 +619,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			this.fftSize = fftSize;
 			this.spectrumFrame = new IQSpectrumFrame(fftSize);
 			this.binHz = sampleRateHz / (float) fftSize;
-			this.frequencyStart = new double[fftSize];
+			this.frequencyStart = IQSpectrumFrame.createFrequencyCenters(centerFrequencyHz, sampleRateHz, fftSize);
 			this.outputQueue = outputQueue;
 			this.burstCapture = burstCapture;
 			int energyScanSamples = Math.max(32, Math.min(256, sampleRateHz / 250000));
@@ -627,10 +627,6 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			this.burstHopBytes = Math.max(2, Math.max(fftSize / 2, sampleRateHz / 1000) * 2);
 			this.pending = new ArrayBlockingQueue<>(burstCapture ? 48 : 2);
 			this.available = new ArrayBlockingQueue<>(burstCapture ? 49 : 3);
-			double firstBinHz = centerFrequencyHz - sampleRateHz / 2d + binHz * 0.5d;
-			for (int i = 0; i < frequencyStart.length; i++) {
-				frequencyStart[i] = firstBinHz + binHz * i;
-			}
 			worker = new Thread(this::processLoop, "iq-replay-spectrum-fft");
 			worker.setDaemon(true);
 			worker.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
@@ -1083,7 +1079,12 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 		//		try { Thread.sleep(20000); System.out.println("Started..."); } catch (InterruptedException e) {}
 
-		new HackRFSweepSpectrumAnalyzer();
+		StartupSplash.show();
+		try {
+			new HackRFSweepSpectrumAnalyzer();
+		} finally {
+			StartupSplash.hide();
+		}
 	}
 
 	public volatile boolean						flagIsHWSendingData					= false;
@@ -1109,7 +1110,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 	private ModelValueBoolean						parameterIsPlayingSpectrum			= new ModelValueBoolean("Spectrum Playback", false);
 	private ModelValue<String>						parameterReplayType					= new ModelValue<>("Replay Type", "");
 	private ModelValueBoolean						parameterIqReplayAudioEnabled		= new ModelValueBoolean("IQ Replay Audio", false);
-	private ModelValueInt							parameterIqReplayAudioVolume		= new ModelValueInt("IQ Replay Audio Volume", 80, 1, 0, 100);
+	private ModelValueInt							parameterIqReplayAudioVolume		= new ModelValueInt("IQ Replay Audio Volume", IQAudioOutput.DEFAULT_VOLUME_PERCENT, 1, 0, IQAudioOutput.MAX_VOLUME_PERCENT);
 	private ModelValue<String>						parameterIqReplayAudioMode			= new ModelValue<>("IQ Replay Audio Mode", "AM");
 	private ModelValueBoolean						parameterIqReplayBurstCapture		= new ModelValueBoolean("IQ Replay Burst Capture", false);
 	private ModelValueBoolean						parameterIqReplayTxEnabled			= new ModelValueBoolean("IQ Replay TX", false);
@@ -1398,6 +1399,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		
 		uiFrame.pack();
 		uiFrame.setVisible(true);
+		StartupSplash.hide();
 
 		//printInit(6);
 
@@ -1508,7 +1510,8 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				parameterIqReplayAudioEnabled.setValue(Boolean.parseBoolean(p.getProperty("IqReplayAudioEnabled")));
 			if (p.getProperty("IqReplayAudioVolume") != null)
 				parameterIqReplayAudioVolume.setValue(Math.max(0,
-						Math.min(100, Integer.parseInt(p.getProperty("IqReplayAudioVolume")))));
+						Math.min(IQAudioOutput.MAX_VOLUME_PERCENT,
+								Integer.parseInt(p.getProperty("IqReplayAudioVolume")))));
 			if ("AM".equals(p.getProperty("IqReplayAudioMode")) || "FM".equals(p.getProperty("IqReplayAudioMode")))
 				parameterIqReplayAudioMode.setValue(p.getProperty("IqReplayAudioMode"));
 			if (p.getProperty("IqReplayBurstCapture") != null)
@@ -2691,8 +2694,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 		float[] triggerValues = TriggerSettings.SOURCE_PEAKS.equals(settings.source)
 				? spectrum.getPeakSpectrumArray()
 				: spectrum.getSpectrumArray();
-		TriggerHit hit = evaluateTriggerFrame(triggerValues, spectrum.getFreqStartMHz(),
-				spectrum.getFFTBinSizeHz(), spectrum.getFreqShift(), settings);
+		TriggerHit hit = evaluateTriggerFrame(triggerValues,
+				spectrum.getFrequency(0) / 1000000d + spectrum.getFreqShift(),
+				spectrum.getFFTBinSizeHz(), settings);
 		long now = System.currentTimeMillis();
 		boolean cooldownOk = settings.cooldownMillis <= 0 || now - lastTriggerAlertMillis >= settings.cooldownMillis;
 		if (!hit.matched) {
@@ -3226,12 +3230,6 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 						analyzer.accept(iqData, iqData.length);
 					}
 					playbackDeadlineNanos += Math.round(frameSamples * 1_000_000_000d / sampleRateHz);
-					if (!playbackIqAnalyzers.isEmpty()) {
-						spectrumFeed.clearPending();
-						playbackDeadlineNanos = paceIqReplay(playbackDeadlineNanos);
-						continue;
-					}
-
 					spectrumFeed.accept(iqData);
 					playbackDeadlineNanos = paceIqReplay(playbackDeadlineNanos);
 				}
@@ -3608,10 +3606,22 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 			
 			//PowerCalibration calibration	 = new PowerCalibration(-45, -12.5, 40); 
 
-			datasetSpectrum = new DatasetSpectrumPeak(binHz, activeFreqStartMHz, activeFreqStopMHz,
-					spectrumInitValue, parameterPeakFallThreshold.getValue(), parameterPeakFallRateSecs.getValue() * 1000,
-					parameterPeakHoldTime.getValue() * 1000, activeFreqShift, parameterAvgIterations.getValue(),
-					parameterAvgOffset.getValue());
+			if (iqPlaybackMode && bin1.freqStart != null && bin1.freqStart.length > 0
+					&& bin1.sigPowdBm != null && bin1.sigPowdBm.length > 0) {
+				int replayDatapoints = Math.min(bin1.freqStart.length, bin1.sigPowdBm.length);
+				long replayFirstBinHz = (long) Math.floor(bin1.freqStart[0]);
+				datasetSpectrum = new DatasetSpectrumPeak(binHz, replayFirstBinHz, replayDatapoints,
+						spectrumInitValue, parameterPeakFallThreshold.getValue(),
+						parameterPeakFallRateSecs.getValue() * 1000,
+						parameterPeakHoldTime.getValue() * 1000, activeFreqShift,
+						parameterAvgIterations.getValue(), parameterAvgOffset.getValue());
+			} else {
+				datasetSpectrum = new DatasetSpectrumPeak(binHz, activeFreqStartMHz, activeFreqStopMHz,
+						spectrumInitValue, parameterPeakFallThreshold.getValue(),
+						parameterPeakFallRateSecs.getValue() * 1000,
+						parameterPeakHoldTime.getValue() * 1000, activeFreqShift,
+						parameterAvgIterations.getValue(), parameterAvgOffset.getValue());
+			}
 			// If multiple ranges are selected, compress X axis so gaps are removed
 			int[] pairs = parseRangePairs(activeFreqRanges);
 			datasetSpectrum.setActiveRangePairs(pairs);
@@ -5755,7 +5765,7 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 					private XYSeriesImmutable remapSeriesToCompressed(XYSeriesImmutable src, int[] pairs) {
 						if (pairs == null) return src;
 						int n = src.getItemCount();
-						ArrayList<Float> xs = new ArrayList<>();
+						ArrayList<Double> xs = new ArrayList<>();
 						ArrayList<Float> ys = new ArrayList<>();
 						for (int i = 0; i < n; i++) {
 							double x = src.getXX(i); // this x already includes freqShift as dataset adds it
@@ -5767,10 +5777,10 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 							}
 							if (!inRange) continue; // skip points outside selected ranges
 							double compressed = mapRealToCompressed(originalNoShift, pairs);
-							xs.add((float) compressed);
+							xs.add(compressed);
 							ys.add((float) src.getYY(i));
 						}
-						float[] xArr = new float[xs.size()];
+						double[] xArr = new double[xs.size()];
 						float[] yArr = new float[ys.size()];
 						for (int i = 0; i < xs.size(); i++) { xArr[i] = xs.get(i); yArr[i] = ys.get(i); }
 						return new XYSeriesImmutable(src.getKey(), xArr, yArr);
@@ -6061,6 +6071,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 
 		chartDataArea.addListener((area) -> {
 			SwingUtilities.invokeLater(() -> {
+				if (area == null || area.getWidth() <= 1 || area.getHeight() <= 1)
+					return;
+
 				/*
 				 * Align the waterfall plot and the spectrum chart
 				 */
@@ -6078,6 +6091,9 @@ public class HackRFSweepSpectrumAnalyzer implements HackRFSettings, HackRFSweepD
 				}
 			});
 		});
+		// The first chart layout can finish before this listener is registered.
+		// Replay the current area once so the waterfall never keeps its 100 px default width.
+		chartDataArea.callObservers();
 	}
 
 	private void startLauncherThread() {

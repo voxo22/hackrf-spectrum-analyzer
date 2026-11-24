@@ -50,16 +50,30 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 			int avgOffset)
 	{
 		super(fftBinSizeHz, freqStartMHz, freqStopMHz, spectrumInitPower, freqShift);
+		initializePeakStorage(spectrumInitPower, peakFallThreshold, peakFalloutMillis, peakHoldMillis,
+				avgIterations, avgOffset);
+	}
 
+	/** Exact-size variant for IQ replay FFT output. */
+	public DatasetSpectrumPeak(float fftBinSizeHz, long freqStartHz, int datapoints, float spectrumInitPower,
+			float peakFallThreshold, long peakFalloutMillis, long peakHoldMillis, int freqShift, int avgIterations,
+			int avgOffset)
+	{
+		super(fftBinSizeHz, freqStartHz, datapoints, spectrumInitPower, freqShift);
+		initializePeakStorage(spectrumInitPower, peakFallThreshold, peakFalloutMillis, peakHoldMillis,
+				avgIterations, avgOffset);
+	}
+
+	private void initializePeakStorage(float spectrumInitPower, float peakFallThreshold,
+			long peakFalloutMillis, long peakHoldMillis, int avgIterations, int avgOffset)
+	{
 		this.peakFalloutMillis = peakFalloutMillis;
 		this.peakHoldMillis = peakHoldMillis;
 		this.spectrumInitPower = spectrumInitPower;
 		this.peakFallThreshold = peakFallThreshold;
 		this.avgIterations = avgIterations;
 		this.avgOffset = avgOffset;
-		int datapoints = (int) (Math.ceil(freqStopMHz - freqStartMHz) * 1000000d / fftBinSizeHz);
-		spectrum = new float[datapoints];
-		Arrays.fill(spectrum, spectrumInitPower);
+		int datapoints = spectrum.length;
 		spectrumPeak = new float[datapoints];
 		Arrays.fill(spectrumPeak, spectrumInitPower);
 		spectrumPeakHold = new float[datapoints];
@@ -77,7 +91,6 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 		Arrays.fill(sumVal, avgIterations * spectrumInitPower);
 		peakHoldTime = new long[datapoints];
 		Arrays.fill(peakHoldTime, System.currentTimeMillis());
-		
 	}
 
 	public void setPeakFalloutMillis(long peakFalloutMillis) {
@@ -118,12 +131,11 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 	}
 	
 	public XYSeriesImmutable createPeaksDataset(String name/*, int[]rozsah*/) {
-		float[] xValues	= new float[spectrum.length];
+		double[] xValues = new double[spectrum.length];
 		float[] yValues	= spectrumPeakHold;
 		for (int i = 0; i < spectrum.length; i++)
 		{
-			float freq = (freqStartHz + fftBinSizeHz * i) / 1000000f;
-			xValues[i]	= freq + freqShift;
+			xValues[i] = (freqStartHz + (double) fftBinSizeHz * i) / 1000000d + freqShift;
 		}
 		
 /*
@@ -163,36 +175,33 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 	}
 
 	public XYSeriesImmutable createMaxHoldDataset(String name) {
-		float[] xValues	= new float[spectrum.length];
+		double[] xValues = new double[spectrum.length];
 		float[] yValues	= spectrumMaxHold;
 		for (int i = 0; i < spectrum.length; i++)
 		{
-			float freq = (freqStartHz + fftBinSizeHz * i) / 1000000f;
-			xValues[i]	= freq + freqShift;
+			xValues[i] = (freqStartHz + (double) fftBinSizeHz * i) / 1000000d + freqShift;
 		}
 		XYSeriesImmutable xySeriesF	= new XYSeriesImmutable(name, xValues, yValues);
 		return xySeriesF;
 	}
 	
 	public XYSeriesImmutable createMinHoldDataset(String name) {
-		float[] xValues	= new float[spectrum.length];
+		double[] xValues = new double[spectrum.length];
 		float[] yValues	= spectrumMinHold;
 		for (int i = 0; i < spectrum.length; i++)
 		{
-			float freq = (freqStartHz + fftBinSizeHz * i) / 1000000f;
-			xValues[i]	= freq + freqShift;
+			xValues[i] = (freqStartHz + (double) fftBinSizeHz * i) / 1000000d + freqShift;
 		}
 		XYSeriesImmutable xySeriesF	= new XYSeriesImmutable(name, xValues, yValues);
 		return xySeriesF;
 	}	
 	
 	public XYSeriesImmutable createAverageDataset(String name) {
-		float[] xValues	= new float[spectrum.length];
+		double[] xValues = new double[spectrum.length];
 		float[] yValues	= spectrumAverage;
 		for (int i = 0; i < spectrum.length; i++)
 		{
-			float freq = (freqStartHz + fftBinSizeHz * i) / 1000000f;
-			xValues[i]	= freq + freqShift;
+			xValues[i] = (freqStartHz + (double) fftBinSizeHz * i) / 1000000d + freqShift;
 		}
 		XYSeriesImmutable xySeriesF	= new XYSeriesImmutable(name, xValues, yValues);
 		return xySeriesF;
@@ -203,7 +212,8 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 		double powerFluxSum = 0;
 		double[] out = new double[4];
 		float maxAmp = spectrumInitPower;
-		double maxFreq = freqStartMHz + freqShift;
+		double spectrumStartMHz = freqStartHz / 1000000d;
+		double maxFreq = spectrumStartMHz + freqShift;
 		double freqStep = fftBinSizeHz / 1000000d;
 		for (int i = 0; i < spectrumPeakHold.length; i++) {
 			if (!isActiveSpectrumIndex(i))
@@ -211,7 +221,7 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 			if (spectrumPeakHold[i] > -95) {powerSum += Math.pow(10, spectrumPeakHold[i] / 10);} /*convert dB to mW to sum power in linear form*/
 			if (spectrumPeakHold[i] > maxAmp) {
 				maxAmp = spectrumPeakHold[i];
-				maxFreq = (double)Math.round(Math.round(1 / freqStep) * (freqStartMHz + freqStep * i)) / Math.round(1 / freqStep) + freqShift;
+				maxFreq = (double)Math.round(Math.round(1 / freqStep) * (spectrumStartMHz + freqStep * i)) / Math.round(1 / freqStep) + freqShift;
 			}
 		}
 		powerFluxSum = (powerSum * Math.pow(10,(PowerFluxCalibration/10f))) * (4 * Math.PI * Math.pow(maxFreq / 1E3, 2) * 1E18) / Math.pow(299792458, 2);
@@ -235,7 +245,8 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 		double[] out = new double[6];
 		float maxAmpHold = spectrumInitPower;
 		float minAmpHold = -20;
-		double maxFreqHold = freqStartMHz + freqShift;
+		double spectrumStartMHz = freqStartHz / 1000000d;
+		double maxFreqHold = spectrumStartMHz + freqShift;
 		double minFreqHold = maxFreqHold;
 		double freqStep = fftBinSizeHz / 1000000d;
 		for (int i = 0; i < spectrumMaxHold.length; i++) {
@@ -247,11 +258,11 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 			}
 			if (spectrumMaxHold[i] > maxAmpHold) {
 				maxAmpHold = spectrumMaxHold[i];
-				maxFreqHold = (double)Math.round(Math.round(1 / freqStep) * (freqStartMHz + freqStep * i)) / Math.round(1 / freqStep) + freqShift;
+				maxFreqHold = (double)Math.round(Math.round(1 / freqStep) * (spectrumStartMHz + freqStep * i)) / Math.round(1 / freqStep) + freqShift;
 			}
 			if (spectrumMinHold[i] < minAmpHold) {
 				minAmpHold = spectrumMinHold[i];
-				minFreqHold = (double)Math.round(Math.round(1 / freqStep) * (freqStartMHz + freqStep * i)) / Math.round(1 / freqStep) + freqShift;
+				minFreqHold = (double)Math.round(Math.round(1 / freqStep) * (spectrumStartMHz + freqStep * i)) / Math.round(1 / freqStep) + freqShift;
 			}
 		}
 		powerFluxSum = (powerSum * Math.pow(10,(PowerFluxCalibration/10f))) * (4 * Math.PI * Math.pow(maxFreqHold / 1E3, 2) * 1E18) / Math.pow(299792458, 2);
@@ -297,9 +308,10 @@ public class DatasetSpectrumPeak extends DatasetSpectrum
 		int freqRound = Math.round(1 / (float) freqStep);
 		if (freqRound < 1)
 			freqRound = 1;
+		double spectrumStartMHz = freqStartHz / 1000000d;
 		for (int i = 0; i < found; i++) {
 			int index = bestIndexes[i];
-			double freq = (double)Math.round(freqRound * (freqStartMHz + freqStep * index)) / freqRound + freqShift;
+			double freq = (double)Math.round(freqRound * (spectrumStartMHz + freqStep * index)) / freqRound + freqShift;
 			markers[i] = new SpectrumMarker(freq, (double) Math.round(10 * values[index]) / 10);
 		}
 		return markers;

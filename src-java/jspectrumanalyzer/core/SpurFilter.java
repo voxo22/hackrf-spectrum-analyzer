@@ -43,7 +43,7 @@ public class SpurFilter
 		this.maxPeakBins = maxPeakBins;
 		this.validIterations = validIterations;
 		this.input = input;
-		this.filter = new DatasetSpectrum(input.getFFTBinSizeHz(), input.getFreqStartMHz(), input.getFreqStopMHz(), 0, input.getFreqShift());
+		this.filter = input.createCompatibleDataset(0);
 		this.avgSpectrum = input.cloneMe();
 		this.noiseFloor = avgSpectrum.cloneMe();
 	}

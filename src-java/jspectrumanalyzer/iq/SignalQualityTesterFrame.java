@@ -249,6 +249,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		super("Signal Analyzer");
 		this.captureTimeMillisSupplier = captureTimeMillisSupplier;
 		setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+		setAlwaysOnTop(true);
 		dabMode = "DAB".equals(mode);
 		dvbtMode = "DVB-T".equals(mode);
 		dvbt2Mode = mode.startsWith("DVB-T2");
@@ -560,9 +561,7 @@ final class SignalQualityTesterFrame extends JFrame {
 		if (wifiNetworkDetailsFrame == null || !wifiNetworkDetailsFrame.isDisplayable())
 			wifiNetworkDetailsFrame = new WifiNetworkDetailsFrame(
 					() -> wifiNetworkTablePanel.selectedNetwork());
-		wifiNetworkDetailsFrame.setLocationRelativeTo(this);
-		wifiNetworkDetailsFrame.setVisible(true);
-		wifiNetworkDetailsFrame.toFront();
+		showAnalyzerChildWindow(wifiNetworkDetailsFrame);
 	}
 
 	private void openTetraPid209Boards() {
@@ -572,9 +571,7 @@ final class SignalQualityTesterFrame extends JFrame {
 			tetraPid209Frame.setContentPane(tetraPid209BoardTablePanel);
 			tetraPid209Frame.setSize(1500, 650);
 		}
-		tetraPid209Frame.setLocationRelativeTo(this);
-		tetraPid209Frame.setVisible(true);
-		tetraPid209Frame.toFront();
+		showAnalyzerChildWindow(tetraPid209Frame);
 	}
 
 	private void openLteCellDetails() {
@@ -585,9 +582,7 @@ final class SignalQualityTesterFrame extends JFrame {
 					pci -> lteSystemInformation.get(pci),
 					pci -> ltePagingCounts.containsKey(pci)?ltePagingCounts.get(pci):0L,
 					pci -> lteLoadPercent.containsKey(pci)?lteLoadPercent.get(pci):Double.NaN);
-		lteCellDetailsFrame.setLocationRelativeTo(this);
-		lteCellDetailsFrame.setVisible(true);
-		lteCellDetailsFrame.toFront();
+		showAnalyzerChildWindow(lteCellDetailsFrame);
 	}
 
 	private void openNrCellDetails() {
@@ -597,9 +592,7 @@ final class SignalQualityTesterFrame extends JFrame {
 					pci -> nrCells.get(pci),
 					pci -> nrLoadPercent.containsKey(pci) ? nrLoadPercent.get(pci) : Double.NaN,
 					() -> snapshot == null ? -1L : snapshot.centerFreqHz);
-		nrCellDetailsFrame.setLocationRelativeTo(this);
-		nrCellDetailsFrame.setVisible(true);
-		nrCellDetailsFrame.toFront();
+		showAnalyzerChildWindow(nrCellDetailsFrame);
 	}
 
 	private void openUmtsCellDetails() {
@@ -609,26 +602,20 @@ final class SignalQualityTesterFrame extends JFrame {
 					psc -> umtsCells.get(psc),
 					() -> snapshot == null ? -1L : snapshot.centerFreqHz,
 					psc -> umtsLoadPercent.containsKey(psc) ? umtsLoadPercent.get(psc) : Double.NaN);
-		umtsCellDetailsFrame.setLocationRelativeTo(this);
-		umtsCellDetailsFrame.setVisible(true);
-		umtsCellDetailsFrame.toFront();
+		showAnalyzerChildWindow(umtsCellDetailsFrame);
 	}
 
 	private void openUmtsPagingStats() {
 		if (umtsPagingFrame == null || !umtsPagingFrame.isDisplayable())
 			umtsPagingFrame = new UmtsPagingStatsFrame(() ->
 					umtsCells.get(umtsCellTablePanel.selectedPsc()));
-		umtsPagingFrame.setLocationRelativeTo(this);
-		umtsPagingFrame.setVisible(true);
-		umtsPagingFrame.toFront();
+		showAnalyzerChildWindow(umtsPagingFrame);
 	}
 
 	private void openGsmPagingStats() {
 		if (gsmPagingFrame == null || !gsmPagingFrame.isDisplayable())
 			gsmPagingFrame = new GsmPagingStatsFrame(() -> latestGsmResult);
-		gsmPagingFrame.setLocationRelativeTo(this);
-		gsmPagingFrame.setVisible(true);
-		gsmPagingFrame.toFront();
+		showAnalyzerChildWindow(gsmPagingFrame);
 	}
 
 	private void openGsmBcchDetails() {
@@ -636,9 +623,14 @@ final class SignalQualityTesterFrame extends JFrame {
 			gsmBcchFrame = new GsmBcchDetailsFrame(() -> latestGsmResult,
 					() -> snapshot == null ? -1L : snapshot.centerFreqHz,
 					() -> snapshot == null ? -120d : snapshot.dbfs);
-		gsmBcchFrame.setLocationRelativeTo(this);
-		gsmBcchFrame.setVisible(true);
-		gsmBcchFrame.toFront();
+		showAnalyzerChildWindow(gsmBcchFrame);
+	}
+
+	private void showAnalyzerChildWindow(JFrame childWindow) {
+		childWindow.setAlwaysOnTop(true);
+		childWindow.setLocationRelativeTo(this);
+		childWindow.setVisible(true);
+		childWindow.toFront();
 	}
 
 	private void prepareParameterLabel(JLabel label) {
@@ -2241,7 +2233,15 @@ final class SignalQualityTesterFrame extends JFrame {
 			nrParameterLabel.setText(parameterTable("NR CELL ACQUISITION / SESSION STATUS", details, nr.state));
 		} else if (umtsMode && active.umtsResult != null) {
 			UmtsSignalAnalyzer.Result umts = active.umtsResult;
+			/* Also discard candidates admitted by an older acquisition pass so a
+			 * session cannot keep stale, unconfirmed rows forever. */
+			umtsCells.values().removeIf(candidate -> !candidate.isConfirmedCell());
+			umtsLoadPercent.keySet().retainAll(umtsCells.keySet());
 			for (UmtsSignalAnalyzer.Candidate candidate : umts.candidates) {
+				/* The CPICH search always produces a ranked candidate list. Correlation
+				 * alone does not prove that a PSC represents a real cell, so persist it
+				 * only after the BCH transport block passes its CRC. */
+				if (!candidate.isConfirmedCell()) continue;
 				UmtsSignalAnalyzer.Candidate previous = umtsCells.get(candidate.psc);
 				if (candidate.load.valid) {
 					Double oldLoad = umtsLoadPercent.get(candidate.psc);

@@ -25,6 +25,9 @@ import jspectrumanalyzer.core.DatasetSpectrum;
 import jspectrumanalyzer.core.EMA;
 
 public class WaterfallPlot extends JPanel {
+	private static final int PLAYBACK_BAR_HEIGHT = 8;
+	private static final int PLAYBACK_BOTTOM_MARGIN = 5;
+	private static final int PLAYBACK_SEEK_AREA_HEIGHT = 32;
 	/**
 	 * 
 	 */
@@ -124,8 +127,8 @@ public class WaterfallPlot extends JPanel {
 				&& playbackSeekListener != null
 				&& x >= chartXOffset
 				&& x <= chartXOffset + chartWidth
-				&& y >= 0
-				&& y <= 32;
+				&& y >= Math.max(0, getHeight() - PLAYBACK_SEEK_AREA_HEIGHT)
+				&& y <= getHeight();
 	}
 
 	private EMA newDataTimeEMA =	 new EMA(100);
@@ -185,7 +188,7 @@ public class WaterfallPlot extends JPanel {
 			int pixelX;
 			if (rangePairs != null && rangePairs.length > 2 && compressedTotalLength > 0) {
 				// compute original frequency in MHz (without shift)
-				double originalNoShiftMHz = (spectrum.getFreqStartMHz() + (spectrum.getFFTBinSizeHz() * i) / 1000000d);
+				double originalNoShiftMHz = spectrum.getFrequency(i) / 1000000d;
 				// check if in any selected range
 				boolean inRange = false;
 				for (int r = 0; r < rangePairs.length; r += 2) {
@@ -210,8 +213,7 @@ public class WaterfallPlot extends JPanel {
 				double percentage = mapped / compressedTotalLength;
 				pixelX = (int) Math.round(percentage * width);
 			} else {
-				double frequencyMHz = spectrum.getFreqStartMHz()
-						+ spectrum.getFFTBinSizeHz() * i / 1000000d;
+				double frequencyMHz = spectrum.getFrequency(i) / 1000000d;
 				double percentage = (frequencyMHz - displayStartMHz)
 						/ Math.max(1e-12d, displayStopMHz - displayStartMHz);
 				if (percentage < 0d || percentage > 1d) {
@@ -558,9 +560,9 @@ public class WaterfallPlot extends JPanel {
 
 	private void drawPlaybackStatus(Graphics2D g) {
 		int x = chartXOffset;
-		int y = 5;
 		int w = chartWidth;
-		int h = 8;
+		int h = PLAYBACK_BAR_HEIGHT;
+		int y = Math.max(1, getHeight() - h - PLAYBACK_BOTTOM_MARGIN);
 		long duration = playbackDurationMillis;
 		long position = playbackPositionMillis;
 		double progress = duration <= 0 ? 0 : Math.min(1d, Math.max(0d, position / (double) duration));
@@ -581,7 +583,7 @@ public class WaterfallPlot extends JPanel {
 		}
 		String timeText = "PLAY " + formatMillis(position) + " / " + formatMillis(duration);
 		int textX = x;
-		int baseline = y + h + 14;
+		int baseline = y - 5;
 		int paddingX = 4;
 		int paddingY = 2;
 		int textWidth = g.getFontMetrics().stringWidth(timeText);

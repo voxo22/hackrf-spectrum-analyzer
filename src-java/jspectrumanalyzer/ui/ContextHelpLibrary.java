@@ -25,7 +25,7 @@ public final class ContextHelpLibrary {
 		texts.put("spectrum.chart",
 				"Spectrum chart. Shows signal level versus frequency.\n- Mouse wheel zooms/unzooms around the cursor.\n- Drag with the LEFT mouse button to zoom.\n- Drag with the RIGHT mouse button to select a signal for time-domain analysis (max 20 MHz).\n- Double-click the RIGHT mouse button to select 20 MHz bandwidth around center or full WAV/PCM/CU8/CS8 REPLAY bandwidth for time-domain analysis.\n- Hold CTRL and drag with the LEFT mouse button to measure delta frequency and amplitude.\n- Hold SHIFT and drag with LEFT or RIGHT mouse button to select a signal from its center frequency.\n- Hold ALT while dragging to bypass snap.\n- Drag X-axis with the LEFT mouse button to pan the spectrum.");
 		texts.put("spectrum.waterfall",
-				"Waterfall display. Shows spectrum history over time, with newer samples scrolling through the image. Palette controls define how signal strength maps to colors. You can change parameters of the waterfall flow in Waterfall/REC tab.\n- In REPLAY mode, there is a green Progress Bar at the top of the waterfall that shows the current replay position, including total duration of recording. You can click anywhere on the progress bar to jump to a different position in the replay file. You can STOP or PAUSE the replay at any time by click on STOP or PAUSE button on the toolbar.");
+				"Waterfall display. Shows spectrum history over time, with newer samples scrolling through the image. Palette controls define how signal strength maps to colors. You can change parameters of the waterfall flow in Waterfall/REC tab.\n- In REPLAY mode, there is a green Progress Bar at the bottom of the waterfall that shows the current replay position, including total duration of recording. You can click anywhere on the progress bar to jump to a different position in the replay file. You can STOP or PAUSE the replay at any time by click on STOP or PAUSE button on the toolbar.");
 		texts.put("spectrum.iqReplayZoomFull",
 				"Restores the I/Q REPLAY spectrum view to the full recorded bandwidth.");
 		texts.put("spectrum.tabs",
@@ -96,7 +96,7 @@ public final class ContextHelpLibrary {
 		texts.put("iq.audio",
 				"Enables audio demodulation of the whole spectrum or selected channel/spectrum interval.");
 		texts.put("iq.audioVolume",
-				"Audio output volume.");
+				"Logarithmic audio output volume. Unity (0 dB) is at three quarters of the slider; the right limit provides +6 dB (2x amplitude). Hover over the slider to see its current value in dB.");
 		texts.put("iq.audioMode",
 				"Demodulation mode for I/Q audio.");
 		texts.put("iq.burstDetect",

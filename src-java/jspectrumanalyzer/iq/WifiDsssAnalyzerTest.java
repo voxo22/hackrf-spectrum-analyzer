@@ -25,6 +25,7 @@ public final class WifiDsssAnalyzerTest {
 		testFrameClassification();
 		testAdvertisedPhyRates();
 		testCountryElement();
+		testConnectedClientsColumn();
 		testProbeRequestClients();
 		testBssidGrouping(result);
 		System.out.println("Wi-Fi DSSS analyzer tests passed");
@@ -37,6 +38,17 @@ public final class WifiDsssAnalyzerTest {
 		byte[] shortCountry = {7,2,'A','T'};
 		WifiMacFrame shortFrame = WifiMacFrame.parse(createCapabilityBeacon(shortCountry), 2_437_000_000L);
 		assertTrue("AT".equals(shortFrame.country), "short country " + shortFrame.country);
+	}
+
+	private static void testConnectedClientsColumn() {
+		byte[] qbssLoad = {11,5,7,0,(byte)128,0,0};
+		WifiMacFrame frame = WifiMacFrame.parse(createCapabilityBeacon(qbssLoad), 2_437_000_000L);
+		assertTrue(frame.stationCount == 7, "QBSS station count " + frame.stationCount);
+		WifiNetworkTablePanel panel = new WifiNetworkTablePanel();
+		panel.observe(resultFor(createCapabilityBeacon(qbssLoad)));
+		panel.refresh();
+		assertTrue(Integer.valueOf(7).equals(panel.valueForTest("Connected clients", 0)),
+				"connected-client table value " + panel.valueForTest("Connected clients", 0));
 	}
 
 	private static void testProbeRequestClients() {
